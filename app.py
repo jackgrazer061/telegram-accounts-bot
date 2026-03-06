@@ -514,9 +514,8 @@ def confirm_issue(chat_id, user_id, username):
     sheet = get_sheet(SHEET_ACCOUNTS)
     row = sheet.row_values(row_index)
 
-# дополняем строку пустыми значениями до 11 колонок
-if len(row) < 11:
-    row = row + [''] * (11 - len(row))
+    if len(row) < 11:
+        row = row + [''] * (11 - len(row))
 
     status = str(row[8]).strip().lower()
     if status != "free":
@@ -531,6 +530,7 @@ if len(row) < 11:
             clear_state(user_id)
             send_main_menu(chat_id, "Подходящих свободных личек больше нет.")
             return
+
         show_found_account(chat_id, user_id, found)
         return
 
@@ -544,12 +544,15 @@ if len(row) < 11:
     append_issue_row(account_number, purchase_date, price, today, supplier, state["for_whom"])
 
     clear_state(user_id)
+
+    who_took_text = f"@{username}" if username else "без username"
+
     tg_send_message(
         chat_id,
         f"Готово ✅\n\n"
         f"Выдана личка: {account_number}\n"
         f"Кому передали: {state['for_whom']}\n"
-        f"Кто взял в боте: @{username}" if username else "без username"
+        f"Кто взял в боте: {who_took_text}"
     )
     send_main_menu(chat_id, "Выбери следующее действие:")
 
