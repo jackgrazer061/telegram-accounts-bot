@@ -882,31 +882,28 @@ def find_free_king_by_geo(geo, exclude_row=None):
     candidates.sort(key=lambda x: x["purchase_date_obj"])
     return candidates[0]
 
-
 def show_found_king(chat_id, user_id, found):
-
     state = get_state(user_id)
 
     state["mode"] = "king_found"
     state["king_row"] = found["row_index"]
-
     set_state(user_id, state)
 
-text = (
-    "Найден кинг:\n\n"
-    f"Дата покупки: {found['purchase_date']}\n"
-    f"Цена: {found['price']}\n"
-    f"Гео: {found['geo']}\n"
-    f"Для кого: {state['king_for_whom']}\n"
-    f"Название: {state['king_name']}"
-)
+    text = (
+        "Найден кинг:\n\n"
+        f"Дата покупки: {found['purchase_date']}\n"
+        f"Цена: {found['price']}\n"
+        f"Гео: {found['geo']}\n"
+        f"Для кого: {state['king_for_whom']}\n"
+        f"Название: {state['king_name']}"
+    )
 
-keyboard = [
+    keyboard = [
         [{"text": "Выдать"}, {"text": "Другая"}],
         [{"text": MENU_CANCEL}]
     ]
 
-tg_send_message(chat_id, text, keyboard)
+    tg_send_message(chat_id, text, keyboard)
 
 def confirm_king_issue(chat_id, user_id, username):
     state = get_state(user_id)
