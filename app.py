@@ -972,6 +972,15 @@ def confirm_king_issue(chat_id, user_id, username):
 
     data_text = row[9] if len(row) > 9 else ""
 
+    append_king_to_issues_sheet(
+        king_name=king_name,
+        purchase_date=row[1],
+        price=row[2],
+        transfer_date=today,
+        supplier=row[3],
+        for_whom=state["king_for_whom"]
+    )
+
     clear_state(user_id)
 
     tg_send_message(
@@ -989,6 +998,18 @@ def confirm_king_issue(chat_id, user_id, username):
         tg_send_message(chat_id, "Данные кинга не найдены.")
 
     send_kings_menu(chat_id, "Выбери следующее действие:")
+
+def append_king_to_issues_sheet(king_name, purchase_date, price, transfer_date, supplier, for_whom):
+    sheet = get_sheet(SHEET_ISSUES)
+    sheet.append_row([
+        king_name,       # A
+        "KING",          # B
+        purchase_date,   # C
+        price,           # D
+        transfer_date,   # E
+        supplier,        # F
+        for_whom         # G
+    ], value_input_option="USER_ENTERED")
 
 # =========================
 # MESSAGE HANDLER
