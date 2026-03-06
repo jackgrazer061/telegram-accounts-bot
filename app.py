@@ -906,7 +906,7 @@ keyboard = [
         [{"text": MENU_CANCEL}]
     ]
 
-    tg_send_message(chat_id, text, keyboard)
+tg_send_message(chat_id, text, keyboard)
 
 def confirm_king_issue(chat_id, user_id, username):
     state = get_state(user_id)
