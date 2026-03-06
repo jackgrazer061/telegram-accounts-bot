@@ -20,7 +20,7 @@ SERVICE_ACCOUNT_JSON = os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON", "")
 BASE_URL = f"https://api.telegram.org/bot{BOT_TOKEN}"
 
 SHEET_ACCOUNTS = "База_личек"
-SHEET_ISSUES = "Выдачи"
+SHEET_ISSUES = "Простые лички 26"
 
 LIMIT_OPTIONS = ['-250', '250-500', '500-1200', '1200-1500', 'unlim']
 THRESHOLD_OPTIONS = ['0-49', '50-99', '100-199', '200-499', '500+']
