@@ -892,15 +892,14 @@ def show_found_king(chat_id, user_id, found):
 
     set_state(user_id, state)
 
-    text = (
-        "Найден кинг:\n\n"
-        f"Дата покупки: {found['purchase_date']}\n"
-        f"Цена: {found['price']}\n"
-        f"Поставщик: {found['supplier']}\n"
-        f"Гео: {found['geo']}\n"
-        f"Для кого: {state['king_for_whom']}\n"
-        f"Название: {state['king_name']}"
-    )
+text = (
+    "Найден кинг:\n\n"
+    f"Дата покупки: {found['purchase_date']}\n"
+    f"Цена: {found['price']}\n"
+    f"Гео: {found['geo']}\n"
+    f"Для кого: {state['king_for_whom']}\n"
+    f"Название: {state['king_name']}"
+)
 
     keyboard = [
         [{"text": "Выдать"}, {"text": "Другая"}],
