@@ -901,7 +901,7 @@ text = (
     f"Название: {state['king_name']}"
 )
 
-    keyboard = [
+keyboard = [
         [{"text": "Выдать"}, {"text": "Другая"}],
         [{"text": MENU_CANCEL}]
     ]
