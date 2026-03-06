@@ -513,9 +513,10 @@ def confirm_issue(chat_id, user_id, username):
 
     sheet = get_sheet(SHEET_ACCOUNTS)
     row = sheet.row_values(row_index)
-    if len(row) < 11:
-        send_main_menu(chat_id, "Ошибка чтения базы. Попробуй ещё раз.")
-        return
+
+# дополняем строку пустыми значениями до 11 колонок
+if len(row) < 11:
+    row = row + [''] * (11 - len(row))
 
     status = str(row[8]).strip().lower()
     if status != "free":
