@@ -825,6 +825,89 @@ def confirm_issue(chat_id, user_id, username):
     )
     send_main_menu(chat_id, "Выбери следующее действие:")
 
+def king_name_exists(king_name):
+    sheet = get_sheet(SHEET_KINGS)
+    rows = sheet.get_all_values()
+
+    target = str(king_name).strip().lower()
+    if not target:
+        return False
+
+    for row in rows[1:]:
+        existing_name = str(row[0]).strip().lower() if len(row) > 0 else ""
+        if existing_name == target:
+            return True
+
+    return False
+
+
+def find_free_king_by_geo(geo, exclude_row=None):
+    sheet = get_sheet(SHEET_KINGS)
+    rows = sheet.get_all_values()
+
+    candidates = []
+
+    for idx, row in enumerate(rows[1:], start=2):
+
+        if len(row) < 10:
+            row = row + [''] * (10 - len(row))
+
+        status = str(row[4]).strip().lower()
+        row_geo = str(row[7]).strip()
+
+        if status != "free":
+            continue
+
+        if row_geo != geo:
+            continue
+
+        if exclude_row and idx == exclude_row:
+            continue
+
+        purchase_date = parse_date(row[1]) or datetime.max
+
+        candidates.append({
+            "row_index": idx,
+            "purchase_date_obj": purchase_date,
+            "purchase_date": row[1],
+            "price": row[2],
+            "supplier": row[3],
+            "geo": row[7],
+            "data_text": row[9]
+        })
+
+    if not candidates:
+        return None
+
+    candidates.sort(key=lambda x: x["purchase_date_obj"])
+    return candidates[0]
+
+
+def show_found_king(chat_id, user_id, found):
+
+    state = get_state(user_id)
+
+    state["mode"] = "king_found"
+    state["king_row"] = found["row_index"]
+
+    set_state(user_id, state)
+
+    text = (
+        "Найден кинг:\n\n"
+        f"Дата покупки: {found['purchase_date']}\n"
+        f"Цена: {found['price']}\n"
+        f"Поставщик: {found['supplier']}\n"
+        f"Гео: {found['geo']}\n"
+        f"Для кого: {state['king_for_whom']}\n"
+        f"Название: {state['king_name']}"
+    )
+
+    keyboard = [
+        [{"text": "Выдать"}, {"text": "Другая"}],
+        [{"text": MENU_CANCEL}]
+    ]
+
+    tg_send_message(chat_id, text, keyboard)
 
 # =========================
 # MESSAGE HANDLER
@@ -953,6 +1036,33 @@ def handle_message(msg):
         clear_state(user_id)
         tg_send_message(chat_id, result)
         send_accounts_menu(chat_id, "Готово. Выбери следующее действие:")
+        return
+
+    if state.get("mode") == "awaiting_king_geo":
+        geos = get_free_king_geos()
+
+        if text not in geos:
+            send_king_geo_options(chat_id)
+            return
+
+        set_state(user_id, {
+            "mode": "awaiting_king_for_whom",
+            "king_geo": text
+        })
+
+        tg_send_message(chat_id, "Для кого берешь кинг?")
+        return
+
+    if state.get("mode") == "awaiting_king_for_whom":
+        if not text.strip():
+            tg_send_message(chat_id, "Напиши, для кого берешь кинг.")
+            return
+
+        state["mode"] = "awaiting_king_name"
+        state["king_for_whom"] = text.strip()
+        set_state(user_id, state)
+
+        tg_send_message(chat_id, "Какое название будет у кинга?")
         return
 
     if state.get("mode") == "awaiting_return_account":
