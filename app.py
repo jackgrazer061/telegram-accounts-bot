@@ -200,12 +200,12 @@ def return_account_to_ban(account_number):
 
     base_sheet = get_sheet(SHEET_ACCOUNTS)
 
-    # J колонка = кому выдали
+    # J = кому выдали
     base_sheet.update(f"J{base_info['row_index']}", [["ban"]])
 
     if issue_info:
         issue_sheet = get_sheet(SHEET_ISSUES)
-        # G колонка = кому передали
+        # G = кому передали
         issue_sheet.update(f"G{issue_info['row_index']}", [["ban"]])
 
     return True, "Личка переведена в ban."
@@ -221,17 +221,19 @@ def build_account_search_text(account_number):
     row = base_info["row"]
     issue_row = issue_info["row"] if issue_info else None
 
+    if len(row) < 12:
+        row = row + [''] * (12 - len(row))
+
     price = row[2] if len(row) > 2 else ""
     warehouses = row[7] if len(row) > 7 else ""
     date_taken = row[10] if len(row) > 10 else ""
     for_whom = row[9] if len(row) > 9 else ""
+    who_took = row[11] if len(row) > 11 else ""
 
     banned = is_banned_account(row, issue_row)
 
-    who_took = "неизвестно"
-    if issue_row:
-        # у нас пока в таблицу выдачи "кто взял" не пишется
-        who_took = "не хранится в таблице"
+    if not who_took:
+        who_took = "не указано"
 
     text = (
         f"Номер: {account_number}\n"
@@ -400,6 +402,7 @@ def add_accounts_from_text(text):
             warehouses,
             "free",
             "",
+            "",
             ""
         ])
         existing_accounts.add(account_number)
@@ -514,8 +517,8 @@ def confirm_issue(chat_id, user_id, username):
     sheet = get_sheet(SHEET_ACCOUNTS)
     row = sheet.row_values(row_index)
 
-    if len(row) < 11:
-        row = row + [''] * (11 - len(row))
+    if len(row) < 12:
+        row = row + [''] * (12 - len(row))
 
     status = str(row[8]).strip().lower()
     if status != "free":
@@ -540,12 +543,14 @@ def confirm_issue(chat_id, user_id, username):
     supplier = row[3]
     today = datetime.now().strftime("%d/%m/%Y")
 
-    sheet.update(f"I{row_index}:K{row_index}", [["taken", state["for_whom"], today]])
+    who_took_text = f"@{username}" if username else "без username"
+
+    # I = статус, J = кому выдали, K = дата взятия, L = кто взял
+    sheet.update(f"I{row_index}:L{row_index}", [["taken", state["for_whom"], today, who_took_text]])
+
     append_issue_row(account_number, purchase_date, price, today, supplier, state["for_whom"])
 
     clear_state(user_id)
-
-    who_took_text = f"@{username}" if username else "без username"
 
     tg_send_message(
         chat_id,
