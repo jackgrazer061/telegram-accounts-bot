@@ -615,16 +615,16 @@ def handle_message(msg):
         send_accounts_menu(chat_id, "Выбери следующее действие:")
         return
 
-if text == SUBMENU_GET:
-    set_state(user_id, {"mode": "awaiting_issue_for_whom"})
-    tg_send_message(
-        chat_id,
-        "Напиши, для кого берешь личку.\n"
-        "❗️если ты написал неправильно❗️\n"
-        "сразу сообщи ему @JackGrazer_Deputy_Head_Account\n"
-        "или ему @Cillian_Murphy_Head_of_Account"
-    )
-    return
+    if text == SUBMENU_GET:
+        set_state(user_id, {"mode": "awaiting_issue_for_whom"})
+        tg_send_message(
+            chat_id,
+            "Напиши, для кого берешь личку.\n"
+            "❗️если ты написал неправильно❗️\n"
+            "сразу сообщи ему @JackGrazer_Deputy_Head_Account\n"
+            "или ему @Cillian_Murphy_Head_of_Account"
+        )
+        return
 
     if text == SUBMENU_RETURN:
         set_state(user_id, {"mode": "awaiting_return_account"})
