@@ -827,12 +827,12 @@ def handle_message(msg):
         send_accounts_menu(chat_id)
         return
         
-    if text == MENU_KINGS:
+if text == MENU_KINGS:
     clear_state(user_id)
     send_kings_menu(chat_id)
     return
 
-    if text == SUBMENU_ADD_KINGS:
+if text == SUBMENU_ADD_KINGS:
     set_state(user_id, {"mode": "awaiting_kings_txt"})
     send_add_kings_instructions(chat_id)
     return
