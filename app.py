@@ -26,14 +26,19 @@ LIMIT_OPTIONS = ['-250', '250-500', '500-1200', '1200-1500', 'unlim']
 THRESHOLD_OPTIONS = ['0-49', '50-99', '100-199', '200-499', '500+']
 GMT_OPTIONS = ['-10', '-9', '-8', '-7', '-6', '-5', '-4', '-3', '-2', '-1', '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', '10']
 
-MENU_GET = 'Выдать лички'
-MENU_ADD = 'Добавить лички'
-MENU_FREE = 'Свободные лички'
+MENU_ACCOUNTS = 'Лички'
 MENU_CANCEL = 'Отмена'
+
+SUBMENU_GET = 'Выдать лички'
+SUBMENU_ADD = 'Добавить лички'
+SUBMENU_FREE = 'Свободные лички'
+SUBMENU_RETURN = 'Вернуть личку'
+SUBMENU_SEARCH = 'Поиск лички'
+BTN_BACK_TO_MENU = 'В меню'
 
 BTN_ISSUE_CONFIRM = 'Выдать'
 BTN_ISSUE_NEXT = 'Другая'
-BTN_BACK_TO_MENU = 'В меню'
+BTN_RETURN_CONFIRM = 'Подтвердить бан'
 
 # Память состояний пользователей (для старта хватит)
 user_states = {}
@@ -78,8 +83,16 @@ def tg_send_message(chat_id, text, keyboard=None):
 
 def send_main_menu(chat_id, text="Главное меню:"):
     keyboard = [
-        [{"text": MENU_GET}, {"text": MENU_ADD}],
-        [{"text": MENU_FREE}, {"text": MENU_CANCEL}]
+        [{"text": MENU_ACCOUNTS}],
+        [{"text": MENU_CANCEL}]
+    ]
+    tg_send_message(chat_id, text, keyboard)
+
+def send_accounts_menu(chat_id, text="Меню личек:"):
+    keyboard = [
+        [{"text": SUBMENU_GET}, {"text": SUBMENU_ADD}],
+        [{"text": SUBMENU_FREE}, {"text": SUBMENU_RETURN}],
+        [{"text": SUBMENU_SEARCH}, {"text": BTN_BACK_TO_MENU}]
     ]
     tg_send_message(chat_id, text, keyboard)
 
@@ -134,6 +147,105 @@ def set_state(user_id, data):
 
 def clear_state(user_id):
     user_states.pop(str(user_id), None)
+
+def find_account_in_base(account_number):
+    sheet = get_sheet(SHEET_ACCOUNTS)
+    rows = sheet.get_all_values()
+
+    for idx, row in enumerate(rows[1:], start=2):
+        if len(row) < 11:
+            continue
+        if str(row[0]).strip() == str(account_number).strip():
+            return {
+                "row_index": idx,
+                "row": row
+            }
+    return None
+
+
+def find_last_issue_row(account_number):
+    sheet = get_sheet(SHEET_ISSUES)
+    rows = sheet.get_all_values()
+
+    last_match = None
+    for idx, row in enumerate(rows[1:], start=2):
+        if len(row) < 7:
+            continue
+        if str(row[0]).strip() == str(account_number).strip():
+            last_match = {
+                "row_index": idx,
+                "row": row
+            }
+    return last_match
+
+
+def is_banned_account(base_row, issue_row=None):
+    base_target = ""
+    if base_row and len(base_row) >= 10:
+        base_target = str(base_row[9]).strip().lower()
+
+    issue_target = ""
+    if issue_row and len(issue_row) >= 7:
+        issue_target = str(issue_row[6]).strip().lower()
+
+    return base_target == "ban" or issue_target == "ban"
+
+
+def return_account_to_ban(account_number):
+    base_info = find_account_in_base(account_number)
+    issue_info = find_last_issue_row(account_number)
+
+    if not base_info:
+        return False, "Личка не найдена в базе."
+
+    base_sheet = get_sheet(SHEET_ACCOUNTS)
+
+    # J колонка = кому выдали
+    base_sheet.update(f"J{base_info['row_index']}", [["ban"]])
+
+    if issue_info:
+        issue_sheet = get_sheet(SHEET_ISSUES)
+        # G колонка = кому передали
+        issue_sheet.update(f"G{issue_info['row_index']}", [["ban"]])
+
+    return True, "Личка переведена в ban."
+
+
+def build_account_search_text(account_number):
+    base_info = find_account_in_base(account_number)
+    if not base_info:
+        return None
+
+    issue_info = find_last_issue_row(account_number)
+
+    row = base_info["row"]
+    issue_row = issue_info["row"] if issue_info else None
+
+    price = row[2] if len(row) > 2 else ""
+    warehouses = row[7] if len(row) > 7 else ""
+    date_taken = row[10] if len(row) > 10 else ""
+    for_whom = row[9] if len(row) > 9 else ""
+
+    banned = is_banned_account(row, issue_row)
+
+    who_took = "неизвестно"
+    if issue_row:
+        # у нас пока в таблицу выдачи "кто взял" не пишется
+        who_took = "не хранится в таблице"
+
+    text = (
+        f"Номер: {account_number}\n"
+        f"Статус: {'ban' if banned else 'активна'}\n"
+        f"Склады: {warehouses}\n"
+        f"Цена: {price}\n"
+        f"Дата взятия: {date_taken}\n"
+        f"Кто взял: {who_took}\n"
+    )
+
+    if not banned:
+        text += f"Для кого взял: {for_whom}\n"
+
+    return text
 
 
 # =========================
@@ -468,25 +580,45 @@ def handle_message(msg):
         send_main_menu(chat_id)
         return
 
-    if text == MENU_CANCEL or text == BTN_BACK_TO_MENU:
+    if text == MENU_CANCEL:
         clear_state(user_id)
         send_main_menu(chat_id, "Действие отменено.")
         return
 
-    if text == MENU_ADD:
+    if text == MENU_ACCOUNTS:
+        clear_state(user_id)
+        send_accounts_menu(chat_id)
+        return
+
+    if text == BTN_BACK_TO_MENU:
+        clear_state(user_id)
+        send_main_menu(chat_id)
+        return
+
+    if text == SUBMENU_ADD:
         set_state(user_id, {"mode": "awaiting_bulk_add"})
         send_bulk_add_instructions(chat_id)
         return
 
-    if text == MENU_FREE:
+    if text == SUBMENU_FREE:
         clear_state(user_id)
         send_free_accounts(chat_id)
-        send_main_menu(chat_id, "Выбери следующее действие:")
+        send_accounts_menu(chat_id, "Выбери следующее действие:")
         return
 
-    if text == MENU_GET:
+    if text == SUBMENU_GET:
         set_state(user_id, {"mode": "awaiting_issue_for_whom"})
         tg_send_message(chat_id, "Напиши, для кого берешь личку.")
+        return
+
+    if text == SUBMENU_RETURN:
+        set_state(user_id, {"mode": "awaiting_return_account"})
+        tg_send_message(chat_id, "Впиши номер лички, которую нужно отправить в ban.")
+        return
+
+    if text == SUBMENU_SEARCH:
+        set_state(user_id, {"mode": "awaiting_search_account"})
+        tg_send_message(chat_id, "Впиши номер лички для поиска.")
         return
 
     if text == BTN_ISSUE_CONFIRM:
@@ -505,16 +637,72 @@ def handle_message(msg):
         )
         if not found:
             clear_state(user_id)
-            send_main_menu(chat_id, "Подходящих свободных личек больше нет.")
+            send_accounts_menu(chat_id, "Подходящих свободных личек больше нет.")
             return
         show_found_account(chat_id, user_id, found)
+        return
+
+    if text == BTN_RETURN_CONFIRM:
+        if state.get("mode") != "awaiting_return_confirm":
+            send_accounts_menu(chat_id, "Сначала выбери действие заново.")
+            return
+
+        account_number = state.get("return_account_number", "")
+        ok, message = return_account_to_ban(account_number)
+        clear_state(user_id)
+        send_accounts_menu(chat_id, message)
         return
 
     if state.get("mode") == "awaiting_bulk_add":
         result = add_accounts_from_text(text)
         clear_state(user_id)
         tg_send_message(chat_id, result)
-        send_main_menu(chat_id, "Готово. Выбери следующее действие:")
+        send_accounts_menu(chat_id, "Готово. Выбери следующее действие:")
+        return
+
+    if state.get("mode") == "awaiting_return_account":
+        account_number = text.strip()
+        if not account_number:
+            tg_send_message(chat_id, "Впиши номер лички.")
+            return
+
+        found = find_account_in_base(account_number)
+        if not found:
+            clear_state(user_id)
+            send_accounts_menu(chat_id, "Личка не найдена.")
+            return
+
+        set_state(user_id, {
+            "mode": "awaiting_return_confirm",
+            "return_account_number": account_number
+        })
+
+        keyboard = [
+            [{"text": BTN_RETURN_CONFIRM}, {"text": MENU_CANCEL}]
+        ]
+
+        tg_send_message(
+            chat_id,
+            f"Внимание: личка {account_number} будет перемещена в ban.\nПодтвердить?",
+            keyboard
+        )
+        return
+
+    if state.get("mode") == "awaiting_search_account":
+        account_number = text.strip()
+        if not account_number:
+            tg_send_message(chat_id, "Впиши номер лички.")
+            return
+
+        result = build_account_search_text(account_number)
+        clear_state(user_id)
+
+        if not result:
+          send_accounts_menu(chat_id, "Личка не найдена.")
+          return
+
+        tg_send_message(chat_id, result)
+        send_accounts_menu(chat_id, "Выбери следующее действие:")
         return
 
     if state.get("mode") == "awaiting_issue_for_whom":
@@ -559,14 +747,13 @@ def handle_message(msg):
         found = find_matching_free_account(state["limit"], state["threshold"], state["gmt"])
         if not found:
             clear_state(user_id)
-            send_main_menu(chat_id, "Подходящих свободных личек не найдено.")
+            send_accounts_menu(chat_id, "Подходящих свободных личек не найдено.")
             return
 
         show_found_account(chat_id, user_id, found)
         return
 
     send_main_menu(chat_id, "Не понял команду. Выбери кнопку из меню:")
-
 
 # =========================
 # FLASK
