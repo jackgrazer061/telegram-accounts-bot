@@ -38,6 +38,7 @@ SUBMENU_RETURN = 'Вернуть личку'
 SUBMENU_SEARCH = 'Поиск лички'
 
 SUBMENU_ADD_KINGS = 'Добавить кинги'
+SUBMENU_GET_KINGS = 'Выдать кинг'
 
 BTN_BACK_TO_MENU = 'В меню'
 
@@ -103,6 +104,7 @@ def send_accounts_menu(chat_id, text="Меню личек:"):
     
 def send_kings_menu(chat_id, text="Меню кингов:"):
     keyboard = [
+        [{"text": SUBMENU_GET_KINGS}],
         [{"text": SUBMENU_ADD_KINGS}],
         [{"text": BTN_BACK_TO_MENU}]
     ]
@@ -130,6 +132,40 @@ def send_add_kings_instructions(chat_id):
 
 import re
 
+def get_free_king_geos():
+    sheet = get_sheet(SHEET_KINGS)
+    rows = sheet.get_all_values()
+
+    geos = []
+    seen = set()
+
+    for row in rows[1:]:
+        if len(row) < 10:
+            row = row + [''] * (10 - len(row))
+
+        status = str(row[4]).strip().lower()   # E = статус
+        geo = str(row[7]).strip()              # H = гео
+
+        if status == "free" and geo and geo not in seen:
+            geos.append(geo)
+            seen.add(geo)
+
+    return geos
+
+def send_king_geo_options(chat_id):
+    geos = get_free_king_geos()
+
+    if not geos:
+        send_kings_menu(chat_id, "Нет свободных кингов ни по одному GEO.")
+        return
+
+    keyboard = []
+    for geo in geos:
+        keyboard.append([{"text": geo}])
+
+    keyboard.append([{"text": MENU_CANCEL}])
+
+    tg_send_message(chat_id, "Какое нужно гео?", keyboard)
 
 def tg_get_file_path(file_id):
     resp = requests.get(
@@ -835,6 +871,12 @@ def handle_message(msg):
     if text == SUBMENU_ADD_KINGS:
         set_state(user_id, {"mode": "awaiting_kings_txt"})
         send_add_kings_instructions(chat_id)
+        return
+
+    if text == SUBMENU_GET_KINGS:
+        clear_state(user_id)
+        set_state(user_id, {"mode": "awaiting_king_geo"})
+        send_king_geo_options(chat_id)
         return
 
     if text == BTN_BACK_TO_MENU:
