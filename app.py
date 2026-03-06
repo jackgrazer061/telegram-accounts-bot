@@ -620,9 +620,9 @@ if text == SUBMENU_GET:
     tg_send_message(
         chat_id,
         "Напиши, для кого берешь личку.\n"
-        "❗️Если ты написал неправильно❗️\n"
-        "Сразу сообщи ему @JackGrazer_Deputy_Head_Account\n"
-        "Или ему @Cillian_Murphy_Head_of_Account"
+        "❗️если ты написал неправильно❗️\n"
+        "сразу сообщи ему @JackGrazer_Deputy_Head_Account\n"
+        "или ему @Cillian_Murphy_Head_of_Account"
     )
     return
 
