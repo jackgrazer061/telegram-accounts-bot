@@ -21,12 +21,14 @@ BASE_URL = f"https://api.telegram.org/bot{BOT_TOKEN}"
 
 SHEET_ACCOUNTS = "База_личек"
 SHEET_ISSUES = "Простые лички 26"
+SHEET_KINGS = "База_кингов"
 
 LIMIT_OPTIONS = ['-250', '250-500', '500-1200', '1200-1500', 'unlim']
 THRESHOLD_OPTIONS = ['0-49', '50-99', '100-199', '200-499', '500+']
 GMT_OPTIONS = ['-10', '-9', '-8', '-7', '-6', '-5', '-4', '-3', '-2', '-1', '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', '10']
 
 MENU_ACCOUNTS = 'Лички'
+MENU_KINGS = 'Кинги'
 MENU_CANCEL = 'Отмена'
 
 SUBMENU_GET = 'Выдать лички'
@@ -34,6 +36,9 @@ SUBMENU_ADD = 'Добавить лички'
 SUBMENU_FREE = 'Свободные лички'
 SUBMENU_RETURN = 'Вернуть личку'
 SUBMENU_SEARCH = 'Поиск лички'
+
+SUBMENU_ADD_KINGS = 'Добавить кинги'
+
 BTN_BACK_TO_MENU = 'В меню'
 
 BTN_ISSUE_CONFIRM = 'Выдать'
@@ -83,7 +88,7 @@ def tg_send_message(chat_id, text, keyboard=None):
 
 def send_main_menu(chat_id, text="Главное меню:"):
     keyboard = [
-        [{"text": MENU_ACCOUNTS}],
+        [{"text": MENU_ACCOUNTS}, {"text": MENU_KINGS}],
         [{"text": MENU_CANCEL}]
     ]
     tg_send_message(chat_id, text, keyboard)
@@ -95,7 +100,230 @@ def send_accounts_menu(chat_id, text="Меню личек:"):
         [{"text": SUBMENU_SEARCH}, {"text": BTN_BACK_TO_MENU}]
     ]
     tg_send_message(chat_id, text, keyboard)
+    
+def send_kings_menu(chat_id, text="Меню кингов:"):
+    keyboard = [
+        [{"text": SUBMENU_ADD_KINGS}],
+        [{"text": BTN_BACK_TO_MENU}]
+    ]
+    tg_send_message(chat_id, text, keyboard)
 
+def send_add_kings_instructions(chat_id):
+    text = (
+        "Пришли txt файл.\n\n"
+        "Пример заполнения файла:\n\n"
+        "1) 15/02/2026; 300; WD; usa\n"
+        "login - example1\n"
+        "password - 12345\n"
+        "cookie - abcdef\n\n"
+        "2) 16/02/2026; 500; WD; uk\n"
+        "login - example2\n"
+        "password - 67890\n"
+        "cookie - ghijkl\n\n"
+        "3. 17/02/2026; 250; WD; италия\n"
+        "login - example3\n"
+        "password - 11111\n"
+        "cookie - zzzzzz\n\n"
+        "Я сохраню всё в лист База_кингов."
+    )
+    tg_send_message(chat_id, text)
+
+import re
+
+
+def tg_get_file_path(file_id):
+    resp = requests.get(
+        f"{BASE_URL}/getFile",
+        params={"file_id": file_id},
+        timeout=30
+    )
+    data = resp.json()
+
+    if not data.get("ok"):
+        return None
+
+    return data["result"]["file_path"]
+
+
+def tg_download_file_content(file_id):
+    file_path = tg_get_file_path(file_id)
+    if not file_path:
+        return None
+
+    file_url = f"https://api.telegram.org/file/bot{BOT_TOKEN}/{file_path}"
+
+    resp = requests.get(file_url, timeout=60)
+
+    if resp.status_code != 200:
+        return None
+
+    return resp.content
+
+
+def is_king_header_line(line):
+    line = line.strip()
+    return re.match(r'^\d+[.)]\s+', line) is not None
+
+
+def parse_kings_txt(text):
+    lines = text.splitlines()
+
+    blocks = []
+    current_header = None
+    current_data_lines = []
+
+    for raw_line in lines:
+        line = raw_line.rstrip()
+
+        if not line.strip():
+            if current_header is not None:
+                current_data_lines.append("")
+            continue
+
+        if is_king_header_line(line):
+            if current_header is not None:
+                blocks.append((current_header, current_data_lines))
+
+            current_header = line.strip()
+            current_data_lines = []
+
+        else:
+            if current_header is not None:
+                current_data_lines.append(line)
+
+    if current_header is not None:
+        blocks.append((current_header, current_data_lines))
+
+    parsed = []
+    errors = []
+
+    for idx, (header, data_lines) in enumerate(blocks, start=1):
+
+        header_clean = re.sub(r'^\d+[.)]\s*', '', header).strip()
+        parts = [x.strip() for x in header_clean.split(';')]
+
+        if len(parts) != 4:
+            errors.append(
+                f"Блок {idx}: нужно 4 поля: дата; цена; поставщик; гео"
+            )
+            continue
+
+        purchase_date_raw, price_raw, supplier, geo = parts
+
+        purchase_date = parse_date(purchase_date_raw)
+        if not purchase_date:
+            errors.append(f"Блок {idx}: неверная дата '{purchase_date_raw}'")
+            continue
+
+        price = parse_price(price_raw)
+        if price is None:
+            errors.append(f"Блок {idx}: неверная цена '{price_raw}'")
+            continue
+
+        data_text = "\n".join(data_lines).strip()
+
+        if not data_text:
+            errors.append(f"Блок {idx}: нет данных кинга")
+            continue
+
+        parsed.append({
+            "purchase_date": purchase_date.strftime("%d/%m/%Y"),
+            "price": price,
+            "supplier": supplier,
+            "geo": geo,
+            "data_text": data_text
+        })
+
+    return parsed, errors
+
+def add_kings_from_txt_content(file_text):
+    sheet = get_sheet(SHEET_KINGS)
+    rows, errors = parse_kings_txt(file_text)
+
+    if not rows:
+        if errors:
+            return "Ничего не добавил.\n\nОшибки:\n" + "\n".join(errors[:10])
+        return "Ничего не добавил. Не удалось разобрать файл."
+
+    to_append = []
+    for item in rows:
+        to_append.append([
+            "",                     # A название кинга — пока пусто
+            item["purchase_date"],  # B дата покупки
+            item["price"],          # C цена
+            item["supplier"],       # D у кого купили
+            "free",                 # E статус
+            "",                     # F кому выдали
+            "",                     # G дата взятия
+            item["geo"],            # H гео
+            "",                     # I кто взял
+            item["data_text"]       # J данные
+        ])
+
+    sheet.append_rows(to_append, value_input_option="USER_ENTERED")
+
+    message = (
+        f"Готово ✅\n"
+        f"Добавлено кингов: {len(to_append)}\n"
+        f"Ошибок: {len(errors)}"
+    )
+
+    if errors:
+        message += "\n\nОшибки:\n" + "\n".join(errors[:10])
+        if len(errors) > 10:
+            message += f"\n... и ещё {len(errors) - 10}"
+
+    return message
+
+
+def handle_document_message(msg):
+    chat_id = msg["chat"]["id"]
+    user_id = msg["from"]["id"]
+    state = get_state(user_id)
+
+    if state.get("mode") != "awaiting_kings_txt":
+        tg_send_message(
+            chat_id,
+            "Я не жду сейчас txt файл. Сначала открой Кинги → Добавить кинги."
+        )
+        return
+
+    document = msg.get("document", {})
+    file_name = document.get("file_name", "")
+    file_id = document.get("file_id", "")
+
+    if not file_id:
+        tg_send_message(chat_id, "Не удалось получить файл. Попробуй ещё раз.")
+        return
+
+    if file_name and not file_name.lower().endswith(".txt"):
+        tg_send_message(chat_id, "Нужен именно txt файл.")
+        return
+
+    content = tg_download_file_content(file_id)
+    if not content:
+        tg_send_message(chat_id, "Не удалось скачать файл. Попробуй ещё раз.")
+        return
+
+    try:
+        file_text = content.decode("utf-8")
+    except UnicodeDecodeError:
+        try:
+            file_text = content.decode("utf-8-sig")
+        except UnicodeDecodeError:
+            try:
+                file_text = content.decode("cp1251")
+            except UnicodeDecodeError:
+                tg_send_message(
+                    chat_id,
+                    "Не удалось прочитать txt файл. Сохрани его в UTF-8 или ANSI."
+                )
+                return
+
+    result_message = add_kings_from_txt_content(file_text)
+    clear_state(user_id)
+    tg_send_message(chat_id, result_message)
+    send_kings_menu(chat_id, "Выбери следующее действие:")
 
 def send_simple_options(chat_id, title, options):
     rows = []
@@ -598,6 +826,16 @@ def handle_message(msg):
         clear_state(user_id)
         send_accounts_menu(chat_id)
         return
+        
+    if text == MENU_KINGS:
+    clear_state(user_id)
+    send_kings_menu(chat_id)
+    return
+
+    if text == SUBMENU_ADD_KINGS:
+    set_state(user_id, {"mode": "awaiting_kings_txt"})
+    send_add_kings_instructions(chat_id)
+    return
 
     if text == BTN_BACK_TO_MENU:
         clear_state(user_id)
@@ -782,8 +1020,15 @@ def index():
 def webhook():
     update = request.get_json(silent=True) or {}
     msg = update.get("message") or update.get("edited_message")
-    if msg and msg.get("text"):
-        handle_message(msg)
+
+    if msg:
+
+        if msg.get("text"):
+            handle_message(msg)
+
+        elif msg.get("document"):
+            handle_document_message(msg)
+
     return jsonify({"ok": True})
 
 
