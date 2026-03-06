@@ -909,6 +909,91 @@ def show_found_king(chat_id, user_id, found):
 
     tg_send_message(chat_id, text, keyboard)
 
+def confirm_king_issue(chat_id, user_id, username):
+    state = get_state(user_id)
+
+    if state.get("mode") != "king_found":
+        send_kings_menu(chat_id, "Сначала выбери кинга заново.")
+        return
+
+    row_index = state.get("king_row")
+    if not row_index:
+        send_kings_menu(chat_id, "Не найден выбранный кинг. Начни заново.")
+        return
+
+    sheet = get_sheet(SHEET_KINGS)
+    row = sheet.row_values(row_index)
+
+    if len(row) < 10:
+        row = row + [''] * (10 - len(row))
+
+    status = str(row[4]).strip().lower()
+
+    if status != "free":
+        tg_send_message(chat_id, "Этот кинг уже занят. Ищу другой...")
+
+        found = find_free_king_by_geo(
+            state["king_geo"],
+            exclude_row=row_index
+        )
+
+        if not found:
+            clear_state(user_id)
+            send_kings_menu(chat_id, "Свободных кингов с таким GEO больше нет.")
+            return
+
+        show_found_king(chat_id, user_id, found)
+        return
+
+    king_name = state["king_name"].strip()
+
+    # ещё раз проверяем дубль перед финальной выдачей
+    current_name_in_row = str(row[0]).strip()
+    if not current_name_in_row and king_name_exists(king_name):
+        tg_send_message(chat_id, f"Название '{king_name}' уже существует. Напиши другое название.")
+        state["mode"] = "awaiting_king_name"
+        set_state(user_id, state)
+        return
+
+    today = datetime.now().strftime("%d/%m/%Y")
+    who_took_text = f"@{username}" if username else "без username"
+
+    # A название, E статус, F кому выдали, G дата взятия, I кто взял
+    sheet.update(
+        f"A{row_index}:I{row_index}",
+        [[
+            king_name,              # A
+            row[1],                 # B дата покупки
+            row[2],                 # C цена
+            row[3],                 # D поставщик
+            "taken",                # E статус
+            state["king_for_whom"], # F кому выдали
+            today,                  # G дата взятия
+            row[7],                 # H гео
+            who_took_text           # I кто взял
+        ]]
+    )
+
+    data_text = row[9] if len(row) > 9 else ""
+
+    clear_state(user_id)
+
+    tg_send_message(
+        chat_id,
+        f"Готово ✅\n\n"
+        f"Кинг выдан.\n"
+        f"Название: {king_name}\n"
+        f"Для кого: {state['king_for_whom']}\n"
+        f"Гео: {row[7]}"
+    )
+
+    if data_text:
+        tg_send_message(chat_id, data_text)
+    else:
+        tg_send_message(chat_id, "Данные кинга не найдены.")
+
+    send_kings_menu(chat_id, "Выбери следующее действие:")
+
 # =========================
 # MESSAGE HANDLER
 # =========================
@@ -939,6 +1024,30 @@ def handle_message(msg):
     if text == MENU_CANCEL:
         clear_state(user_id)
         send_main_menu(chat_id, "Действие отменено.")
+        return
+
+    if text == "Выдать":
+        confirm_king_issue(chat_id, user_id, username)
+        return
+
+    if text == "Другой":
+        state = get_state(user_id)
+
+        if not state or not state.get("king_geo"):
+            send_kings_menu(chat_id, "Начни заново.")
+            return
+
+        found = find_free_king_by_geo(
+            state["king_geo"],
+            exclude_row=state.get("king_row")
+        )
+
+        if not found:
+            clear_state(user_id)
+            send_kings_menu(chat_id, "Свободных кингов с таким GEO больше нет.")
+            return
+
+        show_found_king(chat_id, user_id, found)
         return
 
     if text == MENU_ACCOUNTS:
@@ -1063,6 +1172,31 @@ def handle_message(msg):
         set_state(user_id, state)
 
         tg_send_message(chat_id, "Какое название будет у кинга?")
+        return
+
+    if state.get("mode") == "awaiting_king_name":
+        king_name = text.strip()
+
+        if not king_name:
+            tg_send_message(chat_id, "Напиши название кинга.")
+            return
+
+        if king_name_exists(king_name):
+            tg_send_message(chat_id, f"Название '{king_name}' уже существует. Напиши другое.")
+            return
+
+        state["mode"] = "searching_king"
+        state["king_name"] = king_name
+        set_state(user_id, state)
+
+        found = find_free_king_by_geo(state["king_geo"])
+
+        if not found:
+            clear_state(user_id)
+            send_kings_menu(chat_id, "Свободных кингов с таким GEO нет.")
+            return
+
+        show_found_king(chat_id, user_id, found)
         return
 
     if state.get("mode") == "awaiting_return_account":
