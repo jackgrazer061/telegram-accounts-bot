@@ -41,7 +41,7 @@ SUBMENU_SEARCH = 'Поиск лички'
 
 SUBMENU_ADD_KINGS = 'Добавить кинги'
 SUBMENU_FREE_KINGS = 'Свободные кинги'
-SUBMENU_GET_KINGS = 'Выдать кинг'
+SUBMENU_GET_KINGS = 'Получить кинг'
 SUBMENU_RETURN_KING = 'Вернуть кинг'
 SUBMENU_SEARCH_KING = 'Поиск кинга'
 
