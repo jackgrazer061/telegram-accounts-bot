@@ -39,6 +39,8 @@ SUBMENU_SEARCH = 'Поиск лички'
 
 SUBMENU_ADD_KINGS = 'Добавить кинги'
 SUBMENU_GET_KINGS = 'Выдать кинг'
+SUBMENU_RETURN_KING = 'Вернуть кинг'
+BTN_KING_BAN_CONFIRM = 'Подтвердить ban'
 
 BTN_BACK_TO_MENU = 'В меню'
 
@@ -106,6 +108,7 @@ def send_kings_menu(chat_id, text="Меню кингов:"):
     keyboard = [
         [{"text": SUBMENU_GET_KINGS}],
         [{"text": SUBMENU_ADD_KINGS}],
+        [{"text": SUBMENU_RETURN_KING}],
         [{"text": BTN_BACK_TO_MENU}]
     ]
     tg_send_message(chat_id, text, keyboard)
@@ -1011,6 +1014,75 @@ def append_king_to_issues_sheet(king_name, purchase_date, price, transfer_date, 
         for_whom         # G
     ], value_input_option="USER_ENTERED")
 
+def find_last_king_issue_row(king_name):
+    sheet = get_sheet(SHEET_ISSUES)
+    rows = sheet.get_all_values()
+
+    last_match = None
+    target = str(king_name).strip().lower()
+
+    for idx, row in enumerate(rows[1:], start=2):
+        if len(row) < 7:
+            row = row + [''] * (7 - len(row))
+
+        issue_name = str(row[0]).strip().lower()
+        issue_type = str(row[1]).strip().lower()
+
+        if issue_name == target and issue_type == "king":
+            last_match = {
+                "row_index": idx,
+                "row": row
+            }
+
+    return last_match
+
+
+def find_king_in_base_by_name(king_name):
+    sheet = get_sheet(SHEET_KINGS)
+    rows = sheet.get_all_values()
+
+    target = str(king_name).strip().lower()
+
+    for idx, row in enumerate(rows[1:], start=2):
+        if len(row) < 10:
+            row = row + [''] * (10 - len(row))
+
+        existing_name = str(row[0]).strip().lower()
+
+        if existing_name == target:
+            return {
+                "row_index": idx,
+                "row": row
+            }
+
+    return None
+
+
+def return_king_to_ban(king_name):
+    base_info = find_king_in_base_by_name(king_name)
+    if not base_info:
+        return False, "Кинг не найден в База_кингов."
+
+    base_sheet = get_sheet(SHEET_KINGS)
+
+    # E = статус, F = кому выдали
+    base_sheet.update(
+        f"E{base_info['row_index']}:F{base_info['row_index']}",
+        [["ban", "ban"]]
+    )
+
+    issue_info = find_last_king_issue_row(king_name)
+    if issue_info:
+        issue_sheet = get_sheet(SHEET_ISSUES)
+
+        # G = кому передали
+        issue_sheet.update(
+            f"G{issue_info['row_index']}",
+            [["ban"]]
+        )
+
+    return True, f"Кинг '{king_name}' переведён в ban."
+
 # =========================
 # MESSAGE HANDLER
 # =========================
@@ -1088,6 +1160,11 @@ def handle_message(msg):
         send_king_geo_options(chat_id)
         return
 
+    if text == SUBMENU_RETURN_KING:
+        set_state(user_id, {"mode": "awaiting_return_king_name"})
+        tg_send_message(chat_id, "Впиши название кинга, который нужно перевести в ban.")
+        return
+
     if text == BTN_BACK_TO_MENU:
         clear_state(user_id)
         send_main_menu(chat_id)
@@ -1127,6 +1204,20 @@ def handle_message(msg):
 
     if text == BTN_ISSUE_CONFIRM:
         confirm_issue(chat_id, user_id, username)
+        return
+
+    if text == BTN_KING_BAN_CONFIRM:
+        state = get_state(user_id)
+
+        if state.get("mode") != "awaiting_return_king_confirm":
+            send_kings_menu(chat_id, "Сначала выбери действие заново.")
+            return
+
+        king_name = state.get("return_king_name", "")
+        ok, message = return_king_to_ban(king_name)
+
+        clear_state(user_id)
+        send_kings_menu(chat_id, message)
         return
 
     if text == BTN_ISSUE_NEXT:
@@ -1280,6 +1371,36 @@ def handle_message(msg):
         state["limit"] = text
         set_state(user_id, state)
         send_simple_options(chat_id, "Выбери трешхолд:", THRESHOLD_OPTIONS)
+        return
+
+    if state.get("mode") == "awaiting_return_king_name":
+        king_name = text.strip()
+
+        if not king_name:
+            tg_send_message(chat_id, "Впиши название кинга.")
+            return
+
+        king_info = find_king_in_base_by_name(king_name)
+        if not king_info:
+            clear_state(user_id)
+            send_kings_menu(chat_id, "Кинг не найден.")
+            return
+
+        set_state(user_id, {
+            "mode": "awaiting_return_king_confirm",
+            "return_king_name": king_name
+        })
+
+        keyboard = [
+            [{"text": BTN_KING_BAN_CONFIRM}],
+            [{"text": MENU_CANCEL}]
+        ]
+
+        tg_send_message(
+            chat_id,
+            f"Внимание: кинг '{king_name}' будет перемещён в ban.\nПодтвердить?",
+            keyboard
+        )
         return
 
     if state.get("mode") == "awaiting_issue_threshold":
