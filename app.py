@@ -828,25 +828,30 @@ def confirm_issue(chat_id, user_id, username):
             send_main_menu(chat_id, "Эта личка недоступна.")
             return
 
-        # дальше вся твоя текущая логика выдачи
-        # обновление таблицы
-        # запись в Простые лички 26
-        # отправка сообщения
+        account_number = row[0]
+        purchase_date = row[1]
+        price = row[2]
+        supplier = row[3]
+        today = datetime.now().strftime("%d/%m/%Y")
 
-    account_number = row[0]
-    purchase_date = row[1]
-    price = row[2]
-    supplier = row[3]
-    today = datetime.now().strftime("%d/%m/%Y")
+        who_took_text = f"@{username}" if username else "без username"
 
-    who_took_text = f"@{username}" if username else "без username"
+        # I = статус, J = кому выдали, K = дата взятия, L = кто взял
+        sheet.update(
+            f"I{row_index}:L{row_index}",
+            [["taken", state["for_whom"], today, who_took_text]]
+        )
 
-    # I = статус, J = кому выдали, K = дата взятия, L = кто взял
-    sheet.update(f"I{row_index}:L{row_index}", [["taken", state["for_whom"], today, who_took_text]])
+        append_issue_row(
+            account_number,
+            purchase_date,
+            price,
+            today,
+            supplier,
+            state["for_whom"]
+        )
 
-    append_issue_row(account_number, purchase_date, price, today, supplier, state["for_whom"])
-
-    clear_state(user_id)
+        clear_state(user_id)
 
     tg_send_message(
         chat_id,
@@ -931,7 +936,7 @@ def show_found_king(chat_id, user_id, found):
     )
 
     keyboard = [
-        [{"text": "Выдать"}, {"text": "Другая"}],
+        [{"text": BTN_KING_CONFIRM}, {"text": BTN_KING_NEXT}],
         [{"text": MENU_CANCEL}]
     ]
 
@@ -973,52 +978,46 @@ def confirm_king_issue(chat_id, user_id, username):
             send_kings_menu(chat_id, "Этот кинг недоступен.")
             return
 
-        # дальше твоя текущая логика выдачи кинга
-        # запись в База_кингов
-        # запись в Простые лички 26
-        # отправка данных
+        king_name = state["king_name"].strip()
 
-    king_name = state["king_name"].strip()
+        current_name_in_row = str(row[0]).strip()
+        if not current_name_in_row and king_name_exists(king_name):
+            tg_send_message(chat_id, f"Название '{king_name}' уже существует. Напиши другое название.")
+            state["mode"] = "awaiting_king_name"
+            set_state(user_id, state)
+            return
 
-    # ещё раз проверяем дубль перед финальной выдачей
-    current_name_in_row = str(row[0]).strip()
-    if not current_name_in_row and king_name_exists(king_name):
-        tg_send_message(chat_id, f"Название '{king_name}' уже существует. Напиши другое название.")
-        state["mode"] = "awaiting_king_name"
-        set_state(user_id, state)
-        return
+        today = datetime.now().strftime("%d/%m/%Y")
+        who_took_text = f"@{username}" if username else "без username"
 
-    today = datetime.now().strftime("%d/%m/%Y")
-    who_took_text = f"@{username}" if username else "без username"
+        # A название, E статус, F кому выдали, G дата взятия, I кто взял
+        sheet.update(
+            f"A{row_index}:I{row_index}",
+            [[
+                king_name,              # A
+                row[1],                 # B дата покупки
+                row[2],                 # C цена
+                row[3],                 # D поставщик
+                "taken",                # E статус
+                state["king_for_whom"], # F кому выдали
+                today,                  # G дата взятия
+                row[7],                 # H гео
+                who_took_text           # I кто взял
+            ]]
+        )
 
-    # A название, E статус, F кому выдали, G дата взятия, I кто взял
-    sheet.update(
-        f"A{row_index}:I{row_index}",
-        [[
-            king_name,              # A
-            row[1],                 # B дата покупки
-            row[2],                 # C цена
-            row[3],                 # D поставщик
-            "taken",                # E статус
-            state["king_for_whom"], # F кому выдали
-            today,                  # G дата взятия
-            row[7],                 # H гео
-            who_took_text           # I кто взял
-        ]]
-    )
+        append_king_to_issues_sheet(
+            king_name=king_name,
+            purchase_date=row[1],
+            price=row[2],
+            transfer_date=today,
+            supplier=row[3],
+            for_whom=state["king_for_whom"]
+        )
 
-    data_text = row[9] if len(row) > 9 else ""
+        data_text = row[9] if len(row) > 9 else ""
 
-    append_king_to_issues_sheet(
-        king_name=king_name,
-        purchase_date=row[1],
-        price=row[2],
-        transfer_date=today,
-        supplier=row[3],
-        for_whom=state["king_for_whom"]
-    )
-
-    clear_state(user_id)
+        clear_state(user_id)
 
     tg_send_message(
         chat_id,
@@ -1335,11 +1334,11 @@ def handle_message(msg):
         send_main_menu(chat_id, "Главное меню:")
         return
 
-    if text == "Выдать":
+    if text == BTN_KING_CONFIRM:
         confirm_king_issue(chat_id, user_id, username)
         return
 
-    if text == "Другой":
+    if text == BTN_KING_NEXT:
         state = get_state(user_id)
 
         if not state or not state.get("king_geo"):
