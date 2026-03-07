@@ -1375,7 +1375,10 @@ def handle_message(msg):
         text = str(msg.get("text", "")).strip()
 
         if user_id not in ALLOWED_USERS:
-            tg_send_message(chat_id, "У вас нет доступа.")
+            tg_send_message(
+                chat_id,
+                f"⛔ У вас нет доступа.\n\nВаш Telegram ID:\n{user_id}"
+            )
             return
 
         state = get_state(user_id)
