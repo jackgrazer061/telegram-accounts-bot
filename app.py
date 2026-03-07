@@ -17,6 +17,14 @@ logging.basicConfig(level=logging.INFO)
 BOT_TOKEN = os.environ.get("BOT_TOKEN", "")
 SPREADSHEET_ID = os.environ.get("SPREADSHEET_ID", "")
 SERVICE_ACCOUNT_JSON = os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON", "")
+# =========================
+# ACCESS CONTROL
+# =========================
+
+ALLOWED_USERS = {
+    123456789,  # jack
+    987654321,  # cilian
+}
 
 BASE_URL = f"https://api.telegram.org/bot{BOT_TOKEN}"
 
@@ -1365,6 +1373,10 @@ def handle_message(msg):
         user_id = msg["from"]["id"]
         username = msg["from"].get("username", "")
         text = str(msg.get("text", "")).strip()
+
+        if user_id not in ALLOWED_USERS:
+            tg_send_message(chat_id, "У вас нет доступа.")
+            return
 
         state = get_state(user_id)
 
