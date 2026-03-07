@@ -1385,6 +1385,10 @@ def handle_message(msg):
             send_main_menu(chat_id)
             return
 
+        if text == "/id":
+            tg_send_message(chat_id, f"Ваш Telegram ID: {user_id}")
+            return
+
         if text == "/help":
             clear_state(user_id)
             tg_send_message(
