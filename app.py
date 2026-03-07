@@ -470,6 +470,16 @@ def return_account_to_ban(account_number):
     if not base_info:
         return False, "Личка не найдена в базе."
 
+    row = base_info["row"]
+
+    if len(row) < 12:
+        row = row + [''] * (12 - len(row))
+
+    status = str(row[8]).strip().lower()
+
+    if status == "ban":
+        return False, "Эта личка уже в ban."
+
     base_sheet = get_sheet(SHEET_ACCOUNTS)
 
     # J = кому выдали
@@ -793,20 +803,20 @@ def confirm_issue(chat_id, user_id, username):
         row = row + [''] * (12 - len(row))
 
     status = str(row[8]).strip().lower()
-    if status != "free":
-        tg_send_message(chat_id, "Эта личка уже занята. Ищу другую...")
-        found = find_matching_free_account(
-            state["limit"],
-            state["threshold"],
-            state["gmt"],
-            exclude_account=state.get("found_account")
-        )
-        if not found:
-            clear_state(user_id)
-            send_main_menu(chat_id, "Подходящих свободных личек больше нет.")
-            return
 
-        show_found_account(chat_id, user_id, found)
+    if status == "taken":
+        clear_state(user_id)
+        send_main_menu(chat_id, "Эта личка уже занята.")
+        return
+
+    if status == "ban":
+        clear_state(user_id)
+        send_main_menu(chat_id, "Эта личка уже в ban.")
+        return
+
+    if status != "free":
+        clear_state(user_id)
+        send_main_menu(chat_id, "Эта личка недоступна.")
         return
 
     account_number = row[0]
@@ -933,20 +943,19 @@ def confirm_king_issue(chat_id, user_id, username):
 
     status = str(row[4]).strip().lower()
 
+    if status == "taken":
+        clear_state(user_id)
+        send_kings_menu(chat_id, "Этот кинг уже занят.")
+        return
+
+    if status == "ban":
+        clear_state(user_id)
+        send_kings_menu(chat_id, "Этот кинг уже в ban.")
+        return
+
     if status != "free":
-        tg_send_message(chat_id, "Этот кинг уже занят. Ищу другой...")
-
-        found = find_free_king_by_geo(
-            state["king_geo"],
-            exclude_row=row_index
-        )
-
-        if not found:
-            clear_state(user_id)
-            send_kings_menu(chat_id, "Свободных кингов с таким GEO больше нет.")
-            return
-
-        show_found_king(chat_id, user_id, found)
+        clear_state(user_id)
+        send_kings_menu(chat_id, "Этот кинг недоступен.")
         return
 
     king_name = state["king_name"].strip()
@@ -1067,6 +1076,16 @@ def return_king_to_ban(king_name):
     base_info = find_king_in_base_by_name(king_name)
     if not base_info:
         return False, "Кинг не найден в База_кингов."
+        
+    row = base_info["row"]
+
+    if len(row) < 10:
+        row = row + [''] * (10 - len(row))
+
+    status = str(row[4]).strip().lower()
+
+    if status == "ban":
+        return False, "Этот кинг уже в ban."
 
     base_sheet = get_sheet(SHEET_KINGS)
 
