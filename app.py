@@ -41,6 +41,7 @@ SUBMENU_ADD_KINGS = 'Добавить кинги'
 SUBMENU_GET_KINGS = 'Выдать кинг'
 SUBMENU_RETURN_KING = 'Вернуть кинг'
 BTN_KING_BAN_CONFIRM = 'Подтвердить ban'
+SUBMENU_SEARCH_KING = 'Поиск кинга'
 
 BTN_BACK_TO_MENU = 'В меню'
 
@@ -109,6 +110,7 @@ def send_kings_menu(chat_id, text="Меню кингов:"):
         [{"text": SUBMENU_GET_KINGS}],
         [{"text": SUBMENU_ADD_KINGS}],
         [{"text": SUBMENU_RETURN_KING}],
+        [{"text": SUBMENU_SEARCH_KING}],
         [{"text": BTN_BACK_TO_MENU}]
     ]
     tg_send_message(chat_id, text, keyboard)
@@ -1083,6 +1085,52 @@ def return_king_to_ban(king_name):
 
     return True, f"Кинг '{king_name}' переведён в ban."
 
+def build_king_search_text(king_name):
+    king_info = find_king_in_base_by_name(king_name)
+
+    if not king_info:
+        return None
+
+    row = king_info["row"]
+
+    if len(row) < 10:
+        row = row + [''] * (10 - len(row))
+
+    name = row[0]
+    price = row[2]
+    status = row[4]
+    for_whom = row[5]
+    taken_date = row[6]
+    who_took = row[8]
+    data_text = row[9]
+
+    if not who_took:
+        who_took = "не указано"
+
+    if not for_whom:
+        for_whom = "не указано"
+
+    if not taken_date:
+        taken_date = "не указана"
+
+    if not status:
+        status = "не указан"
+
+    if not data_text:
+        data_text = "нет данных"
+
+    text = (
+        f"Название: {name}\n"
+        f"Статус: {status}\n"
+        f"Цена: {price}\n"
+        f"Дата взятия: {taken_date}\n"
+        f"Кто взял: {who_took}\n"
+        f"Для кого взял: {for_whom}\n\n"
+        f"Данные:\n{data_text}"
+    )
+
+    return text
+
 # =========================
 # MESSAGE HANDLER
 # =========================
@@ -1142,6 +1190,11 @@ def handle_message(msg):
     if text == MENU_ACCOUNTS:
         clear_state(user_id)
         send_accounts_menu(chat_id)
+        return
+
+    if text == SUBMENU_SEARCH_KING:
+        set_state(user_id, {"mode": "awaiting_search_king_name"})
+        tg_send_message(chat_id, "Впиши название кинга.")
         return
         
     if text == MENU_KINGS:
@@ -1268,6 +1321,25 @@ def handle_message(msg):
         })
 
         tg_send_message(chat_id, "Для кого берешь кинг?")
+        return
+
+    if state.get("mode") == "awaiting_search_king_name":
+        king_name = text.strip()
+
+        if not king_name:
+            tg_send_message(chat_id, "Впиши название кинга.")
+            return
+
+        result = build_king_search_text(king_name)
+
+        clear_state(user_id)
+
+        if not result:
+            send_kings_menu(chat_id, "Кинг не найден.")
+            return
+
+        tg_send_message(chat_id, result)
+        send_kings_menu(chat_id, "Выбери следующее действие:")
         return
 
     if state.get("mode") == "awaiting_king_for_whom":
