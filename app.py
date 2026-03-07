@@ -6,6 +6,7 @@ from flask import Flask, request, jsonify
 import requests
 import gspread
 from google.oauth2.service_account import Credentials
+import threading
 
 app = Flask(__name__)
 logging.basicConfig(level=logging.INFO)
@@ -42,17 +43,23 @@ SUBMENU_ADD_KINGS = 'Добавить кинги'
 SUBMENU_FREE_KINGS = 'Свободные кинги'
 SUBMENU_GET_KINGS = 'Выдать кинг'
 SUBMENU_RETURN_KING = 'Вернуть кинг'
-BTN_KING_BAN_CONFIRM = 'Подтвердить ban'
 SUBMENU_SEARCH_KING = 'Поиск кинга'
 
 BTN_BACK_TO_MENU = 'В меню'
 
-BTN_ISSUE_CONFIRM = 'Выдать'
-BTN_ISSUE_NEXT = 'Другая'
+# кнопки выдачи личек
+BTN_ISSUE_CONFIRM = 'Выдать личку'
+BTN_ISSUE_NEXT = 'Другая личка'
 BTN_RETURN_CONFIRM = 'Подтвердить бан'
+
+# кнопки выдачи кингов
+BTN_KING_CONFIRM = 'Выдать кинг'
+BTN_KING_NEXT = 'Другой кинг'
+BTN_KING_BAN_CONFIRM = 'Подтвердить ban'
 
 # Память состояний пользователей (для старта хватит)
 user_states = {}
+issue_lock = threading.Lock()
 
 
 # =========================
@@ -786,38 +793,45 @@ def append_issue_row(account_number, purchase_date, price, transfer_date, suppli
 
 
 def confirm_issue(chat_id, user_id, username):
-    state = get_state(user_id)
-    if state.get("mode") != "account_found":
-        send_main_menu(chat_id, "Сначала найди личку.")
-        return
+    with issue_lock:
+        state = get_state(user_id)
 
-    row_index = state.get("found_row")
-    if not row_index:
-        send_main_menu(chat_id, "Не нашёл выбранную личку. Начни заново.")
-        return
+        if state.get("mode") != "account_found":
+            send_main_menu(chat_id, "Сначала найди личку.")
+            return
 
-    sheet = get_sheet(SHEET_ACCOUNTS)
-    row = sheet.row_values(row_index)
+        row_index = state.get("found_row")
+        if not row_index:
+            send_main_menu(chat_id, "Не нашёл выбранную личку. Начни заново.")
+            return
 
-    if len(row) < 12:
-        row = row + [''] * (12 - len(row))
+        sheet = get_sheet(SHEET_ACCOUNTS)
+        row = sheet.row_values(row_index)
 
-    status = str(row[8]).strip().lower()
+        if len(row) < 12:
+            row = row + [''] * (12 - len(row))
 
-    if status == "taken":
-        clear_state(user_id)
-        send_main_menu(chat_id, "Эта личка уже занята.")
-        return
+        status = str(row[8]).strip().lower()
 
-    if status == "ban":
-        clear_state(user_id)
-        send_main_menu(chat_id, "Эта личка уже в ban.")
-        return
+        if status == "taken":
+            clear_state(user_id)
+            send_main_menu(chat_id, "Эта личка уже занята.")
+            return
 
-    if status != "free":
-        clear_state(user_id)
-        send_main_menu(chat_id, "Эта личка недоступна.")
-        return
+        if status == "ban":
+            clear_state(user_id)
+            send_main_menu(chat_id, "Эта личка уже в ban.")
+            return
+
+        if status != "free":
+            clear_state(user_id)
+            send_main_menu(chat_id, "Эта личка недоступна.")
+            return
+
+        # дальше вся твоя текущая логика выдачи
+        # обновление таблицы
+        # запись в Простые лички 26
+        # отправка сообщения
 
     account_number = row[0]
     purchase_date = row[1]
@@ -924,39 +938,45 @@ def show_found_king(chat_id, user_id, found):
     tg_send_message(chat_id, text, keyboard)
 
 def confirm_king_issue(chat_id, user_id, username):
-    state = get_state(user_id)
+    with issue_lock:
+        state = get_state(user_id)
 
-    if state.get("mode") != "king_found":
-        send_kings_menu(chat_id, "Сначала выбери кинга заново.")
-        return
+        if state.get("mode") != "king_found":
+            send_kings_menu(chat_id, "Сначала выбери кинга заново.")
+            return
 
-    row_index = state.get("king_row")
-    if not row_index:
-        send_kings_menu(chat_id, "Не найден выбранный кинг. Начни заново.")
-        return
+        row_index = state.get("king_row")
+        if not row_index:
+            send_kings_menu(chat_id, "Не найден выбранный кинг. Начни заново.")
+            return
 
-    sheet = get_sheet(SHEET_KINGS)
-    row = sheet.row_values(row_index)
+        sheet = get_sheet(SHEET_KINGS)
+        row = sheet.row_values(row_index)
 
-    if len(row) < 10:
-        row = row + [''] * (10 - len(row))
+        if len(row) < 10:
+            row = row + [''] * (10 - len(row))
 
-    status = str(row[4]).strip().lower()
+        status = str(row[4]).strip().lower()
 
-    if status == "taken":
-        clear_state(user_id)
-        send_kings_menu(chat_id, "Этот кинг уже занят.")
-        return
+        if status == "taken":
+            clear_state(user_id)
+            send_kings_menu(chat_id, "Этот кинг уже занят.")
+            return
 
-    if status == "ban":
-        clear_state(user_id)
-        send_kings_menu(chat_id, "Этот кинг уже в ban.")
-        return
+        if status == "ban":
+            clear_state(user_id)
+            send_kings_menu(chat_id, "Этот кинг уже в ban.")
+            return
 
-    if status != "free":
-        clear_state(user_id)
-        send_kings_menu(chat_id, "Этот кинг недоступен.")
-        return
+        if status != "free":
+            clear_state(user_id)
+            send_kings_menu(chat_id, "Этот кинг недоступен.")
+            return
+
+        # дальше твоя текущая логика выдачи кинга
+        # запись в База_кингов
+        # запись в Простые лички 26
+        # отправка данных
 
     king_name = state["king_name"].strip()
 
