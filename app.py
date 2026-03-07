@@ -29,6 +29,7 @@ GMT_OPTIONS = ['-10', '-9', '-8', '-7', '-6', '-5', '-4', '-3', '-2', '-1', '0',
 
 MENU_ACCOUNTS = 'Лички'
 MENU_KINGS = 'Кинги'
+MENU_STATS = 'Статистика'
 MENU_CANCEL = 'Отмена'
 
 SUBMENU_GET = 'Выдать лички'
@@ -38,6 +39,7 @@ SUBMENU_RETURN = 'Вернуть личку'
 SUBMENU_SEARCH = 'Поиск лички'
 
 SUBMENU_ADD_KINGS = 'Добавить кинги'
+SUBMENU_FREE_KINGS = 'Свободные кинги'
 SUBMENU_GET_KINGS = 'Выдать кинг'
 SUBMENU_RETURN_KING = 'Вернуть кинг'
 BTN_KING_BAN_CONFIRM = 'Подтвердить ban'
@@ -89,10 +91,10 @@ def tg_send_message(chat_id, text, keyboard=None):
 
     requests.post(f"{BASE_URL}/sendMessage", json=payload, timeout=30)
 
-
 def send_main_menu(chat_id, text="Главное меню:"):
     keyboard = [
         [{"text": MENU_ACCOUNTS}, {"text": MENU_KINGS}],
+        [{"text": MENU_STATS}],
         [{"text": MENU_CANCEL}]
     ]
     tg_send_message(chat_id, text, keyboard)
@@ -109,6 +111,7 @@ def send_kings_menu(chat_id, text="Меню кингов:"):
     keyboard = [
         [{"text": SUBMENU_GET_KINGS}],
         [{"text": SUBMENU_ADD_KINGS}],
+        [{"text": SUBMENU_FREE_KINGS}],
         [{"text": SUBMENU_RETURN_KING}],
         [{"text": SUBMENU_SEARCH_KING}],
         [{"text": BTN_BACK_TO_MENU}]
@@ -1131,6 +1134,130 @@ def build_king_search_text(king_name):
 
     return text
 
+def build_stats_text():
+    # ---------- КИНГИ ----------
+    kings_sheet = get_sheet(SHEET_KINGS)
+    kings_rows = kings_sheet.get_all_values()
+
+    kings_free = 0
+    kings_taken = 0
+    kings_ban = 0
+    kings_geo_stats = {}
+
+    for row in kings_rows[1:]:
+        if len(row) < 10:
+            row = row + [''] * (10 - len(row))
+
+        status = str(row[4]).strip().lower()   # E статус
+        geo = str(row[7]).strip()              # H гео
+
+        if status == "free":
+            kings_free += 1
+            if geo:
+                kings_geo_stats[geo] = kings_geo_stats.get(geo, 0) + 1
+        elif status == "taken":
+            kings_taken += 1
+        elif status == "ban":
+            kings_ban += 1
+
+    # ---------- ЛИЧКИ ----------
+    accounts_sheet = get_sheet(SHEET_ACCOUNTS)
+    accounts_rows = accounts_sheet.get_all_values()
+
+    accounts_free = 0
+    accounts_taken = 0
+    accounts_ban = 0
+
+    limit_stats = {
+        "-250": 0,
+        "250-500": 0,
+        "500-1200": 0,
+        "1200-1500": 0,
+        "unlim": 0
+    }
+
+    for row in accounts_rows[1:]:
+        if len(row) < 12:
+            row = row + [''] * (12 - len(row))
+
+        status = str(row[8]).strip().lower()   # I статус
+        target = str(row[9]).strip().lower()   # J кому выдали
+        limit_val = str(row[4]).strip()        # E лимит
+
+        if target == "ban" or status == "ban":
+            accounts_ban += 1
+        elif status == "free":
+            accounts_free += 1
+            if limit_val in limit_stats:
+                limit_stats[limit_val] += 1
+        elif status == "taken":
+            accounts_taken += 1
+
+    # GEO блок
+    geo_lines = []
+    for geo, count in sorted(kings_geo_stats.items()):
+        geo_lines.append(f"{geo}: {count}")
+
+    if not geo_lines:
+        geo_lines.append("нет свободных GEO")
+
+    # Лимиты блок
+    limit_lines = []
+    for limit_name in ["-250", "250-500", "500-1200", "1200-1500", "unlim"]:
+        limit_lines.append(f"{limit_name}: {limit_stats[limit_name]}")
+
+    text = (
+        "Кинги:\n\n"
+        f"Свободные: {kings_free}\n"
+        f"Выдано: {kings_taken}\n"
+        f"В бане: {kings_ban}\n\n"
+        "По GEO:\n\n"
+        + "\n".join(geo_lines)
+        + "\n\n"
+        "Лички:\n\n"
+        f"Свободные: {accounts_free}\n"
+        f"Выдано: {accounts_taken}\n"
+        f"В бане: {accounts_ban}\n\n"
+        "По лимиту:\n"
+        + "\n".join(limit_lines)
+    )
+
+    return text
+
+def send_free_kings(chat_id):
+    sheet = get_sheet(SHEET_KINGS)
+    rows = sheet.get_all_values()
+
+    free_rows = []
+
+    for row in rows[1:]:
+        if len(row) < 10:
+            row = row + [''] * (10 - len(row))
+
+        status = str(row[4]).strip().lower()  # E статус
+
+        if status == "free":
+            free_rows.append(row)
+
+    if not free_rows:
+        tg_send_message(chat_id, "Свободных кингов сейчас нет.")
+        return
+
+    geo_stats = {}
+    for row in free_rows:
+        geo = str(row[7]).strip()
+        if geo:
+            geo_stats[geo] = geo_stats.get(geo, 0) + 1
+
+    lines = [f"{geo} — {count}" for geo, count in sorted(geo_stats.items())]
+
+    text = (
+        f"Свободные кинги: {len(free_rows)}\n\n"
+        + "\n".join(lines)
+    )
+
+    tg_send_message(chat_id, text)
+
 # =========================
 # MESSAGE HANDLER
 # =========================
@@ -1161,6 +1288,12 @@ def handle_message(msg):
     if text == MENU_CANCEL:
         clear_state(user_id)
         send_main_menu(chat_id, "Действие отменено.")
+        return
+
+    if text == MENU_STATS:
+        stats_text = build_stats_text()
+        tg_send_message(chat_id, stats_text)
+        send_main_menu(chat_id, "Главное меню:")
         return
 
     if text == "Выдать":
@@ -1195,6 +1328,11 @@ def handle_message(msg):
     if text == SUBMENU_SEARCH_KING:
         set_state(user_id, {"mode": "awaiting_search_king_name"})
         tg_send_message(chat_id, "Впиши название кинга.")
+        return
+
+    if text == SUBMENU_FREE_KINGS:
+        send_free_kings(chat_id)
+        send_kings_menu(chat_id, "Выбери следующее действие:")
         return
         
     if text == MENU_KINGS:
