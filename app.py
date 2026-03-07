@@ -31,6 +31,7 @@ GMT_OPTIONS = ['-10', '-9', '-8', '-7', '-6', '-5', '-4', '-3', '-2', '-1', '0',
 MENU_ACCOUNTS = 'Лички'
 MENU_KINGS = 'Кинги'
 MENU_STATS = 'Статистика'
+MENU_BACKUP = 'Бэкап таблиц'
 MENU_CANCEL = 'Отмена'
 
 SUBMENU_GET = 'Выдать лички'
@@ -85,23 +86,28 @@ def get_sheet(sheet_name):
 # TELEGRAM
 # =========================
 def tg_send_message(chat_id, text, keyboard=None):
-    payload = {
-        "chat_id": chat_id,
-        "text": text
-    }
-    if keyboard:
-        payload["reply_markup"] = {
-            "keyboard": keyboard,
-            "resize_keyboard": True,
-            "one_time_keyboard": False
+    try:
+        payload = {
+            "chat_id": chat_id,
+            "text": text
         }
 
-    requests.post(f"{BASE_URL}/sendMessage", json=payload, timeout=30)
+        if keyboard:
+            payload["reply_markup"] = {
+                "keyboard": keyboard,
+                "resize_keyboard": True,
+                "one_time_keyboard": False
+            }
+
+        requests.post(f"{BASE_URL}/sendMessage", json=payload, timeout=30)
+
+    except Exception as e:
+        logging.error(f"tg_send_message error: {e}")
 
 def send_main_menu(chat_id, text="Главное меню:"):
     keyboard = [
         [{"text": MENU_ACCOUNTS}, {"text": MENU_KINGS}],
-        [{"text": MENU_STATS}],
+        [{"text": MENU_STATS}, {"text": MENU_BACKUP}],
         [{"text": MENU_CANCEL}]
     ]
     tg_send_message(chat_id, text, keyboard)
@@ -328,53 +334,61 @@ def add_kings_from_txt_content(file_text):
 
 
 def handle_document_message(msg):
-    chat_id = msg["chat"]["id"]
-    user_id = msg["from"]["id"]
-    state = get_state(user_id)
-
-    if state.get("mode") != "awaiting_kings_txt":
-        tg_send_message(
-            chat_id,
-            "Я не жду сейчас txt файл. Сначала открой Кинги → Добавить кинги."
-        )
-        return
-
-    document = msg.get("document", {})
-    file_name = document.get("file_name", "")
-    file_id = document.get("file_id", "")
-
-    if not file_id:
-        tg_send_message(chat_id, "Не удалось получить файл. Попробуй ещё раз.")
-        return
-
-    if file_name and not file_name.lower().endswith(".txt"):
-        tg_send_message(chat_id, "Нужен именно txt файл.")
-        return
-
-    content = tg_download_file_content(file_id)
-    if not content:
-        tg_send_message(chat_id, "Не удалось скачать файл. Попробуй ещё раз.")
-        return
-
     try:
-        file_text = content.decode("utf-8")
-    except UnicodeDecodeError:
+        chat_id = msg["chat"]["id"]
+        user_id = msg["from"]["id"]
+        state = get_state(user_id)
+
+        if state.get("mode") != "awaiting_kings_txt":
+            tg_send_message(
+                chat_id,
+                "Я не жду сейчас txt файл. Сначала открой Кинги → Добавить кинги."
+            )
+            return
+
+        document = msg.get("document", {})
+        file_name = document.get("file_name", "")
+        file_id = document.get("file_id", "")
+
+        if not file_id:
+            tg_send_message(chat_id, "Не удалось получить файл. Попробуй ещё раз.")
+            return
+
+        if file_name and not file_name.lower().endswith(".txt"):
+            tg_send_message(chat_id, "Нужен именно txt файл.")
+            return
+
+        content = tg_download_file_content(file_id)
+        if not content:
+            tg_send_message(chat_id, "Не удалось скачать файл. Попробуй ещё раз.")
+            return
+
         try:
-            file_text = content.decode("utf-8-sig")
+            file_text = content.decode("utf-8")
         except UnicodeDecodeError:
             try:
-                file_text = content.decode("cp1251")
+                file_text = content.decode("utf-8-sig")
             except UnicodeDecodeError:
-                tg_send_message(
-                    chat_id,
-                    "Не удалось прочитать txt файл. Сохрани его в UTF-8 или ANSI."
-                )
-                return
+                try:
+                    file_text = content.decode("cp1251")
+                except UnicodeDecodeError:
+                    tg_send_message(
+                        chat_id,
+                        "Не удалось прочитать txt файл. Сохрани его в UTF-8 или ANSI."
+                    )
+                    return
 
-    result_message = add_kings_from_txt_content(file_text)
-    clear_state(user_id)
-    tg_send_message(chat_id, result_message)
-    send_kings_menu(chat_id, "Выбери следующее действие:")
+        result_message = add_kings_from_txt_content(file_text)
+        clear_state(user_id)
+        tg_send_message(chat_id, result_message)
+        send_kings_menu(chat_id, "Выбери следующее действие:")
+
+    except Exception as e:
+        logging.error(f"handle_document_message error: {e}")
+        try:
+            tg_send_message(msg["chat"]["id"], "Ошибка обработки файла. Попробуй ещё раз.")
+        except Exception:
+            pass
 
 def send_simple_options(chat_id, title, options):
     rows = []
@@ -793,74 +807,79 @@ def append_issue_row(account_number, purchase_date, price, transfer_date, suppli
 
 
 def confirm_issue(chat_id, user_id, username):
-    with issue_lock:
-        state = get_state(user_id)
+    try:
+        with issue_lock:
+            state = get_state(user_id)
 
-        if state.get("mode") != "account_found":
-            send_main_menu(chat_id, "Сначала найди личку.")
-            return
+            if state.get("mode") != "account_found":
+                send_main_menu(chat_id, "Сначала найди личку.")
+                return
 
-        row_index = state.get("found_row")
-        if not row_index:
-            send_main_menu(chat_id, "Не нашёл выбранную личку. Начни заново.")
-            return
+            row_index = state.get("found_row")
+            if not row_index:
+                send_main_menu(chat_id, "Не нашёл выбранную личку. Начни заново.")
+                return
 
-        sheet = get_sheet(SHEET_ACCOUNTS)
-        row = sheet.row_values(row_index)
+            sheet = get_sheet(SHEET_ACCOUNTS)
+            row = sheet.row_values(row_index)
 
-        if len(row) < 12:
-            row = row + [''] * (12 - len(row))
+            if len(row) < 12:
+                row = row + [''] * (12 - len(row))
 
-        status = str(row[8]).strip().lower()
+            status = str(row[8]).strip().lower()
 
-        if status == "taken":
+            if status == "taken":
+                clear_state(user_id)
+                send_main_menu(chat_id, "Эта личка уже занята.")
+                return
+
+            if status == "ban":
+                clear_state(user_id)
+                send_main_menu(chat_id, "Эта личка уже в ban.")
+                return
+
+            if status != "free":
+                clear_state(user_id)
+                send_main_menu(chat_id, "Эта личка недоступна.")
+                return
+
+            account_number = row[0]
+            purchase_date = row[1]
+            price = row[2]
+            supplier = row[3]
+            today = datetime.now().strftime("%d/%m/%Y")
+
+            who_took_text = f"@{username}" if username else "без username"
+
+            sheet.update(
+                f"I{row_index}:L{row_index}",
+                [["taken", state["for_whom"], today, who_took_text]]
+            )
+
+            append_issue_row(
+                account_number,
+                purchase_date,
+                price,
+                today,
+                supplier,
+                state["for_whom"]
+            )
+
             clear_state(user_id)
-            send_main_menu(chat_id, "Эта личка уже занята.")
-            return
 
-        if status == "ban":
-            clear_state(user_id)
-            send_main_menu(chat_id, "Эта личка уже в ban.")
-            return
-
-        if status != "free":
-            clear_state(user_id)
-            send_main_menu(chat_id, "Эта личка недоступна.")
-            return
-
-        account_number = row[0]
-        purchase_date = row[1]
-        price = row[2]
-        supplier = row[3]
-        today = datetime.now().strftime("%d/%m/%Y")
-
-        who_took_text = f"@{username}" if username else "без username"
-
-        # I = статус, J = кому выдали, K = дата взятия, L = кто взял
-        sheet.update(
-            f"I{row_index}:L{row_index}",
-            [["taken", state["for_whom"], today, who_took_text]]
+        tg_send_message(
+            chat_id,
+            f"Готово ✅\n\n"
+            f"Выдана личка: {account_number}\n"
+            f"Кому передали: {state['for_whom']}\n"
+            f"Кто взял в боте: {who_took_text}"
         )
+        send_main_menu(chat_id, "Выбери следующее действие:")
 
-        append_issue_row(
-            account_number,
-            purchase_date,
-            price,
-            today,
-            supplier,
-            state["for_whom"]
-        )
-
-        clear_state(user_id)
-
-    tg_send_message(
-        chat_id,
-        f"Готово ✅\n\n"
-        f"Выдана личка: {account_number}\n"
-        f"Кому передали: {state['for_whom']}\n"
-        f"Кто взял в боте: {who_took_text}"
-    )
-    send_main_menu(chat_id, "Выбери следующее действие:")
+    except Exception as e:
+        logging.error(f"confirm_issue error: {e}")
+        tg_send_message(chat_id, "Ошибка выдачи лички. Попробуй ещё раз.")
+        send_main_menu(chat_id, "Главное меню:")
 
 def king_name_exists(king_name):
     sheet = get_sheet(SHEET_KINGS)
@@ -943,97 +962,102 @@ def show_found_king(chat_id, user_id, found):
     tg_send_message(chat_id, text, keyboard)
 
 def confirm_king_issue(chat_id, user_id, username):
-    with issue_lock:
-        state = get_state(user_id)
+    try:
+        with issue_lock:
+            state = get_state(user_id)
 
-        if state.get("mode") != "king_found":
-            send_kings_menu(chat_id, "Сначала выбери кинга заново.")
-            return
+            if state.get("mode") != "king_found":
+                send_kings_menu(chat_id, "Сначала выбери кинга заново.")
+                return
 
-        row_index = state.get("king_row")
-        if not row_index:
-            send_kings_menu(chat_id, "Не найден выбранный кинг. Начни заново.")
-            return
+            row_index = state.get("king_row")
+            if not row_index:
+                send_kings_menu(chat_id, "Не найден выбранный кинг. Начни заново.")
+                return
 
-        sheet = get_sheet(SHEET_KINGS)
-        row = sheet.row_values(row_index)
+            sheet = get_sheet(SHEET_KINGS)
+            row = sheet.row_values(row_index)
 
-        if len(row) < 10:
-            row = row + [''] * (10 - len(row))
+            if len(row) < 10:
+                row = row + [''] * (10 - len(row))
 
-        status = str(row[4]).strip().lower()
+            status = str(row[4]).strip().lower()
 
-        if status == "taken":
+            if status == "taken":
+                clear_state(user_id)
+                send_kings_menu(chat_id, "Этот кинг уже занят.")
+                return
+
+            if status == "ban":
+                clear_state(user_id)
+                send_kings_menu(chat_id, "Этот кинг уже в ban.")
+                return
+
+            if status != "free":
+                clear_state(user_id)
+                send_kings_menu(chat_id, "Этот кинг недоступен.")
+                return
+
+            king_name = state["king_name"].strip()
+
+            current_name_in_row = str(row[0]).strip()
+            if not current_name_in_row and king_name_exists(king_name):
+                tg_send_message(chat_id, f"Название '{king_name}' уже существует. Напиши другое название.")
+                state["mode"] = "awaiting_king_name"
+                set_state(user_id, state)
+                return
+
+            today = datetime.now().strftime("%d/%m/%Y")
+            who_took_text = f"@{username}" if username else "без username"
+
+            sheet.update(
+                f"A{row_index}:I{row_index}",
+                [[
+                    king_name,
+                    row[1],
+                    row[2],
+                    row[3],
+                    "taken",
+                    state["king_for_whom"],
+                    today,
+                    row[7],
+                    who_took_text
+                ]]
+            )
+
+            append_king_to_issues_sheet(
+                king_name=king_name,
+                purchase_date=row[1],
+                price=row[2],
+                transfer_date=today,
+                supplier=row[3],
+                for_whom=state["king_for_whom"]
+            )
+
+            data_text = row[9] if len(row) > 9 else ""
+
             clear_state(user_id)
-            send_kings_menu(chat_id, "Этот кинг уже занят.")
-            return
 
-        if status == "ban":
-            clear_state(user_id)
-            send_kings_menu(chat_id, "Этот кинг уже в ban.")
-            return
-
-        if status != "free":
-            clear_state(user_id)
-            send_kings_menu(chat_id, "Этот кинг недоступен.")
-            return
-
-        king_name = state["king_name"].strip()
-
-        current_name_in_row = str(row[0]).strip()
-        if not current_name_in_row and king_name_exists(king_name):
-            tg_send_message(chat_id, f"Название '{king_name}' уже существует. Напиши другое название.")
-            state["mode"] = "awaiting_king_name"
-            set_state(user_id, state)
-            return
-
-        today = datetime.now().strftime("%d/%m/%Y")
-        who_took_text = f"@{username}" if username else "без username"
-
-        # A название, E статус, F кому выдали, G дата взятия, I кто взял
-        sheet.update(
-            f"A{row_index}:I{row_index}",
-            [[
-                king_name,              # A
-                row[1],                 # B дата покупки
-                row[2],                 # C цена
-                row[3],                 # D поставщик
-                "taken",                # E статус
-                state["king_for_whom"], # F кому выдали
-                today,                  # G дата взятия
-                row[7],                 # H гео
-                who_took_text           # I кто взял
-            ]]
+        tg_send_message(
+            chat_id,
+            f"Готово ✅\n\n"
+            f"Кинг выдан.\n"
+            f"Название: {king_name}\n"
+            f"Для кого: {state['king_for_whom']}\n"
+            f"Гео: {row[7]}"
         )
 
-        append_king_to_issues_sheet(
-            king_name=king_name,
-            purchase_date=row[1],
-            price=row[2],
-            transfer_date=today,
-            supplier=row[3],
-            for_whom=state["king_for_whom"]
-        )
+        if data_text:
+            tg_send_message(chat_id, data_text)
+        else:
+            tg_send_message(chat_id, "Данные кинга не найдены.")
 
-        data_text = row[9] if len(row) > 9 else ""
+        send_kings_menu(chat_id, "Выбери следующее действие:")
 
-        clear_state(user_id)
-
-    tg_send_message(
-        chat_id,
-        f"Готово ✅\n\n"
-        f"Кинг выдан.\n"
-        f"Название: {king_name}\n"
-        f"Для кого: {state['king_for_whom']}\n"
-        f"Гео: {row[7]}"
-    )
-
-    if data_text:
-        tg_send_message(chat_id, data_text)
-    else:
-        tg_send_message(chat_id, "Данные кинга не найдены.")
-
-    send_kings_menu(chat_id, "Выбери следующее действие:")
+    except Exception as e:
+        logging.error(f"confirm_king_issue error: {e}")
+        tg_send_message(chat_id, "Ошибка выдачи кинга. Попробуй ещё раз.")
+        send_kings_menu(chat_id, "Меню кингов:")
 
 def append_king_to_issues_sheet(king_name, purchase_date, price, transfer_date, supplier, for_whom):
     sheet = get_sheet(SHEET_ISSUES)
@@ -1296,389 +1320,459 @@ def send_free_kings(chat_id):
 
     tg_send_message(chat_id, text)
 
+def backup_tables():
+    try:
+        client = get_gspread_client()
+        spreadsheet = client.open_by_key(SPREADSHEET_ID)
+
+        accounts = spreadsheet.worksheet(SHEET_ACCOUNTS)
+        kings = spreadsheet.worksheet(SHEET_KINGS)
+        issues = spreadsheet.worksheet(SHEET_ISSUES)
+
+        backup_accounts = spreadsheet.worksheet("backup_accounts")
+        backup_kings = spreadsheet.worksheet("backup_kings")
+        backup_issues = spreadsheet.worksheet("backup_issues")
+
+        accounts_data = accounts.get_all_values()
+        kings_data = kings.get_all_values()
+        issues_data = issues.get_all_values()
+
+        backup_accounts.clear()
+        backup_kings.clear()
+        backup_issues.clear()
+
+        if accounts_data:
+            backup_accounts.append_rows(accounts_data)
+
+        if kings_data:
+            backup_kings.append_rows(kings_data)
+
+        if issues_data:
+            backup_issues.append_rows(issues_data)
+
+        return True
+
+    except Exception as e:
+        logging.error(f"Backup error: {e}")
+        return False
+
 # =========================
 # MESSAGE HANDLER
 # =========================
 def handle_message(msg):
-    chat_id = msg["chat"]["id"]
-    user_id = msg["from"]["id"]
-    username = msg["from"].get("username", "")
-    text = str(msg.get("text", "")).strip()
+    try:
+        chat_id = msg["chat"]["id"]
+        user_id = msg["from"]["id"]
+        username = msg["from"].get("username", "")
+        text = str(msg.get("text", "")).strip()
 
-    state = get_state(user_id)
-
-    if text in ["/start", "/menu"]:
-        clear_state(user_id)
-        send_main_menu(chat_id)
-        return
-
-    if text == "/help":
-        clear_state(user_id)
-        tg_send_message(
-            chat_id,
-            "/start — открыть меню\n"
-            "/menu — открыть меню\n"
-            "/help — помощь"
-        )
-        send_main_menu(chat_id)
-        return
-
-    if text == MENU_CANCEL:
-        clear_state(user_id)
-        send_main_menu(chat_id, "Действие отменено.")
-        return
-
-    if text == MENU_STATS:
-        stats_text = build_stats_text()
-        tg_send_message(chat_id, stats_text)
-        send_main_menu(chat_id, "Главное меню:")
-        return
-
-    if text == BTN_KING_CONFIRM:
-        confirm_king_issue(chat_id, user_id, username)
-        return
-
-    if text == BTN_KING_NEXT:
         state = get_state(user_id)
 
-        if not state or not state.get("king_geo"):
-            send_kings_menu(chat_id, "Начни заново.")
-            return
-
-        found = find_free_king_by_geo(
-            state["king_geo"],
-            exclude_row=state.get("king_row")
-        )
-
-        if not found:
+        if text in ["/start", "/menu"]:
             clear_state(user_id)
-            send_kings_menu(chat_id, "Свободных кингов с таким GEO больше нет.")
+            send_main_menu(chat_id)
             return
 
-        show_found_king(chat_id, user_id, found)
-        return
-
-    if text == MENU_ACCOUNTS:
-        clear_state(user_id)
-        send_accounts_menu(chat_id)
-        return
-
-    if text == SUBMENU_SEARCH_KING:
-        set_state(user_id, {"mode": "awaiting_search_king_name"})
-        tg_send_message(chat_id, "Впиши название кинга.")
-        return
-
-    if text == SUBMENU_FREE_KINGS:
-        send_free_kings(chat_id)
-        send_kings_menu(chat_id, "Выбери следующее действие:")
-        return
-        
-    if text == MENU_KINGS:
-        clear_state(user_id)
-        send_kings_menu(chat_id)
-        return
-
-    if text == SUBMENU_ADD_KINGS:
-        set_state(user_id, {"mode": "awaiting_kings_txt"})
-        send_add_kings_instructions(chat_id)
-        return
-
-    if text == SUBMENU_GET_KINGS:
-        clear_state(user_id)
-        set_state(user_id, {"mode": "awaiting_king_geo"})
-        send_king_geo_options(chat_id)
-        return
-
-    if text == SUBMENU_RETURN_KING:
-        set_state(user_id, {"mode": "awaiting_return_king_name"})
-        tg_send_message(chat_id, "Впиши название кинга, который нужно перевести в ban.")
-        return
-
-    if text == BTN_BACK_TO_MENU:
-        clear_state(user_id)
-        send_main_menu(chat_id)
-        return
-
-    if text == SUBMENU_ADD:
-        set_state(user_id, {"mode": "awaiting_bulk_add"})
-        send_bulk_add_instructions(chat_id)
-        return
-
-    if text == SUBMENU_FREE:
-        clear_state(user_id)
-        send_free_accounts(chat_id)
-        send_accounts_menu(chat_id, "Выбери следующее действие:")
-        return
-
-    if text == SUBMENU_GET:
-        set_state(user_id, {"mode": "awaiting_issue_for_whom"})
-        tg_send_message(
-            chat_id,
-            "Напиши, для кого берешь личку.\n"
-            "❗️если ты написал неправильно❗️\n"
-            "сразу сообщи ему @JackGrazer_Deputy_Head_Account\n"
-            "или ему @Cillian_Murphy_Head_of_Account"
-        )
-        return
-
-    if text == SUBMENU_RETURN:
-        set_state(user_id, {"mode": "awaiting_return_account"})
-        tg_send_message(chat_id, "Впиши номер лички, которую нужно отправить в ban.")
-        return
-
-    if text == SUBMENU_SEARCH:
-        set_state(user_id, {"mode": "awaiting_search_account"})
-        tg_send_message(chat_id, "Впиши номер лички для поиска.")
-        return
-
-    if text == BTN_ISSUE_CONFIRM:
-        confirm_issue(chat_id, user_id, username)
-        return
-
-    if text == BTN_KING_BAN_CONFIRM:
-        state = get_state(user_id)
-
-        if state.get("mode") != "awaiting_return_king_confirm":
-            send_kings_menu(chat_id, "Сначала выбери действие заново.")
-            return
-
-        king_name = state.get("return_king_name", "")
-        ok, message = return_king_to_ban(king_name)
-
-        clear_state(user_id)
-        send_kings_menu(chat_id, message)
-        return
-
-    if text == BTN_ISSUE_NEXT:
-        if not state:
-            send_main_menu(chat_id, "Начни заново.")
-            return
-        found = find_matching_free_account(
-            state["limit"],
-            state["threshold"],
-            state["gmt"],
-            exclude_account=state.get("found_account")
-        )
-        if not found:
+        if text == "/help":
             clear_state(user_id)
-            send_accounts_menu(chat_id, "Подходящих свободных личек больше нет.")
+            tg_send_message(
+                chat_id,
+                "/start — открыть меню\n"
+                "/menu — открыть меню\n"
+                "/help — помощь"
+            )
+            send_main_menu(chat_id)
             return
-        show_found_account(chat_id, user_id, found)
-        return
 
-    if text == BTN_RETURN_CONFIRM:
-        if state.get("mode") != "awaiting_return_confirm":
-            send_accounts_menu(chat_id, "Сначала выбери действие заново.")
+        if text == MENU_CANCEL:
+            clear_state(user_id)
+            send_main_menu(chat_id, "Действие отменено.")
             return
 
-        account_number = state.get("return_account_number", "")
-        ok, message = return_account_to_ban(account_number)
-        clear_state(user_id)
-        send_accounts_menu(chat_id, message)
-        return
+        if text == MENU_STATS:
+            stats_text = build_stats_text()
+            tg_send_message(chat_id, stats_text)
+            send_main_menu(chat_id, "Главное меню:")
+            return
 
-    if state.get("mode") == "awaiting_bulk_add":
-        result = add_accounts_from_text(text)
-        clear_state(user_id)
-        tg_send_message(chat_id, result)
-        send_accounts_menu(chat_id, "Готово. Выбери следующее действие:")
-        return
+        if text == MENU_BACKUP:
+            ok = backup_tables()
 
-    if state.get("mode") == "awaiting_king_geo":
-        geos = get_free_king_geos()
+            if ok:
+                tg_send_message(chat_id, "Бэкап успешно создан.")
+            else:
+                tg_send_message(chat_id, "Ошибка создания бэкапа.")
 
-        if text not in geos:
+            send_main_menu(chat_id)
+            return
+
+        if text == BTN_KING_CONFIRM:
+            confirm_king_issue(chat_id, user_id, username)
+            return
+
+        if text == BTN_KING_NEXT:
+            state = get_state(user_id)
+
+            if not state or not state.get("king_geo"):
+                send_kings_menu(chat_id, "Начни заново.")
+                return
+
+            found = find_free_king_by_geo(
+                state["king_geo"],
+                exclude_row=state.get("king_row")
+            )
+
+            if not found:
+                clear_state(user_id)
+                send_kings_menu(chat_id, "Свободных кингов с таким GEO больше нет.")
+                return
+
+            show_found_king(chat_id, user_id, found)
+            return
+
+        if text == MENU_ACCOUNTS:
+            clear_state(user_id)
+            send_accounts_menu(chat_id)
+            return
+
+        if text == SUBMENU_SEARCH_KING:
+            set_state(user_id, {"mode": "awaiting_search_king_name"})
+            tg_send_message(chat_id, "Впиши название кинга.")
+            return
+
+        if text == SUBMENU_FREE_KINGS:
+            send_free_kings(chat_id)
+            send_kings_menu(chat_id, "Выбери следующее действие:")
+            return
+
+        if text == MENU_KINGS:
+            clear_state(user_id)
+            send_kings_menu(chat_id)
+            return
+
+        if text == SUBMENU_ADD_KINGS:
+            set_state(user_id, {"mode": "awaiting_kings_txt"})
+            send_add_kings_instructions(chat_id)
+            return
+
+        if text == SUBMENU_GET_KINGS:
+            clear_state(user_id)
+            set_state(user_id, {"mode": "awaiting_king_geo"})
             send_king_geo_options(chat_id)
             return
 
-        set_state(user_id, {
-            "mode": "awaiting_king_for_whom",
-            "king_geo": text
-        })
-
-        tg_send_message(chat_id, "Для кого берешь кинг?")
-        return
-
-    if state.get("mode") == "awaiting_search_king_name":
-        king_name = text.strip()
-
-        if not king_name:
-            tg_send_message(chat_id, "Впиши название кинга.")
+        if text == SUBMENU_RETURN_KING:
+            set_state(user_id, {"mode": "awaiting_return_king_name"})
+            tg_send_message(chat_id, "Впиши название кинга, который нужно перевести в ban.")
             return
 
-        result = build_king_search_text(king_name)
-
-        clear_state(user_id)
-
-        if not result:
-            send_kings_menu(chat_id, "Кинг не найден.")
-            return
-
-        tg_send_message(chat_id, result)
-        send_kings_menu(chat_id, "Выбери следующее действие:")
-        return
-
-    if state.get("mode") == "awaiting_king_for_whom":
-        if not text.strip():
-            tg_send_message(chat_id, "Напиши, для кого берешь кинг.")
-            return
-
-        state["mode"] = "awaiting_king_name"
-        state["king_for_whom"] = text.strip()
-        set_state(user_id, state)
-
-        tg_send_message(chat_id, "Какое название будет у кинга?")
-        return
-
-    if state.get("mode") == "awaiting_king_name":
-        king_name = text.strip()
-
-        if not king_name:
-            tg_send_message(chat_id, "Напиши название кинга.")
-            return
-
-        if king_name_exists(king_name):
-            tg_send_message(chat_id, f"Название '{king_name}' уже существует. Напиши другое.")
-            return
-
-        state["mode"] = "searching_king"
-        state["king_name"] = king_name
-        set_state(user_id, state)
-
-        found = find_free_king_by_geo(state["king_geo"])
-
-        if not found:
+        if text == BTN_BACK_TO_MENU:
             clear_state(user_id)
-            send_kings_menu(chat_id, "Свободных кингов с таким GEO нет.")
+            send_main_menu(chat_id)
             return
 
-        show_found_king(chat_id, user_id, found)
-        return
-
-    if state.get("mode") == "awaiting_return_account":
-        account_number = text.strip()
-        if not account_number:
-            tg_send_message(chat_id, "Впиши номер лички.")
+        if text == SUBMENU_ADD:
+            set_state(user_id, {"mode": "awaiting_bulk_add"})
+            send_bulk_add_instructions(chat_id)
             return
 
-        found = find_account_in_base(account_number)
-        if not found:
+        if text == SUBMENU_FREE:
             clear_state(user_id)
-            send_accounts_menu(chat_id, "Личка не найдена.")
+            send_free_accounts(chat_id)
+            send_accounts_menu(chat_id, "Выбери следующее действие:")
             return
 
-        set_state(user_id, {
-            "mode": "awaiting_return_confirm",
-            "return_account_number": account_number
-        })
-
-        keyboard = [
-            [{"text": BTN_RETURN_CONFIRM}, {"text": MENU_CANCEL}]
-        ]
-
-        tg_send_message(
-            chat_id,
-            f"Внимание: личка {account_number} будет перемещена в ban.\nПодтвердить?",
-            keyboard
-        )
-        return
-
-    if state.get("mode") == "awaiting_search_account":
-        account_number = text.strip()
-        if not account_number:
-            tg_send_message(chat_id, "Впиши номер лички.")
+        if text == SUBMENU_GET:
+            set_state(user_id, {"mode": "awaiting_issue_for_whom"})
+            tg_send_message(
+                chat_id,
+                "Напиши, для кого берешь личку.\n"
+                "❗️если ты написал неправильно❗️\n"
+                "сразу сообщи ему @JackGrazer_Deputy_Head_Account\n"
+                "или ему @Cillian_Murphy_Head_of_Account"
+            )
             return
 
-        result = build_account_search_text(account_number)
-        clear_state(user_id)
-
-        if not result:
-          send_accounts_menu(chat_id, "Личка не найдена.")
-          return
-
-        tg_send_message(chat_id, result)
-        send_accounts_menu(chat_id, "Выбери следующее действие:")
-        return
-
-    if state.get("mode") == "awaiting_issue_for_whom":
-        if not text:
-            tg_send_message(chat_id, "Напиши, для кого берешь личку.")
-            return
-        set_state(user_id, {
-            "mode": "awaiting_issue_limit",
-            "for_whom": text
-        })
-        send_simple_options(chat_id, "Выбери лимит:", LIMIT_OPTIONS)
-        return
-
-    if state.get("mode") == "awaiting_issue_limit":
-        if text not in LIMIT_OPTIONS:
-            send_simple_options(chat_id, "Нужно выбрать лимит кнопкой:", LIMIT_OPTIONS)
-            return
-        state["mode"] = "awaiting_issue_threshold"
-        state["limit"] = text
-        set_state(user_id, state)
-        send_simple_options(chat_id, "Выбери трешхолд:", THRESHOLD_OPTIONS)
-        return
-
-    if state.get("mode") == "awaiting_return_king_name":
-        king_name = text.strip()
-
-        if not king_name:
-            tg_send_message(chat_id, "Впиши название кинга.")
+        if text == SUBMENU_RETURN:
+            set_state(user_id, {"mode": "awaiting_return_account"})
+            tg_send_message(chat_id, "Впиши номер лички, которую нужно отправить в ban.")
             return
 
-        king_info = find_king_in_base_by_name(king_name)
-        if not king_info:
+        if text == SUBMENU_SEARCH:
+            set_state(user_id, {"mode": "awaiting_search_account"})
+            tg_send_message(chat_id, "Впиши номер лички для поиска.")
+            return
+
+        if text == BTN_ISSUE_CONFIRM:
+            confirm_issue(chat_id, user_id, username)
+            return
+
+        if text == BTN_KING_BAN_CONFIRM:
+            state = get_state(user_id)
+
+            if state.get("mode") != "awaiting_return_king_confirm":
+                send_kings_menu(chat_id, "Сначала выбери действие заново.")
+                return
+
+            king_name = state.get("return_king_name", "")
+            ok, message = return_king_to_ban(king_name)
+
             clear_state(user_id)
-            send_kings_menu(chat_id, "Кинг не найден.")
+            send_kings_menu(chat_id, message)
             return
 
-        set_state(user_id, {
-            "mode": "awaiting_return_king_confirm",
-            "return_king_name": king_name
-        })
+        if text == BTN_ISSUE_NEXT:
+            if not state:
+                send_main_menu(chat_id, "Начни заново.")
+                return
 
-        keyboard = [
-            [{"text": BTN_KING_BAN_CONFIRM}],
-            [{"text": MENU_CANCEL}]
-        ]
+            found = find_matching_free_account(
+                state["limit"],
+                state["threshold"],
+                state["gmt"],
+                exclude_account=state.get("found_account")
+            )
 
-        tg_send_message(
-            chat_id,
-            f"Внимание: кинг '{king_name}' будет перемещён в ban.\nПодтвердить?",
-            keyboard
-        )
-        return
+            if not found:
+                clear_state(user_id)
+                send_accounts_menu(chat_id, "Подходящих свободных личек больше нет.")
+                return
 
-    if state.get("mode") == "awaiting_issue_threshold":
-        if text not in THRESHOLD_OPTIONS:
-            send_simple_options(chat_id, "Нужно выбрать трешхолд кнопкой:", THRESHOLD_OPTIONS)
+            show_found_account(chat_id, user_id, found)
             return
-        state["mode"] = "awaiting_issue_gmt"
-        state["threshold"] = text
-        set_state(user_id, state)
-        send_simple_options(chat_id, "Выбери GMT:", GMT_OPTIONS)
-        return
 
-    if state.get("mode") == "awaiting_issue_gmt":
-        if text not in GMT_OPTIONS:
-            send_simple_options(chat_id, "Нужно выбрать GMT кнопкой:", GMT_OPTIONS)
-            return
-        state["mode"] = "searching_account"
-        state["gmt"] = text
-        set_state(user_id, state)
+        if text == BTN_RETURN_CONFIRM:
+            if state.get("mode") != "awaiting_return_confirm":
+                send_accounts_menu(chat_id, "Сначала выбери действие заново.")
+                return
 
-        found = find_matching_free_account(state["limit"], state["threshold"], state["gmt"])
-        if not found:
+            account_number = state.get("return_account_number", "")
+            ok, message = return_account_to_ban(account_number)
             clear_state(user_id)
-            send_accounts_menu(chat_id, "Подходящих свободных личек не найдено.")
+            send_accounts_menu(chat_id, message)
             return
 
-        show_found_account(chat_id, user_id, found)
-        return
+        if state.get("mode") == "awaiting_bulk_add":
+            result = add_accounts_from_text(text)
+            clear_state(user_id)
+            tg_send_message(chat_id, result)
+            send_accounts_menu(chat_id, "Готово. Выбери следующее действие:")
+            return
 
-    send_main_menu(chat_id, "Не понял команду. Выбери кнопку из меню:")
+        if state.get("mode") == "awaiting_king_geo":
+            geos = get_free_king_geos()
+
+            if text not in geos:
+                send_king_geo_options(chat_id)
+                return
+
+            set_state(user_id, {
+                "mode": "awaiting_king_for_whom",
+                "king_geo": text
+            })
+
+            tg_send_message(chat_id, "Для кого берешь кинг?")
+            return
+
+        if state.get("mode") == "awaiting_search_king_name":
+            king_name = text.strip()
+
+            if not king_name:
+                tg_send_message(chat_id, "Впиши название кинга.")
+                return
+
+            result = build_king_search_text(king_name)
+
+            clear_state(user_id)
+
+            if not result:
+                send_kings_menu(chat_id, "Кинг не найден.")
+                return
+
+            tg_send_message(chat_id, result)
+            send_kings_menu(chat_id, "Выбери следующее действие:")
+            return
+
+        if state.get("mode") == "awaiting_king_for_whom":
+            if not text.strip():
+                tg_send_message(chat_id, "Напиши, для кого берешь кинг.")
+                return
+
+            state["mode"] = "awaiting_king_name"
+            state["king_for_whom"] = text.strip()
+            set_state(user_id, state)
+
+            tg_send_message(chat_id, "Какое название будет у кинга?")
+            return
+
+        if state.get("mode") == "awaiting_king_name":
+            king_name = text.strip()
+
+            if not king_name:
+                tg_send_message(chat_id, "Напиши название кинга.")
+                return
+
+            if king_name_exists(king_name):
+                tg_send_message(chat_id, f"Название '{king_name}' уже существует. Напиши другое.")
+                return
+
+            state["mode"] = "searching_king"
+            state["king_name"] = king_name
+            set_state(user_id, state)
+
+            found = find_free_king_by_geo(state["king_geo"])
+
+            if not found:
+                clear_state(user_id)
+                send_kings_menu(chat_id, "Свободных кингов с таким GEO нет.")
+                return
+
+            show_found_king(chat_id, user_id, found)
+            return
+
+        if state.get("mode") == "awaiting_return_account":
+            account_number = text.strip()
+
+            if not account_number:
+                tg_send_message(chat_id, "Впиши номер лички.")
+                return
+
+            found = find_account_in_base(account_number)
+            if not found:
+                clear_state(user_id)
+                send_accounts_menu(chat_id, "Личка не найдена.")
+                return
+
+            set_state(user_id, {
+                "mode": "awaiting_return_confirm",
+                "return_account_number": account_number
+            })
+
+            keyboard = [
+                [{"text": BTN_RETURN_CONFIRM}, {"text": MENU_CANCEL}]
+            ]
+
+            tg_send_message(
+                chat_id,
+                f"Внимание: личка {account_number} будет перемещена в ban.\nПодтвердить?",
+                keyboard
+            )
+            return
+
+        if state.get("mode") == "awaiting_search_account":
+            account_number = text.strip()
+
+            if not account_number:
+                tg_send_message(chat_id, "Впиши номер лички.")
+                return
+
+            result = build_account_search_text(account_number)
+            clear_state(user_id)
+
+            if not result:
+                send_accounts_menu(chat_id, "Личка не найдена.")
+                return
+
+            tg_send_message(chat_id, result)
+            send_accounts_menu(chat_id, "Выбери следующее действие:")
+            return
+
+        if state.get("mode") == "awaiting_issue_for_whom":
+            if not text:
+                tg_send_message(chat_id, "Напиши, для кого берешь личку.")
+                return
+
+            set_state(user_id, {
+                "mode": "awaiting_issue_limit",
+                "for_whom": text
+            })
+            send_simple_options(chat_id, "Выбери лимит:", LIMIT_OPTIONS)
+            return
+
+        if state.get("mode") == "awaiting_issue_limit":
+            if text not in LIMIT_OPTIONS:
+                send_simple_options(chat_id, "Нужно выбрать лимит кнопкой:", LIMIT_OPTIONS)
+                return
+
+            state["mode"] = "awaiting_issue_threshold"
+            state["limit"] = text
+            set_state(user_id, state)
+            send_simple_options(chat_id, "Выбери трешхолд:", THRESHOLD_OPTIONS)
+            return
+
+        if state.get("mode") == "awaiting_return_king_name":
+            king_name = text.strip()
+
+            if not king_name:
+                tg_send_message(chat_id, "Впиши название кинга.")
+                return
+
+            king_info = find_king_in_base_by_name(king_name)
+            if not king_info:
+                clear_state(user_id)
+                send_kings_menu(chat_id, "Кинг не найден.")
+                return
+
+            set_state(user_id, {
+                "mode": "awaiting_return_king_confirm",
+                "return_king_name": king_name
+            })
+
+            keyboard = [
+                [{"text": BTN_KING_BAN_CONFIRM}],
+                [{"text": MENU_CANCEL}]
+            ]
+
+            tg_send_message(
+                chat_id,
+                f"Внимание: кинг '{king_name}' будет перемещён в ban.\nПодтвердить?",
+                keyboard
+            )
+            return
+
+        if state.get("mode") == "awaiting_issue_threshold":
+            if text not in THRESHOLD_OPTIONS:
+                send_simple_options(chat_id, "Нужно выбрать трешхолд кнопкой:", THRESHOLD_OPTIONS)
+                return
+
+            state["mode"] = "awaiting_issue_gmt"
+            state["threshold"] = text
+            set_state(user_id, state)
+            send_simple_options(chat_id, "Выбери GMT:", GMT_OPTIONS)
+            return
+
+        if state.get("mode") == "awaiting_issue_gmt":
+            if text not in GMT_OPTIONS:
+                send_simple_options(chat_id, "Нужно выбрать GMT кнопкой:", GMT_OPTIONS)
+                return
+
+            state["mode"] = "searching_account"
+            state["gmt"] = text
+            set_state(user_id, state)
+
+            found = find_matching_free_account(
+                state["limit"],
+                state["threshold"],
+                state["gmt"]
+            )
+
+            if not found:
+                clear_state(user_id)
+                send_accounts_menu(chat_id, "Подходящих свободных личек не найдено.")
+                return
+
+            show_found_account(chat_id, user_id, found)
+            return
+
+        send_main_menu(chat_id, "Не понял команду. Выбери кнопку из меню:")
+
+    except Exception as e:
+        logging.error(f"handle_message error: {e}")
+        try:
+            tg_send_message(chat_id, "Произошла ошибка. Попробуй ещё раз.")
+            send_main_menu(chat_id, "Главное меню:")
+        except Exception:
+            pass
 
 # =========================
 # FLASK
@@ -1690,18 +1784,21 @@ def index():
 
 @app.route("/webhook", methods=["POST"])
 def webhook():
-    update = request.get_json(silent=True) or {}
-    msg = update.get("message") or update.get("edited_message")
+    try:
+        update = request.get_json(silent=True) or {}
+        msg = update.get("message") or update.get("edited_message")
 
-    if msg:
+        if msg:
+            if msg.get("text"):
+                handle_message(msg)
+            elif msg.get("document"):
+                handle_document_message(msg)
 
-        if msg.get("text"):
-            handle_message(msg)
+        return jsonify({"ok": True})
 
-        elif msg.get("document"):
-            handle_document_message(msg)
-
-    return jsonify({"ok": True})
+    except Exception as e:
+        logging.error(f"webhook error: {e}")
+        return jsonify({"ok": True})
 
 
 if __name__ == "__main__":
