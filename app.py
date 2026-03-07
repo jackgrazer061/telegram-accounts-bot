@@ -22,7 +22,7 @@ SERVICE_ACCOUNT_JSON = os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON", "")
 # =========================
 
 ALLOWED_USERS = {
-    123456789,  # jack
+    7573650707,  # jack
     987654321,  # cilian
 }
 
