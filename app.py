@@ -57,12 +57,10 @@ MENU_ADMIN = 'Admin'
 MENU_CANCEL = 'Отмена'
 
 SUBMENU_GET = 'Выдать лички'
-SUBMENU_ADD = 'Добавить лички'
 SUBMENU_FREE = 'Свободные лички'
 SUBMENU_RETURN = 'Вернуть личку'
 SUBMENU_SEARCH = 'Поиск лички'
 
-SUBMENU_ADD_KINGS = 'Добавить кинги'
 SUBMENU_FREE_KINGS = 'Свободные кинги'
 SUBMENU_GET_KINGS = 'Получить кинг'
 SUBMENU_RETURN_KING = 'Вернуть кинг'
@@ -1791,7 +1789,11 @@ def handle_message(msg):
             result = add_accounts_from_text(text)
             clear_state(user_id)
             tg_send_message(chat_id, result)
-            send_accounts_menu(chat_id, "Готово. Выбери следующее действие:")
+            
+            if is_admin(user_id):
+                send_admin_menu(chat_id, "Выбери следующее действие:")
+            else:
+                send_accounts_menu(chat_id, "Готово. Выбери следующее действие:")
             return
 
         if state.get("mode") == "awaiting_king_geo":
