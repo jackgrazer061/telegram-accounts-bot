@@ -219,7 +219,7 @@ def tg_send_message(chat_id, text, keyboard=None):
     except Exception as e:
         logging.error(f"tg_send_message error: {e}")
 
-def send_main_menu(chat_id, text="Главное меню:", user_id=user_id):
+def send_main_menu(chat_id, text="Главное меню:", user_id=None):
     if user_id is not None and is_admin(user_id):
         keyboard = [
             [{"text": MENU_ACCOUNTS}, {"text": MENU_KINGS}],
@@ -1600,7 +1600,25 @@ def handle_message(msg):
             send_main_menu(chat_id, "Главное меню:", user_id=user_id)
             return
 
-        if text == MENU_BACKUP:
+        if text == MENU_ADMIN:
+            if not is_admin(user_id):
+                tg_send_message(chat_id, "У вас нет доступа к меню Admin.")
+                return
+
+            clear_state(user_id)
+            send_admin_menu(chat_id)
+            return
+
+        if text == BTN_BACK_FROM_ADMIN:
+            clear_state(user_id)
+            send_main_menu(chat_id, user_id=user_id)
+            return
+
+        if text == ADMIN_BACKUP:
+            if not is_admin(user_id):
+                tg_send_message(chat_id, "У вас нет доступа.")
+                return
+
             ok = backup_tables()
 
             if ok:
@@ -1608,7 +1626,25 @@ def handle_message(msg):
             else:
                 tg_send_message(chat_id, "Ошибка создания бэкапа.")
 
-            send_main_menu(chat_id, user_id=user_id)
+            send_admin_menu(chat_id, "Меню Admin:")
+            return
+
+        if text == ADMIN_ADD_ACCOUNTS:
+            if not is_admin(user_id):
+                tg_send_message(chat_id, "У вас нет доступа.")
+                return
+
+            set_state(user_id, {"mode": "awaiting_bulk_add"})
+            send_bulk_add_instructions(chat_id)
+            return
+
+        if text == ADMIN_ADD_KINGS:
+            if not is_admin(user_id):
+                tg_send_message(chat_id, "У вас нет доступа.")
+                return
+
+            set_state(user_id, {"mode": "awaiting_kings_txt"})
+            send_add_kings_instructions(chat_id)
             return
 
         if text == BTN_KING_CONFIRM:
@@ -1640,6 +1676,11 @@ def handle_message(msg):
             send_accounts_menu(chat_id)
             return
 
+        if text == MENU_KINGS:
+            clear_state(user_id)
+            send_kings_menu(chat_id)
+            return
+
         if text == SUBMENU_SEARCH_KING:
             set_state(user_id, {"mode": "awaiting_search_king_name"})
             tg_send_message(chat_id, "Впиши название кинга.")
@@ -1648,16 +1689,6 @@ def handle_message(msg):
         if text == SUBMENU_FREE_KINGS:
             send_free_kings(chat_id)
             send_kings_menu(chat_id, "Выбери следующее действие:")
-            return
-
-        if text == MENU_KINGS:
-            clear_state(user_id)
-            send_kings_menu(chat_id)
-            return
-
-        if text == SUBMENU_ADD_KINGS:
-            set_state(user_id, {"mode": "awaiting_kings_txt"})
-            send_add_kings_instructions(chat_id)
             return
 
         if text == SUBMENU_GET_KINGS:
@@ -1674,11 +1705,6 @@ def handle_message(msg):
         if text == BTN_BACK_TO_MENU:
             clear_state(user_id)
             send_main_menu(chat_id, user_id=user_id)
-            return
-
-        if text == SUBMENU_ADD:
-            set_state(user_id, {"mode": "awaiting_bulk_add"})
-            send_bulk_add_instructions(chat_id)
             return
 
         if text == SUBMENU_FREE:
