@@ -19,6 +19,7 @@ logging.basicConfig(level=logging.INFO)
 BOT_TOKEN = os.environ.get("BOT_TOKEN", "")
 SPREADSHEET_ID = os.environ.get("SPREADSHEET_ID", "")
 SERVICE_ACCOUNT_JSON = os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON", "")
+BACKUP_SPREADSHEET_ID = os.environ.get("BACKUP_SPREADSHEET_ID", "")
 # =========================
 # ACCESS CONTROL
 # =========================
@@ -1515,15 +1516,20 @@ def send_free_kings(chat_id):
 def backup_tables():
     try:
         client = get_gspread_client()
-        spreadsheet = client.open_by_key(SPREADSHEET_ID)
 
-        accounts = spreadsheet.worksheet(SHEET_ACCOUNTS)
-        kings = spreadsheet.worksheet(SHEET_KINGS)
-        issues = spreadsheet.worksheet(SHEET_ISSUES)
+        # основная таблица
+        main_spreadsheet = client.open_by_key(SPREADSHEET_ID)
 
-        backup_accounts = spreadsheet.worksheet("backup_accounts")
-        backup_kings = spreadsheet.worksheet("backup_kings")
-        backup_issues = spreadsheet.worksheet("backup_issues")
+        # backup таблица
+        backup_spreadsheet = client.open_by_key(BACKUP_SPREADSHEET_ID)
+
+        accounts = main_spreadsheet.worksheet(SHEET_ACCOUNTS)
+        kings = main_spreadsheet.worksheet(SHEET_KINGS)
+        issues = main_spreadsheet.worksheet(SHEET_ISSUES)
+
+        backup_accounts = backup_spreadsheet.worksheet("backup_accounts")
+        backup_kings = backup_spreadsheet.worksheet("backup_kings")
+        backup_issues = backup_spreadsheet.worksheet("backup_issues")
 
         accounts_data = accounts.get_all_values()
         kings_data = kings.get_all_values()
