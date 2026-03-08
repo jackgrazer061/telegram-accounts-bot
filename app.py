@@ -2,6 +2,7 @@ import os
 import json
 import logging
 from datetime import datetime
+import time
 from flask import Flask, request, jsonify
 import requests
 import gspread
@@ -69,6 +70,17 @@ BTN_KING_BAN_CONFIRM = 'Подтвердить ban'
 # Память состояний пользователей (для старта хватит)
 user_states = {}
 issue_lock = threading.Lock()
+
+stats_cache = {
+    "text": None,
+    "updated_at": 0
+}
+
+STATS_CACHE_TTL = 30
+
+def invalidate_stats_cache():
+    stats_cache["text"] = None
+    stats_cache["updated_at"] = 0
 
 
 # =========================
@@ -326,6 +338,7 @@ def add_kings_from_txt_content(file_text):
         ])
 
     sheet.append_rows(to_append, value_input_option="USER_ENTERED")
+    invalidate_stats_cache()
 
     message = (
         f"Готово ✅\n"
@@ -518,6 +531,7 @@ def return_account_to_ban(account_number):
         issue_sheet = get_sheet(SHEET_ISSUES)
         # G = кому передали
         issue_sheet.update(f"G{issue_info['row_index']}", [["ban"]])
+        invalidate_stats_cache()
 
     return True, "Личка переведена в ban."
 
@@ -720,6 +734,7 @@ def add_accounts_from_text(text):
 
     if to_append:
         sheet.append_rows(to_append, value_input_option="USER_ENTERED")
+        invalidate_stats_cache()
 
     message = (
         f"Готово.\n"
@@ -872,6 +887,7 @@ def confirm_issue(chat_id, user_id, username):
                 supplier,
                 state["for_whom"]
             )
+            invalidate_stats_cache()
 
             clear_state(user_id)
 
@@ -1041,6 +1057,7 @@ def confirm_king_issue(chat_id, user_id, username):
                 supplier=row[3],
                 for_whom=state["king_for_whom"]
             )
+            invalidate_stats_cache()
 
             data_text = row[9] if len(row) > 9 else ""
 
@@ -1155,6 +1172,7 @@ def return_king_to_ban(king_name):
             f"G{issue_info['row_index']}",
             [["ban"]]
         )
+        invalidate_stats_cache()
 
     return True, f"Кинг '{king_name}' переведён в ban."
 
@@ -1205,6 +1223,14 @@ def build_king_search_text(king_name):
     return text
 
 def build_stats_text():
+    now = time.time()
+
+    if (
+        stats_cache["text"] is not None
+        and now - stats_cache["updated_at"] < STATS_CACHE_TTL
+    ):
+        return stats_cache["text"]
+
     # ---------- КИНГИ ----------
     kings_sheet = get_sheet(SHEET_KINGS)
     kings_rows = kings_sheet.get_all_values()
@@ -1218,8 +1244,8 @@ def build_stats_text():
         if len(row) < 10:
             row = row + [''] * (10 - len(row))
 
-        status = str(row[4]).strip().lower()   # E статус
-        geo = str(row[7]).strip()              # H гео
+        status = str(row[4]).strip().lower()
+        geo = str(row[7]).strip()
 
         if status == "free":
             kings_free += 1
@@ -1250,9 +1276,9 @@ def build_stats_text():
         if len(row) < 12:
             row = row + [''] * (12 - len(row))
 
-        status = str(row[8]).strip().lower()   # I статус
-        target = str(row[9]).strip().lower()   # J кому выдали
-        limit_val = str(row[4]).strip()        # E лимит
+        status = str(row[8]).strip().lower()
+        target = str(row[9]).strip().lower()
+        limit_val = str(row[4]).strip()
 
         if target == "ban" or status == "ban":
             accounts_ban += 1
@@ -1263,7 +1289,6 @@ def build_stats_text():
         elif status == "taken":
             accounts_taken += 1
 
-    # GEO блок
     geo_lines = []
     for geo, count in sorted(kings_geo_stats.items()):
         geo_lines.append(f"{geo}: {count}")
@@ -1271,7 +1296,6 @@ def build_stats_text():
     if not geo_lines:
         geo_lines.append("нет свободных GEO")
 
-    # Лимиты блок
     limit_lines = []
     for limit_name in ["-250", "250-500", "500-1200", "1200-1500", "unlim"]:
         limit_lines.append(f"{limit_name}: {limit_stats[limit_name]}")
@@ -1291,6 +1315,9 @@ def build_stats_text():
         "По лимиту:\n"
         + "\n".join(limit_lines)
     )
+
+    stats_cache["text"] = text
+    stats_cache["updated_at"] = now
 
     return text
 
