@@ -71,6 +71,9 @@ BTN_KING_BAN_CONFIRM = 'Подтвердить ban'
 user_states = {}
 issue_lock = threading.Lock()
 
+gspread_client = None
+sheet_cache = {}
+
 stats_cache = {
     "text": None,
     "updated_at": 0
@@ -78,28 +81,70 @@ stats_cache = {
 
 STATS_CACHE_TTL = 30
 
+free_king_geos_cache = {
+    "data": None,
+    "updated_at": 0
+}
+
+free_accounts_cache = {
+    "text": None,
+    "updated_at": 0
+}
+
+free_kings_cache = {
+    "text": None,
+    "updated_at": 0
+}
+
+FREE_CACHE_TTL = 20
 def invalidate_stats_cache():
     stats_cache["text"] = None
     stats_cache["updated_at"] = 0
+
+    free_king_geos_cache["data"] = None
+    free_king_geos_cache["updated_at"] = 0
+
+    free_accounts_cache["text"] = None
+    free_accounts_cache["updated_at"] = 0
+
+    free_kings_cache["text"] = None
+    free_kings_cache["updated_at"] = 0
 
 
 # =========================
 # GOOGLE SHEETS
 # =========================
 def get_gspread_client():
+    global gspread_client
+
+    if gspread_client is not None:
+        return gspread_client
+
     data = json.loads(SERVICE_ACCOUNT_JSON)
+
     scopes = [
         "https://www.googleapis.com/auth/spreadsheets",
         "https://www.googleapis.com/auth/drive"
     ]
-    creds = Credentials.from_service_account_info(data, scopes=scopes)
-    return gspread.authorize(creds)
 
+    creds = Credentials.from_service_account_info(data, scopes=scopes)
+
+    gspread_client = gspread.authorize(creds)
+
+    return gspread_client
 
 def get_sheet(sheet_name):
+    if sheet_name in sheet_cache:
+        return sheet_cache[sheet_name]
+
     client = get_gspread_client()
     spreadsheet = client.open_by_key(SPREADSHEET_ID)
-    return spreadsheet.worksheet(sheet_name)
+
+    sheet = spreadsheet.worksheet(sheet_name)
+
+    sheet_cache[sheet_name] = sheet
+
+    return sheet
 
 
 # =========================
@@ -174,6 +219,14 @@ def send_add_kings_instructions(chat_id):
 import re
 
 def get_free_king_geos():
+    now = time.time()
+
+    if (
+        free_king_geos_cache["data"] is not None
+        and now - free_king_geos_cache["updated_at"] < FREE_CACHE_TTL
+    ):
+        return free_king_geos_cache["data"]
+
     sheet = get_sheet(SHEET_KINGS)
     rows = sheet.get_all_values()
 
@@ -184,12 +237,15 @@ def get_free_king_geos():
         if len(row) < 10:
             row = row + [''] * (10 - len(row))
 
-        status = str(row[4]).strip().lower()   # E = статус
-        geo = str(row[7]).strip()              # H = гео
+        status = str(row[4]).strip().lower()
+        geo = str(row[7]).strip()
 
         if status == "free" and geo and geo not in seen:
             geos.append(geo)
             seen.add(geo)
+
+    free_king_geos_cache["data"] = geos
+    free_king_geos_cache["updated_at"] = now
 
     return geos
 
@@ -579,6 +635,15 @@ def build_account_search_text(account_number):
 # FREE ACCOUNTS
 # =========================
 def send_free_accounts(chat_id):
+    now = time.time()
+
+    if (
+        free_accounts_cache["text"] is not None
+        and now - free_accounts_cache["updated_at"] < FREE_CACHE_TTL
+    ):
+        tg_send_message(chat_id, free_accounts_cache["text"])
+        return
+
     sheet = get_sheet(SHEET_ACCOUNTS)
     rows = sheet.get_all_values()
 
@@ -590,6 +655,7 @@ def send_free_accounts(chat_id):
     for row in rows[1:]:
         if len(row) < 11:
             continue
+
         status = str(row[8]).strip().lower()
         if status == "free":
             free_rows.append(row)
@@ -600,6 +666,7 @@ def send_free_accounts(chat_id):
 
     lines = []
     max_to_show = 20
+
     for i, row in enumerate(free_rows[:max_to_show], start=1):
         acc = row[0]
         limit_val = row[4]
@@ -609,8 +676,12 @@ def send_free_accounts(chat_id):
         lines.append(f"{i}. {acc} | {limit_val} | {threshold} | {gmt} | {warehouses}")
 
     text = f"Свободные лички: {len(free_rows)}\n\n" + "\n".join(lines)
+
     if len(free_rows) > max_to_show:
         text += f"\n\nПоказаны первые {max_to_show}."
+
+    free_accounts_cache["text"] = text
+    free_accounts_cache["updated_at"] = now
 
     tg_send_message(chat_id, text)
 
@@ -1322,6 +1393,15 @@ def build_stats_text():
     return text
 
 def send_free_kings(chat_id):
+    now = time.time()
+
+    if (
+        free_kings_cache["text"] is not None
+        and now - free_kings_cache["updated_at"] < FREE_CACHE_TTL
+    ):
+        tg_send_message(chat_id, free_kings_cache["text"])
+        return
+
     sheet = get_sheet(SHEET_KINGS)
     rows = sheet.get_all_values()
 
@@ -1331,7 +1411,7 @@ def send_free_kings(chat_id):
         if len(row) < 10:
             row = row + [''] * (10 - len(row))
 
-        status = str(row[4]).strip().lower()  # E статус
+        status = str(row[4]).strip().lower()
 
         if status == "free":
             free_rows.append(row)
@@ -1352,6 +1432,9 @@ def send_free_kings(chat_id):
         f"Свободные кинги: {len(free_rows)}\n\n"
         + "\n".join(lines)
     )
+
+    free_kings_cache["text"] = text
+    free_kings_cache["updated_at"] = now
 
     tg_send_message(chat_id, text)
 
