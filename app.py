@@ -23,10 +23,22 @@ SERVICE_ACCOUNT_JSON = os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON", "")
 # ACCESS CONTROL
 # =========================
 
-ALLOWED_USERS = {
+ADMINS = {
     7573650707,  # jack
-    987654321,  # cilian
 }
+
+OPERATORS = {
+    987654321,   # cilian
+}
+
+def is_admin(user_id):
+    return user_id in ADMINS
+
+def is_operator(user_id):
+    return user_id in OPERATORS
+
+def has_access(user_id):
+    return is_admin(user_id) or is_operator(user_id)
 
 BASE_URL = f"https://api.telegram.org/bot{BOT_TOKEN}"
 
@@ -41,7 +53,7 @@ GMT_OPTIONS = ['-10', '-9', '-8', '-7', '-6', '-5', '-4', '-3', '-2', '-1', '0',
 MENU_ACCOUNTS = 'Лички'
 MENU_KINGS = 'Кинги'
 MENU_STATS = 'Статистика'
-MENU_BACKUP = 'Бэкап таблиц'
+MENU_ADMIN = 'Admin'
 MENU_CANCEL = 'Отмена'
 
 SUBMENU_GET = 'Выдать лички'
@@ -55,6 +67,11 @@ SUBMENU_FREE_KINGS = 'Свободные кинги'
 SUBMENU_GET_KINGS = 'Получить кинг'
 SUBMENU_RETURN_KING = 'Вернуть кинг'
 SUBMENU_SEARCH_KING = 'Поиск кинга'
+
+ADMIN_BACKUP = 'Бэкап таблиц'
+ADMIN_ADD_ACCOUNTS = 'Добавить лички'
+ADMIN_ADD_KINGS = 'Добавить кинги'
+BTN_BACK_FROM_ADMIN = 'Назад из Admin'
 
 BTN_BACK_TO_MENU = 'В меню'
 
@@ -202,17 +219,25 @@ def tg_send_message(chat_id, text, keyboard=None):
     except Exception as e:
         logging.error(f"tg_send_message error: {e}")
 
-def send_main_menu(chat_id, text="Главное меню:"):
-    keyboard = [
-        [{"text": MENU_ACCOUNTS}, {"text": MENU_KINGS}],
-        [{"text": MENU_STATS}, {"text": MENU_BACKUP}],
-        [{"text": MENU_CANCEL}]
-    ]
+def send_main_menu(chat_id, text="Главное меню:", user_id=user_id):
+    if user_id is not None and is_admin(user_id):
+        keyboard = [
+            [{"text": MENU_ACCOUNTS}, {"text": MENU_KINGS}],
+            [{"text": MENU_STATS}, {"text": MENU_ADMIN}],
+            [{"text": MENU_CANCEL}]
+        ]
+    else:
+        keyboard = [
+            [{"text": MENU_ACCOUNTS}, {"text": MENU_KINGS}],
+            [{"text": MENU_STATS}],
+            [{"text": MENU_CANCEL}]
+        ]
+
     tg_send_message(chat_id, text, keyboard)
 
 def send_accounts_menu(chat_id, text="Меню личек:"):
     keyboard = [
-        [{"text": SUBMENU_GET}, {"text": SUBMENU_ADD}],
+        [{"text": SUBMENU_GET}],
         [{"text": SUBMENU_FREE}, {"text": SUBMENU_RETURN}],
         [{"text": SUBMENU_SEARCH}, {"text": BTN_BACK_TO_MENU}]
     ]
@@ -221,11 +246,19 @@ def send_accounts_menu(chat_id, text="Меню личек:"):
 def send_kings_menu(chat_id, text="Меню кингов:"):
     keyboard = [
         [{"text": SUBMENU_GET_KINGS}],
-        [{"text": SUBMENU_ADD_KINGS}],
         [{"text": SUBMENU_FREE_KINGS}],
         [{"text": SUBMENU_RETURN_KING}],
         [{"text": SUBMENU_SEARCH_KING}],
         [{"text": BTN_BACK_TO_MENU}]
+    ]
+    tg_send_message(chat_id, text, keyboard)
+
+def send_admin_menu(chat_id, text="Меню Admin:"):
+    keyboard = [
+        [{"text": ADMIN_BACKUP}],
+        [{"text": ADMIN_ADD_ACCOUNTS}],
+        [{"text": ADMIN_ADD_KINGS}],
+        [{"text": BTN_BACK_FROM_ADMIN}]
     ]
     tg_send_message(chat_id, text, keyboard)
 
@@ -948,12 +981,12 @@ def confirm_issue(chat_id, user_id, username):
             state = get_state(user_id)
 
             if state.get("mode") != "account_found":
-                send_main_menu(chat_id, "Сначала найди личку.")
+                send_main_menu(chat_id, "Сначала найди личку.", user_id=user_id)
                 return
 
             row_index = state.get("found_row")
             if not row_index:
-                send_main_menu(chat_id, "Не нашёл выбранную личку. Начни заново.")
+                send_main_menu(chat_id, "Не нашёл выбранную личку. Начни заново.", user_id=user_id)
                 return
 
             sheet = get_sheet(SHEET_ACCOUNTS)
@@ -966,17 +999,17 @@ def confirm_issue(chat_id, user_id, username):
 
             if status == "taken":
                 clear_state(user_id)
-                send_main_menu(chat_id, "Эта личка уже занята.")
+                send_main_menu(chat_id, "Эта личка уже занята.", user_id=user_id)
                 return
 
             if status == "ban":
                 clear_state(user_id)
-                send_main_menu(chat_id, "Эта личка уже в ban.")
+                send_main_menu(chat_id, "Эта личка уже в ban.", user_id=user_id)
                 return
 
             if status != "free":
                 clear_state(user_id)
-                send_main_menu(chat_id, "Эта личка недоступна.")
+                send_main_menu(chat_id, "Эта личка недоступна.", user_id=user_id)
                 return
 
             account_number = row[0]
@@ -1011,12 +1044,12 @@ def confirm_issue(chat_id, user_id, username):
             f"Кому передали: {state['for_whom']}\n"
             f"Кто взял в боте: {who_took_text}"
         )
-        send_main_menu(chat_id, "Выбери следующее действие:")
+        send_main_menu(chat_id, "Выбери следующее действие:", user_id=user_id)
 
     except Exception as e:
         logging.error(f"confirm_issue error: {e}")
         tg_send_message(chat_id, "Ошибка выдачи лички. Попробуй ещё раз.")
-        send_main_menu(chat_id, "Главное меню:")
+        send_main_menu(chat_id, "Главное меню:", user_id=user_id)
 
 def king_name_exists(king_name):
     sheet = get_sheet(SHEET_KINGS)
@@ -1527,7 +1560,7 @@ def handle_message(msg):
         username = msg["from"].get("username", "")
         text = str(msg.get("text", "")).strip()
 
-        if user_id not in ALLOWED_USERS:
+        if not has_access(user_id):
             tg_send_message(
                 chat_id,
                 f"⛔ У вас нет доступа.\n\nВаш Telegram ID:\n{user_id}"
@@ -1538,7 +1571,7 @@ def handle_message(msg):
 
         if text in ["/start", "/menu"]:
             clear_state(user_id)
-            send_main_menu(chat_id)
+            send_main_menu(chat_id, user_id=user_id)
             return
 
         if text == "/id":
@@ -1553,18 +1586,18 @@ def handle_message(msg):
                 "/menu — открыть меню\n"
                 "/help — помощь"
             )
-            send_main_menu(chat_id)
+            send_main_menu(chat_id, user_id=user_id)
             return
 
         if text == MENU_CANCEL:
             clear_state(user_id)
-            send_main_menu(chat_id, "Действие отменено.")
+            send_main_menu(chat_id, "Действие отменено.", user_id=user_id)
             return
 
         if text == MENU_STATS:
             stats_text = build_stats_text()
             tg_send_message(chat_id, stats_text)
-            send_main_menu(chat_id, "Главное меню:")
+            send_main_menu(chat_id, "Главное меню:", user_id=user_id)
             return
 
         if text == MENU_BACKUP:
@@ -1575,7 +1608,7 @@ def handle_message(msg):
             else:
                 tg_send_message(chat_id, "Ошибка создания бэкапа.")
 
-            send_main_menu(chat_id)
+            send_main_menu(chat_id, user_id=user_id)
             return
 
         if text == BTN_KING_CONFIRM:
@@ -1640,7 +1673,7 @@ def handle_message(msg):
 
         if text == BTN_BACK_TO_MENU:
             clear_state(user_id)
-            send_main_menu(chat_id)
+            send_main_menu(chat_id, user_id=user_id)
             return
 
         if text == SUBMENU_ADD:
@@ -1695,7 +1728,7 @@ def handle_message(msg):
 
         if text == BTN_ISSUE_NEXT:
             if not state:
-                send_main_menu(chat_id, "Начни заново.")
+                send_main_menu(chat_id, "Начни заново.", user_id=user_id)
                 return
 
             found = find_matching_free_account(
@@ -1936,13 +1969,13 @@ def handle_message(msg):
             show_found_account(chat_id, user_id, found)
             return
 
-        send_main_menu(chat_id, "Не понял команду. Выбери кнопку из меню:")
+        send_main_menu(chat_id, "Не понял команду. Выбери кнопку из меню:", user_id=user_id)
 
     except Exception as e:
         logging.error(f"handle_message error: {e}")
         try:
             tg_send_message(chat_id, "Произошла ошибка. Попробуй ещё раз.")
-            send_main_menu(chat_id, "Главное меню:")
+            send_main_menu(chat_id, "Главное меню:", user_id=user_id)
         except Exception:
             pass
 
