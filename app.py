@@ -483,7 +483,7 @@ def handle_document_message(msg):
         if state.get("mode") != "awaiting_kings_txt":
             tg_send_message(
                 chat_id,
-                "Я не жду сейчас txt файл. Сначала открой Кинги → Добавить кинги."
+                "Я не жду сейчас txt файл. Сначала открой Admin → Добавить кинги."
             )
             return
 
@@ -522,7 +522,11 @@ def handle_document_message(msg):
         result_message = add_kings_from_txt_content(file_text)
         clear_state(user_id)
         tg_send_message(chat_id, result_message)
-        send_kings_menu(chat_id, "Выбери следующее действие:")
+
+        if is_admin(user_id):
+            send_admin_menu(chat_id, "Выбери следующее действие:")
+        else:
+            send_kings_menu(chat_id, "Выбери следующее действие:")
 
     except Exception as e:
         logging.error(f"handle_document_message error: {e}")
