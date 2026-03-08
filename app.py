@@ -3,6 +3,7 @@ import json
 import logging
 from datetime import datetime
 import time
+import re
 from flask import Flask, request, jsonify
 import requests
 import gspread
@@ -71,6 +72,8 @@ BTN_KING_BAN_CONFIRM = 'Подтвердить ban'
 user_states = {}
 issue_lock = threading.Lock()
 
+STATE_TTL = 600  # 10 минут
+
 gspread_client = None
 sheet_cache = {}
 
@@ -125,18 +128,23 @@ def get_gspread_client():
     if gspread_client is not None:
         return gspread_client
 
-    data = json.loads(SERVICE_ACCOUNT_JSON)
+    try:
+        data = json.loads(SERVICE_ACCOUNT_JSON)
 
-    scopes = [
-        "https://www.googleapis.com/auth/spreadsheets",
-        "https://www.googleapis.com/auth/drive"
-    ]
+        scopes = [
+            "https://www.googleapis.com/auth/spreadsheets",
+            "https://www.googleapis.com/auth/drive"
+        ]
 
-    creds = Credentials.from_service_account_info(data, scopes=scopes)
+        creds = Credentials.from_service_account_info(data, scopes=scopes)
+        gspread_client = gspread.authorize(creds)
 
-    gspread_client = gspread.authorize(creds)
+        return gspread_client
 
-    return gspread_client
+    except Exception as e:
+        logging.error(f"get_gspread_client error: {e}")
+        gspread_client = None
+        raise
 
 def get_sheet(sheet_name):
     global sheet_cache
@@ -153,16 +161,22 @@ def get_sheet(sheet_name):
         return sheet
 
     except Exception as e:
-        logging.error(f"get_sheet cache error for '{sheet_name}': {e}")
+        logging.error(f"get_sheet first error for '{sheet_name}': {e}")
 
         reset_google_cache()
+        time.sleep(1)
 
-        client = get_gspread_client()
-        spreadsheet = client.open_by_key(SPREADSHEET_ID)
-        sheet = spreadsheet.worksheet(sheet_name)
+        try:
+            client = get_gspread_client()
+            spreadsheet = client.open_by_key(SPREADSHEET_ID)
+            sheet = spreadsheet.worksheet(sheet_name)
 
-        sheet_cache[sheet_name] = sheet
-        return sheet
+            sheet_cache[sheet_name] = sheet
+            return sheet
+
+        except Exception as e2:
+            logging.error(f"get_sheet second error for '{sheet_name}': {e2}")
+            raise
 
 
 # =========================
@@ -233,8 +247,6 @@ def send_add_kings_instructions(chat_id):
         "Я сохраню всё в лист База_кингов."
     )
     tg_send_message(chat_id, text)
-
-import re
 
 def get_free_king_geos():
     now = time.time()
@@ -526,10 +538,22 @@ def parse_price(value):
 
 
 def get_state(user_id):
-    return user_states.get(str(user_id), {})
+    state = user_states.get(str(user_id))
+
+    if not state:
+        return {}
+
+    state_time = state.get("_time", 0)
+
+    if time.time() - state_time > STATE_TTL:
+        clear_state(user_id)
+        return {}
+
+    return state
 
 
 def set_state(user_id, data):
+    data["_time"] = time.time()
     user_states[str(user_id)] = data
 
 
@@ -578,7 +602,6 @@ def is_banned_account(base_row, issue_row=None):
 
     return base_target == "ban" or issue_target == "ban"
 
-
 def return_account_to_ban(account_number):
     base_info = find_account_in_base(account_number)
     issue_info = find_last_issue_row(account_number)
@@ -605,8 +628,8 @@ def return_account_to_ban(account_number):
         issue_sheet = get_sheet(SHEET_ISSUES)
         # G = кому передали
         issue_sheet.update(f"G{issue_info['row_index']}", [["ban"]])
-        invalidate_stats_cache()
 
+    invalidate_stats_cache()
     return True, "Личка переведена в ban."
 
 
@@ -1233,7 +1256,7 @@ def return_king_to_ban(king_name):
     base_info = find_king_in_base_by_name(king_name)
     if not base_info:
         return False, "Кинг не найден в База_кингов."
-        
+
     row = base_info["row"]
 
     if len(row) < 10:
@@ -1261,8 +1284,8 @@ def return_king_to_ban(king_name):
             f"G{issue_info['row_index']}",
             [["ban"]]
         )
-        invalidate_stats_cache()
 
+    invalidate_stats_cache()
     return True, f"Кинг '{king_name}' переведён в ban."
 
 def build_king_search_text(king_name):
@@ -1486,6 +1509,7 @@ def backup_tables():
         if issues_data:
             backup_issues.append_rows(issues_data)
 
+        reset_google_cache()
         return True
 
     except Exception as e:
