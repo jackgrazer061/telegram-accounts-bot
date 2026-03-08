@@ -172,7 +172,12 @@ def get_sheet(sheet_name):
 
         client = get_gspread_client()
         spreadsheet = client.open_by_key(SPREADSHEET_ID)
+
+        start_time = time.time()
         sheet = spreadsheet.worksheet(sheet_name)
+
+        if time.time() - start_time > 10:
+            logging.warning(f"Google Sheets slow response for '{sheet_name}'")
 
         sheet_cache[sheet_name] = sheet
         return sheet
@@ -213,7 +218,14 @@ def tg_send_message(chat_id, text, keyboard=None):
                 "one_time_keyboard": False
             }
 
-        requests.post(f"{BASE_URL}/sendMessage", json=payload, timeout=30)
+        resp = requests.post(
+            f"{BASE_URL}/sendMessage",
+            json=payload,
+            timeout=10
+        )
+
+        if resp.status_code != 200:
+            logging.warning(f"Telegram send failed: {resp.text}")
 
     except Exception as e:
         logging.error(f"tg_send_message error: {e}")
@@ -585,6 +597,17 @@ def get_state(user_id):
         return {}
 
     return state
+
+def cleanup_states():
+    now = time.time()
+    to_delete = []
+
+    for uid, state in user_states.items():
+        if now - state.get("_time", 0) > STATE_TTL:
+            to_delete.append(uid)
+
+    for uid in to_delete:
+        user_states.pop(uid, None)
 
 
 def set_state(user_id, data):
@@ -1560,6 +1583,8 @@ def backup_tables():
 # =========================
 def handle_message(msg):
     try:
+        cleanup_states()
+        
         chat_id = msg["chat"]["id"]
         user_id = msg["from"]["id"]
         username = msg["from"].get("username", "")
@@ -1594,6 +1619,10 @@ def handle_message(msg):
             send_main_menu(chat_id, user_id=user_id)
             return
 
+        if text == "/ping":
+            tg_send_message(chat_id, "бот работает")
+            return
+            
         if text == MENU_CANCEL:
             clear_state(user_id)
             send_main_menu(chat_id, "Действие отменено.", user_id=user_id)
