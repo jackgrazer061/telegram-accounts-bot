@@ -105,6 +105,7 @@ free_kings_cache = {
 }
 
 FREE_CACHE_TTL = 20
+
 def invalidate_stats_cache():
     stats_cache["text"] = None
     stats_cache["updated_at"] = 0
