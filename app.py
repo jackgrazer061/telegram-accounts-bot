@@ -74,6 +74,11 @@ issue_lock = threading.Lock()
 gspread_client = None
 sheet_cache = {}
 
+def reset_google_cache():
+    global gspread_client, sheet_cache
+    gspread_client = None
+    sheet_cache = {}
+
 stats_cache = {
     "text": None,
     "updated_at": 0
@@ -134,17 +139,30 @@ def get_gspread_client():
     return gspread_client
 
 def get_sheet(sheet_name):
-    if sheet_name in sheet_cache:
-        return sheet_cache[sheet_name]
+    global sheet_cache
 
-    client = get_gspread_client()
-    spreadsheet = client.open_by_key(SPREADSHEET_ID)
+    try:
+        if sheet_name in sheet_cache:
+            return sheet_cache[sheet_name]
 
-    sheet = spreadsheet.worksheet(sheet_name)
+        client = get_gspread_client()
+        spreadsheet = client.open_by_key(SPREADSHEET_ID)
+        sheet = spreadsheet.worksheet(sheet_name)
 
-    sheet_cache[sheet_name] = sheet
+        sheet_cache[sheet_name] = sheet
+        return sheet
 
-    return sheet
+    except Exception as e:
+        logging.error(f"get_sheet cache error for '{sheet_name}': {e}")
+
+        reset_google_cache()
+
+        client = get_gspread_client()
+        spreadsheet = client.open_by_key(SPREADSHEET_ID)
+        sheet = spreadsheet.worksheet(sheet_name)
+
+        sheet_cache[sheet_name] = sheet
+        return sheet
 
 
 # =========================
