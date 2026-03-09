@@ -105,10 +105,17 @@ STATE_TTL = 600  # 10 минут
 gspread_client = None
 sheet_cache = {}
 
+google_error_until = 0
+GOOGLE_ERROR_COOLDOWN = 5
+
 def reset_google_cache():
     global gspread_client, sheet_cache
     gspread_client = None
     sheet_cache = {}
+
+def check_google_available():
+    if time.time() < google_error_until:
+        raise RuntimeError("Google Sheets временно перегружен, попробуй через пару секунд")
 
 stats_cache = {
     "text": None,
@@ -176,7 +183,9 @@ def get_gspread_client():
         raise
 
 def get_sheet(sheet_name):
-    global sheet_cache
+    global sheet_cache, google_error_until
+
+    check_google_available()
 
     try:
         if sheet_name in sheet_cache:
@@ -197,6 +206,7 @@ def get_sheet(sheet_name):
     except Exception as e:
         logging.error(f"get_sheet first error for '{sheet_name}': {e}")
 
+        google_error_until = time.time() + GOOGLE_ERROR_COOLDOWN
         reset_google_cache()
         time.sleep(1)
 
@@ -206,10 +216,12 @@ def get_sheet(sheet_name):
             sheet = spreadsheet.worksheet(sheet_name)
 
             sheet_cache[sheet_name] = sheet
+            google_error_until = 0
             return sheet
 
         except Exception as e2:
             logging.error(f"get_sheet second error for '{sheet_name}': {e2}")
+            google_error_until = time.time() + GOOGLE_ERROR_COOLDOWN
             raise
 
 
@@ -2058,7 +2070,13 @@ def handle_message(msg):
     except Exception as e:
         logging.error(f"handle_message error: {e}")
         try:
-            tg_send_message(chat_id, "Произошла ошибка. Попробуй ещё раз.")
+            error_text = str(e)
+
+            if "Google Sheets временно перегружен" in error_text:
+                tg_send_message(chat_id, "Google Sheets временно перегружен. Попробуй через пару секунд.")
+            else:
+                tg_send_message(chat_id, "Произошла ошибка. Попробуй ещё раз.")
+
             send_main_menu(chat_id, "Главное меню:", user_id=user_id)
         except Exception:
             pass
