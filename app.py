@@ -627,7 +627,12 @@ def handle_document_message(msg):
     except Exception as e:
         logging.error(f"handle_document_message error: {e}")
         try:
-            tg_send_message(msg["chat"]["id"], "Ошибка обработки файла. Попробуй ещё раз.")
+            error_text = str(e)
+
+            if "Google Sheets временно перегружен" in error_text:
+                tg_send_message(msg["chat"]["id"], error_text)
+            else:
+                tg_send_message(msg["chat"]["id"], "Ошибка обработки файла. Попробуй ещё раз.")
         except Exception:
             pass
 
@@ -1679,7 +1684,7 @@ def backup_scheduler_loop():
             now_msk = datetime.now(MOSCOW_TZ)
             today_msk = now_msk.date()
 
-            if now_msk.hour == 0 and last_backup_date != today_msk:
+            if now_msk.hour == 0 and now_msk.minute == 0 and last_backup_date != today_msk:
                 logging.info("Starting scheduled daily backup")
                 backup_tables()
 
