@@ -135,8 +135,13 @@ def reset_google_cache():
     sheet_cache = {}
 
 def check_google_available():
+    global google_error_until
+
     if time.time() < google_error_until:
-        raise RuntimeError("Google Sheets временно перегружен, попробуй через пару секунд")
+        wait_left = int(google_error_until - time.time()) + 1
+        raise RuntimeError(
+            f"Google Sheets временно перегружен, попробуй через {wait_left} сек."
+        )
 
 stats_cache = {
     "text": None,
@@ -223,13 +228,22 @@ def get_sheet(sheet_name):
 
         sheet_cache[sheet_name] = sheet
         google_error_count = 0
+        google_error_until = 0
         return sheet
 
     except Exception as e:
         logging.error(f"get_sheet first error for '{sheet_name}': {e}")
 
         google_error_count += 1
-        google_error_until = time.time() + GOOGLE_ERROR_COOLDOWN
+
+        if google_error_count >= 5:
+            cooldown = 30
+        elif google_error_count >= 3:
+            cooldown = 15
+        else:
+            cooldown = 5
+
+        google_error_until = time.time() + cooldown
         reset_google_cache()
         time.sleep(1)
 
@@ -239,14 +253,23 @@ def get_sheet(sheet_name):
             sheet = spreadsheet.worksheet(sheet_name)
 
             sheet_cache[sheet_name] = sheet
-            google_error_until = 0
             google_error_count = 0
+            google_error_until = 0
             return sheet
 
         except Exception as e2:
             logging.error(f"get_sheet second error for '{sheet_name}': {e2}")
+
             google_error_count += 1
-            google_error_until = time.time() + GOOGLE_ERROR_COOLDOWN
+
+            if google_error_count >= 5:
+                cooldown = 30
+            elif google_error_count >= 3:
+                cooldown = 15
+            else:
+                cooldown = 5
+
+            google_error_until = time.time() + cooldown
             reset_google_cache()
             raise
 
@@ -326,18 +349,22 @@ def send_admin_menu(chat_id, text="Меню Admin:"):
 def send_add_kings_instructions(chat_id):
     text = (
         "Пришли txt файл.\n\n"
-        "Пример заполнения файла:\n\n"
-        "1) дата покупки; цена; поставщик; гео\n"
-        "ниже должны находится данные кинга\n\n"
+        "Формат каждого блока такой:\n\n"
+        "1) 15/02/2026; 300; WD; usa\n"
+        "login - example1\n"
+        "password - 12345\n"
+        "cookie - abcdef\n\n"
         "2) 16/02/2026; 500; WD; uk\n"
         "login - example2\n"
         "password - 67890\n"
         "cookie - ghijkl\n\n"
-        "3) 17/02/2026; 250; WD; италия\n"
+        "3) 17/02/2026; 250; WD; italy\n"
         "login - example3\n"
         "password - 11111\n"
         "cookie - zzzzzz\n\n"
-        "Я сохраню всё в лист База_кингов."
+        "Первая строка блока:\n"
+        "номер) дата покупки; цена; поставщик; гео\n"
+        "Ниже — данные кинга.\n\n"
     )
     tg_send_message(chat_id, text)
 
@@ -1648,14 +1675,13 @@ def backup_scheduler_loop():
     while True:
         try:
             touch_background_heartbeat()
-            
+
             now_msk = datetime.now(MOSCOW_TZ)
             today_msk = now_msk.date()
 
-            if now_msk.hour == 0 and now_msk.minute == 0:
-                if last_backup_date != today_msk:
-                    logging.info("Starting scheduled daily backup")
-                    backup_tables()
+            if now_msk.hour == 0 and last_backup_date != today_msk:
+                logging.info("Starting scheduled daily backup")
+                backup_tables()
 
             time.sleep(30)
 
@@ -2154,7 +2180,7 @@ def handle_message(msg):
             error_text = str(e)
 
             if "Google Sheets временно перегружен" in error_text:
-                tg_send_message(chat_id, "Google Sheets временно перегружен. Попробуй через пару секунд.")
+                tg_send_message(chat_id, error_text)
             else:
                 tg_send_message(chat_id, "Произошла ошибка. Попробуй ещё раз.")
 
