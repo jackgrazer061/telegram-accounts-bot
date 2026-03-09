@@ -535,7 +535,7 @@ def add_kings_from_txt_content(file_text):
 
 def handle_document_message(msg):
     try:
-        touch_heartbeat()
+        touch_request_heartbeat()
 
         chat_id = msg["chat"]["id"]
         user_id = msg["from"]["id"]
