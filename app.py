@@ -1,7 +1,7 @@
 import os
 import json
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime
 import time
 import re
 from zoneinfo import ZoneInfo
@@ -30,6 +30,9 @@ if not SPREADSHEET_ID:
 
 if not SERVICE_ACCOUNT_JSON:
     raise RuntimeError("GOOGLE_SERVICE_ACCOUNT_JSON не задан")
+
+if not BACKUP_SPREADSHEET_ID:
+    raise RuntimeError("BACKUP_SPREADSHEET_ID не задан")
 # =========================
 # ACCESS CONTROL
 # =========================
@@ -119,19 +122,12 @@ sheet_cache = {}
 
 google_error_until = 0
 GOOGLE_ERROR_COOLDOWN = 5
+google_error_count = 0
 
 def reset_google_cache():
     global gspread_client, sheet_cache
     gspread_client = None
     sheet_cache = {}
-
-def check_google_available():
-    if time.time() < google_error_until:
-        raise RuntimeError("Google Sheets временно перегружен, попробуй через пару секунд")
-    
-    google_error_until = 0
-    GOOGLE_ERROR_COOLDOWN = 5
-    google_error_count = 0
 
 def check_google_available():
     if time.time() < google_error_until:
@@ -535,9 +531,17 @@ def add_kings_from_txt_content(file_text):
 def handle_document_message(msg):
     try:
         touch_heartbeat()
-        
+
         chat_id = msg["chat"]["id"]
         user_id = msg["from"]["id"]
+
+        if not has_access(user_id):
+            tg_send_message(
+                chat_id,
+                f"⛔ У вас нет доступа.\n\nВаш Telegram ID:\n{user_id}"
+            )
+            return
+
         state = get_state(user_id)
 
         if state.get("mode") != "awaiting_kings_txt":
@@ -1593,15 +1597,17 @@ def backup_tables():
     with backup_lock:
         try:
             client = get_gspread_client()
-            spreadsheet = client.open_by_key(SPREADSHEET_ID)
 
-            accounts = spreadsheet.worksheet(SHEET_ACCOUNTS)
-            kings = spreadsheet.worksheet(SHEET_KINGS)
-            issues = spreadsheet.worksheet(SHEET_ISSUES)
+            main_spreadsheet = client.open_by_key(SPREADSHEET_ID)
+            backup_spreadsheet = client.open_by_key(BACKUP_SPREADSHEET_ID)
 
-            backup_accounts = spreadsheet.worksheet("backup_accounts")
-            backup_kings = spreadsheet.worksheet("backup_kings")
-            backup_issues = spreadsheet.worksheet("backup_issues")
+            accounts = main_spreadsheet.worksheet(SHEET_ACCOUNTS)
+            kings = main_spreadsheet.worksheet(SHEET_KINGS)
+            issues = main_spreadsheet.worksheet(SHEET_ISSUES)
+
+            backup_accounts = backup_spreadsheet.worksheet("backup_accounts")
+            backup_kings = backup_spreadsheet.worksheet("backup_kings")
+            backup_issues = backup_spreadsheet.worksheet("backup_issues")
 
             accounts_data = accounts.get_all_values()
             kings_data = kings.get_all_values()
@@ -1636,6 +1642,8 @@ def backup_scheduler_loop():
 
     while True:
         try:
+            touch_heartbeat()
+            
             now_msk = datetime.now(MOSCOW_TZ)
             today_msk = now_msk.date()
 
@@ -1653,10 +1661,7 @@ def backup_scheduler_loop():
 def watchdog_loop():
     while True:
         try:
-            if time.time() - last_heartbeat > WATCHDOG_TIMEOUT:
-                logging.error("Watchdog detected stale bot state. Exiting for restart.")
-                os._exit(1)
-
+            touch_heartbeat()
             time.sleep(30)
 
         except Exception as e:
