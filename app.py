@@ -1,9 +1,10 @@
 import os
 import json
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 import time
 import re
+from zoneinfo import ZoneInfo
 from flask import Flask, request, jsonify
 import requests
 import gspread
@@ -49,6 +50,10 @@ def is_operator(user_id):
 
 def has_access(user_id):
     return is_admin(user_id) or is_operator(user_id)
+
+def touch_heartbeat():
+    global last_heartbeat
+    last_heartbeat = time.time()
 
 BASE_URL = f"https://api.telegram.org/bot{BOT_TOKEN}"
 
@@ -97,10 +102,17 @@ BTN_KING_BAN_CONFIRM = 'Подтвердить ban'
 user_states = {}
 issue_lock = threading.Lock()
 
+backup_lock = threading.Lock()
+last_backup_date = None
+MOSCOW_TZ = ZoneInfo("Europe/Moscow")
+
 last_user_action = {}
 ACTION_COOLDOWN = 1
 
 STATE_TTL = 600  # 10 минут
+
+last_heartbeat = time.time()
+WATCHDOG_TIMEOUT = 300  # 5 минут
 
 gspread_client = None
 sheet_cache = {}
@@ -112,6 +124,14 @@ def reset_google_cache():
     global gspread_client, sheet_cache
     gspread_client = None
     sheet_cache = {}
+
+def check_google_available():
+    if time.time() < google_error_until:
+        raise RuntimeError("Google Sheets временно перегружен, попробуй через пару секунд")
+    
+    google_error_until = 0
+    GOOGLE_ERROR_COOLDOWN = 5
+    google_error_count = 0
 
 def check_google_available():
     if time.time() < google_error_until:
@@ -183,7 +203,7 @@ def get_gspread_client():
         raise
 
 def get_sheet(sheet_name):
-    global sheet_cache, google_error_until
+    global sheet_cache, google_error_until, google_error_count
 
     check_google_available()
 
@@ -201,11 +221,13 @@ def get_sheet(sheet_name):
             logging.warning(f"Google Sheets slow response for '{sheet_name}'")
 
         sheet_cache[sheet_name] = sheet
+        google_error_count = 0
         return sheet
 
     except Exception as e:
         logging.error(f"get_sheet first error for '{sheet_name}': {e}")
 
+        google_error_count += 1
         google_error_until = time.time() + GOOGLE_ERROR_COOLDOWN
         reset_google_cache()
         time.sleep(1)
@@ -217,11 +239,14 @@ def get_sheet(sheet_name):
 
             sheet_cache[sheet_name] = sheet
             google_error_until = 0
+            google_error_count = 0
             return sheet
 
         except Exception as e2:
             logging.error(f"get_sheet second error for '{sheet_name}': {e2}")
+            google_error_count += 1
             google_error_until = time.time() + GOOGLE_ERROR_COOLDOWN
+            reset_google_cache()
             raise
 
 
@@ -509,6 +534,8 @@ def add_kings_from_txt_content(file_text):
 
 def handle_document_message(msg):
     try:
+        touch_heartbeat()
+        
         chat_id = msg["chat"]["id"]
         user_id = msg["from"]["id"]
         state = get_state(user_id)
@@ -1559,55 +1586,91 @@ def send_free_kings(chat_id):
     free_kings_cache["updated_at"] = now
 
     tg_send_message(chat_id, text)
-
+    
 def backup_tables():
-    try:
-        client = get_gspread_client()
+    global last_backup_date
 
-        # основная таблица
-        main_spreadsheet = client.open_by_key(SPREADSHEET_ID)
+    with backup_lock:
+        try:
+            client = get_gspread_client()
+            spreadsheet = client.open_by_key(SPREADSHEET_ID)
 
-        # backup таблица
-        backup_spreadsheet = client.open_by_key(BACKUP_SPREADSHEET_ID)
+            accounts = spreadsheet.worksheet(SHEET_ACCOUNTS)
+            kings = spreadsheet.worksheet(SHEET_KINGS)
+            issues = spreadsheet.worksheet(SHEET_ISSUES)
 
-        accounts = main_spreadsheet.worksheet(SHEET_ACCOUNTS)
-        kings = main_spreadsheet.worksheet(SHEET_KINGS)
-        issues = main_spreadsheet.worksheet(SHEET_ISSUES)
+            backup_accounts = spreadsheet.worksheet("backup_accounts")
+            backup_kings = spreadsheet.worksheet("backup_kings")
+            backup_issues = spreadsheet.worksheet("backup_issues")
 
-        backup_accounts = backup_spreadsheet.worksheet("backup_accounts")
-        backup_kings = backup_spreadsheet.worksheet("backup_kings")
-        backup_issues = backup_spreadsheet.worksheet("backup_issues")
+            accounts_data = accounts.get_all_values()
+            kings_data = kings.get_all_values()
+            issues_data = issues.get_all_values()
 
-        accounts_data = accounts.get_all_values()
-        kings_data = kings.get_all_values()
-        issues_data = issues.get_all_values()
+            backup_accounts.clear()
+            backup_kings.clear()
+            backup_issues.clear()
 
-        backup_accounts.clear()
-        backup_kings.clear()
-        backup_issues.clear()
+            if accounts_data:
+                backup_accounts.append_rows(accounts_data)
 
-        if accounts_data:
-            backup_accounts.append_rows(accounts_data)
+            if kings_data:
+                backup_kings.append_rows(kings_data)
 
-        if kings_data:
-            backup_kings.append_rows(kings_data)
+            if issues_data:
+                backup_issues.append_rows(issues_data)
 
-        if issues_data:
-            backup_issues.append_rows(issues_data)
+            last_backup_date = datetime.now(MOSCOW_TZ).date()
 
-        reset_google_cache()
-        return True
+            reset_google_cache()
+            logging.info("Daily backup completed successfully")
+            return True
 
-    except Exception as e:
-        logging.error(f"Backup error: {e}")
-        return False
+        except Exception as e:
+            logging.error(f"Backup error: {e}")
+            reset_google_cache()
+            return False
 
+def backup_scheduler_loop():
+    global last_backup_date
+
+    while True:
+        try:
+            now_msk = datetime.now(MOSCOW_TZ)
+            today_msk = now_msk.date()
+
+            if now_msk.hour == 0 and now_msk.minute == 0:
+                if last_backup_date != today_msk:
+                    logging.info("Starting scheduled daily backup")
+                    backup_tables()
+
+            time.sleep(30)
+
+        except Exception as e:
+            logging.error(f"backup_scheduler_loop error: {e}")
+            time.sleep(30)
+
+def watchdog_loop():
+    while True:
+        try:
+            if time.time() - last_heartbeat > WATCHDOG_TIMEOUT:
+                logging.error("Watchdog detected stale bot state. Exiting for restart.")
+                os._exit(1)
+
+            time.sleep(30)
+
+        except Exception as e:
+            logging.error(f"watchdog_loop error: {e}")
+            time.sleep(30)
+            
 # =========================
 # MESSAGE HANDLER
 # =========================
 def handle_message(msg):
     try:
         cleanup_states()
+
+        touch_heartbeat()
         
         chat_id = msg["chat"]["id"]
         user_id = msg["from"]["id"]
@@ -2113,5 +2176,11 @@ def webhook():
 
 
 if __name__ == "__main__":
+    backup_thread = threading.Thread(target=backup_scheduler_loop, daemon=True)
+    backup_thread.start()
+
+    watchdog_thread = threading.Thread(target=watchdog_loop, daemon=True)
+    watchdog_thread.start()
+
     port = int(os.environ.get("PORT", 10000))
     app.run(host="0.0.0.0", port=port)
