@@ -20,6 +20,15 @@ BOT_TOKEN = os.environ.get("BOT_TOKEN", "")
 SPREADSHEET_ID = os.environ.get("SPREADSHEET_ID", "")
 SERVICE_ACCOUNT_JSON = os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON", "")
 BACKUP_SPREADSHEET_ID = os.environ.get("BACKUP_SPREADSHEET_ID", "")
+
+if not BOT_TOKEN:
+    raise RuntimeError("BOT_TOKEN не задан")
+
+if not SPREADSHEET_ID:
+    raise RuntimeError("SPREADSHEET_ID не задан")
+
+if not SERVICE_ACCOUNT_JSON:
+    raise RuntimeError("GOOGLE_SERVICE_ACCOUNT_JSON не задан")
 # =========================
 # ACCESS CONTROL
 # =========================
@@ -87,6 +96,9 @@ BTN_KING_BAN_CONFIRM = 'Подтвердить ban'
 # Память состояний пользователей (для старта хватит)
 user_states = {}
 issue_lock = threading.Lock()
+
+last_user_action = {}
+ACTION_COOLDOWN = 1
 
 STATE_TTL = 600  # 10 минут
 
@@ -1587,6 +1599,14 @@ def handle_message(msg):
         
         chat_id = msg["chat"]["id"]
         user_id = msg["from"]["id"]
+
+        now = time.time()
+
+        last = last_user_action.get(user_id, 0)
+        if now - last < ACTION_COOLDOWN:
+            return
+
+        last_user_action[user_id] = now
         username = msg["from"].get("username", "")
         text = str(msg.get("text", "")).strip()
 
@@ -2049,6 +2069,10 @@ def handle_message(msg):
 @app.route("/", methods=["GET"])
 def index():
     return "ok", 200
+
+@app.route("/health", methods=["GET"])
+def health():
+    return "healthy", 200
 
 
 @app.route("/webhook", methods=["POST"])
