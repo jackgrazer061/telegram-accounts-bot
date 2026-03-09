@@ -54,9 +54,13 @@ def is_operator(user_id):
 def has_access(user_id):
     return is_admin(user_id) or is_operator(user_id)
 
-def touch_heartbeat():
-    global last_heartbeat
-    last_heartbeat = time.time()
+def touch_request_heartbeat():
+    global last_request_time
+    last_request_time = time.time()
+
+def touch_background_heartbeat():
+    global last_background_time
+    last_background_time = time.time()
 
 BASE_URL = f"https://api.telegram.org/bot{BOT_TOKEN}"
 
@@ -114,7 +118,8 @@ ACTION_COOLDOWN = 1
 
 STATE_TTL = 600  # 10 минут
 
-last_heartbeat = time.time()
+last_request_time = time.time()
+last_background_time = time.time()
 WATCHDOG_TIMEOUT = 300  # 5 минут
 
 gspread_client = None
@@ -1642,7 +1647,7 @@ def backup_scheduler_loop():
 
     while True:
         try:
-            touch_heartbeat()
+            touch_background_heartbeat()
             
             now_msk = datetime.now(MOSCOW_TZ)
             today_msk = now_msk.date()
@@ -1661,7 +1666,15 @@ def backup_scheduler_loop():
 def watchdog_loop():
     while True:
         try:
-            touch_heartbeat()
+            now = time.time()
+
+            request_stale = now - last_request_time > WATCHDOG_TIMEOUT
+            background_stale = now - last_background_time > WATCHDOG_TIMEOUT
+
+            if request_stale and background_stale:
+                logging.error("Watchdog detected full app stall. Exiting for restart.")
+                os._exit(1)
+
             time.sleep(30)
 
         except Exception as e:
@@ -1675,7 +1688,7 @@ def handle_message(msg):
     try:
         cleanup_states()
 
-        touch_heartbeat()
+        touch_request_heartbeat()
         
         chat_id = msg["chat"]["id"]
         user_id = msg["from"]["id"]
