@@ -2265,7 +2265,7 @@ def handle_photo_message(msg):
         )
 
     except Exception as e:
-        logging.error(f"handle_photo_message error: {e}")
+        logging.exception("handle_photo_message crashed")
         try:
             tg_send_message(msg["chat"]["id"], f"Ошибка OCR: {e}")
         except Exception:
@@ -2296,6 +2296,8 @@ def handle_message(msg):
                 f"⛔ У вас нет доступа.\n\nВаш Telegram ID:\n{user_id}"
             )
             return
+
+        state = get_state(user_id)
 
         if state.get("mode") == "awaiting_issue_currency":
             currencies = get_available_currencies(
@@ -2331,8 +2333,6 @@ def handle_message(msg):
 
             show_found_account(chat_id, user_id, found)
             return
-
-        state = get_state(user_id)
 
         if text in ["/start", "/menu"]:
             clear_state(user_id)
@@ -2916,7 +2916,7 @@ def handle_message(msg):
         send_main_menu(chat_id, "Не понял команду. Выбери кнопку из меню:", user_id=user_id)
 
     except Exception as e:
-        logging.error(f"handle_message error: {e}")
+        logging.exception("handle_message crashed")
         try:
             error_text = str(e)
 
