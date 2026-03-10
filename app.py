@@ -45,6 +45,7 @@ ADMINS = {
 OPERATORS = {
     7953116439,   # willem
     8334712952,   # ariana
+    7851493919,   # cate
     
 }
 
@@ -1328,7 +1329,13 @@ def find_matching_free_account(limit_val, threshold_val, gmt_val, currency, excl
 
 def show_found_account(chat_id, user_id, found):
     state = get_state(user_id)
-    state["mode"] = "account_found"
+
+    # если это быстрая выдача — сохраняем быстрый режим
+    if state.get("mode") == "quick_account_found":
+        state["mode"] = "quick_account_found"
+    else:
+        state["mode"] = "account_found"
+
     state["found_row"] = found["row_index"]
     state["found_account"] = found["account_number"]
     set_state(user_id, state)
@@ -1339,7 +1346,7 @@ def show_found_account(chat_id, user_id, found):
         f"Склады: {found['warehouses']}\n"
         f"Дата покупки: {found['purchase_date']}\n"
         f"Цена: {found['price']}\n\n"
-        f"Валюта: {found['currency']}\n\n"
+        f"Валюта: {found.get('currency', '')}\n\n"
         f"Кому передали: {state['for_whom']}"
     )
 
