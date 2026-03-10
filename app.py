@@ -2172,21 +2172,21 @@ def handle_message(msg):
         if state.get("mode") == "awaiting_king_for_whom":
             allowed_names = []
 
-    if state.get("king_department") == DEPT_CRYPTO:
-        allowed_names = CRYPTO_NAMES
-    elif state.get("king_department") == DEPT_GAMBLA:
-        allowed_names = GAMBLA_NAMES
+            if state.get("king_department") == DEPT_CRYPTO:
+                allowed_names = CRYPTO_NAMES
+            elif state.get("king_department") == DEPT_GAMBLA:
+                allowed_names = GAMBLA_NAMES
 
-        if text not in allowed_names:
-            send_person_menu(chat_id, state.get("king_department"))
+            if text not in allowed_names:
+                send_person_menu(chat_id, state.get("king_department"))
+                return
+
+            state["mode"] = "awaiting_king_name"
+            state["king_for_whom"] = text
+            set_state(user_id, state)
+
+            tg_send_message(chat_id, "Какое название будет у кинга?")
             return
-
-        state["mode"] = "awaiting_king_name"
-        state["king_for_whom"] = text
-        set_state(user_id, state)
-
-        tg_send_message(chat_id, "Какое название будет у кинга?")
-        return
         
         if state.get("mode") == "awaiting_search_king_name":
             king_name = text.strip()
