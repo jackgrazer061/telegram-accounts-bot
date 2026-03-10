@@ -74,6 +74,7 @@ SHEET_KINGS = "База_кингов"
 LIMIT_OPTIONS = ['-250', '250-500', '500-1200', '1200-1500', 'unlim']
 THRESHOLD_OPTIONS = ['0-49', '50-99', '100-199', '200-499', '500+']
 GMT_OPTIONS = ['-10', '-9', '-8', '-7', '-6', '-5', '-4', '-3', '-2', '-1', '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', '10']
+ACCOUNT_CURRENCY_COL = 12  # M колонка в База_личек
 
 MENU_ACCOUNTS = 'Лички'
 MENU_KINGS = 'Кинги'
@@ -667,6 +668,54 @@ def send_simple_options(chat_id, title, options):
     rows.append([{"text": MENU_CANCEL}])
     tg_send_message(chat_id, title, rows)
 
+def get_available_currencies(limit_val, threshold_val, gmt_val):
+    sheet = get_sheet(SHEET_ACCOUNTS)
+    rows = sheet.get_all_values()
+
+    currencies = []
+    seen = set()
+
+    for row in rows[1:]:
+        if len(row) <= ACCOUNT_CURRENCY_COL:
+            continue
+
+        status = str(row[8]).strip().lower()
+        row_limit = str(row[4]).strip()
+        row_threshold = str(row[5]).strip()
+        row_gmt = str(row[6]).strip()
+        currency = str(row[ACCOUNT_CURRENCY_COL]).strip()
+
+        if status != "free":
+            continue
+        if row_limit != limit_val:
+            continue
+        if row_threshold != threshold_val:
+            continue
+        if row_gmt != gmt_val:
+            continue
+        if not currency:
+            continue
+
+        if currency not in seen:
+            seen.add(currency)
+            currencies.append(currency)
+
+    return currencies
+
+
+def send_currency_options(chat_id, currencies):
+    if not currencies:
+        tg_send_message(chat_id, "Нет свободных личек с такими параметрами.")
+        return
+
+    keyboard = []
+    for currency in currencies:
+        keyboard.append([{"text": currency}])
+
+    keyboard.append([{"text": MENU_CANCEL}])
+
+    tg_send_message(chat_id, "Выбери валюту:", keyboard)
+
 def send_department_menu(chat_id, title="Выбери отдел:"):
     keyboard = [
         [{"text": DEPT_CRYPTO}, {"text": DEPT_GAMBLA}],
@@ -1185,16 +1234,18 @@ def add_accounts_from_text(text):
 # =========================
 # ISSUE FLOW
 # =========================
-def find_matching_free_account(limit_val, threshold_val, gmt_val, exclude_account=None):
+def find_matching_free_account(limit_val, threshold_val, gmt_val, currency, exclude_account=None):
     sheet = get_sheet(SHEET_ACCOUNTS)
     rows = sheet.get_all_values()
 
     candidates = []
     for idx, row in enumerate(rows[1:], start=2):
-        if len(row) < 11:
+        if len(row) <= ACCOUNT_CURRENCY_COL:
             continue
 
         status = str(row[8]).strip().lower()
+        row_currency = str(row[ACCOUNT_CURRENCY_COL]).strip()
+
         if status != "free":
             continue
         if str(row[4]).strip() != limit_val:
@@ -1202,6 +1253,8 @@ def find_matching_free_account(limit_val, threshold_val, gmt_val, exclude_accoun
         if str(row[5]).strip() != threshold_val:
             continue
         if str(row[6]).strip() != gmt_val:
+            continue
+        if row_currency != currency:
             continue
         if exclude_account and str(row[0]).strip() == exclude_account:
             continue
@@ -1221,6 +1274,7 @@ def find_matching_free_account(limit_val, threshold_val, gmt_val, exclude_accoun
         "price": row[2],
         "supplier": row[3],
         "warehouses": row[7],
+        "currency": row[ACCOUNT_CURRENCY_COL],
     }
 
 
@@ -1237,6 +1291,7 @@ def show_found_account(chat_id, user_id, found):
         f"Склады: {found['warehouses']}\n"
         f"Дата покупки: {found['purchase_date']}\n"
         f"Цена: {found['price']}\n\n"
+        f"Валюта: {found['currency']}\n\n"
         f"Кому передали: {state['for_whom']}"
     )
 
@@ -2109,8 +2164,9 @@ def handle_message(msg):
                 state["limit"],
                 state["threshold"],
                 state["gmt"],
+                state["currency"],
                 exclude_account=state.get("found_account")
-            )
+             )
 
             if not found:
                 clear_state(user_id)
@@ -2369,14 +2425,46 @@ def handle_message(msg):
                 send_simple_options(chat_id, "Нужно выбрать GMT кнопкой:", GMT_OPTIONS)
                 return
 
-            state["mode"] = "searching_account"
+            state["mode"] = "awaiting_issue_currency"
             state["gmt"] = text
+            set_state(user_id, state)
+
+            currencies = get_available_currencies(
+                state["limit"],
+                state["threshold"],
+                state["gmt"]
+            )
+
+            if not currencies:
+                clear_state(user_id)
+                send_accounts_menu(chat_id, "Подходящих свободных личек не найдено.")
+                return
+
+            send_currency_options(chat_id, currencies)
+            return
+
+        send_main_menu(chat_id, "Не понял команду. Выбери кнопку из меню:", user_id=user_id)
+
+        if state.get("mode") == "awaiting_issue_currency":
+            currencies = get_available_currencies(
+                state["limit"],
+                state["threshold"],
+                state["gmt"]
+            )
+
+            if text not in currencies:
+                send_currency_options(chat_id, currencies)
+                return
+
+            state["mode"] = "searching_account"
+            state["currency"] = text
             set_state(user_id, state)
 
             found = find_matching_free_account(
                 state["limit"],
                 state["threshold"],
-                state["gmt"]
+                state["gmt"],
+                state["currency"]
             )
 
             if not found:
@@ -2386,8 +2474,6 @@ def handle_message(msg):
 
             show_found_account(chat_id, user_id, found)
             return
-
-        send_main_menu(chat_id, "Не понял команду. Выбери кнопку из меню:", user_id=user_id)
 
     except Exception as e:
         logging.error(f"handle_message error: {e}")
