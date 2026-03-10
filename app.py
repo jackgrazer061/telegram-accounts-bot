@@ -42,7 +42,7 @@ ADMINS = {
 }
 
 OPERATORS = {
-    987654321,   # cilian
+    7953116439,   # willem
 }
 
 def is_admin(user_id):
