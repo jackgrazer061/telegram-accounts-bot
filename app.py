@@ -78,6 +78,22 @@ MENU_STATS = 'Статистика'
 MENU_ADMIN = 'Admin'
 MENU_CANCEL = 'Отмена'
 
+DEPT_CRYPTO = 'Крипта'
+DEPT_GAMBLA = 'Гембла'
+
+CRYPTO_NAMES = [
+    'dasha', 'mark', 'misha', 'vladimir1', 'andrey',
+    'alex', 'anton', 'vladimir2', 'danilacc', 'aleksandr2',
+    'maksim3', 'nikita3', 'anton2', 'yan', 'nikita'
+]
+
+GAMBLA_NAMES = [
+    'artem', 'ivan', 'sergei', 'ilya', 'maksim1',
+    'denis', 'kirill', 'ivansh', 'evgen', 'asim',
+    'maksim2', 'alex_gambl', 'daniil', 'semen', 'ivan2',
+    'andrey2', 'vitaliy', 'gleb', 'dasha2', 'Vladimir3'
+]
+
 SUBMENU_GET = 'Выдать лички'
 SUBMENU_FREE = 'Свободные лички'
 SUBMENU_RETURN = 'Вернуть личку'
@@ -646,6 +662,39 @@ def send_simple_options(chat_id, title, options):
     rows.append([{"text": MENU_CANCEL}])
     tg_send_message(chat_id, title, rows)
 
+def send_department_menu(chat_id, title="Выбери отдел:"):
+    keyboard = [
+        [{"text": DEPT_CRYPTO}, {"text": DEPT_GAMBLA}],
+        [{"text": MENU_CANCEL}]
+    ]
+    tg_send_message(chat_id, title, keyboard)
+
+def send_person_menu(chat_id, department):
+    if department == DEPT_CRYPTO:
+        names = CRYPTO_NAMES
+        title = "Выбери человека из отдела Крипта:"
+    elif department == DEPT_GAMBLA:
+        names = GAMBLA_NAMES
+        title = "Выбери человека из отдела Гембла:"
+    else:
+        tg_send_message(chat_id, "Неизвестный отдел.")
+        return
+
+    keyboard = []
+    row = []
+
+    for name in names:
+        row.append({"text": name})
+        if len(row) == 2:
+            keyboard.append(row)
+            row = []
+
+    if row:
+        keyboard.append(row)
+
+    keyboard.append([{"text": MENU_CANCEL}])
+
+    tg_send_message(chat_id, title, keyboard)
 
 # =========================
 # HELPERS
@@ -1892,14 +1941,8 @@ def handle_message(msg):
             return
 
         if text == SUBMENU_GET:
-            set_state(user_id, {"mode": "awaiting_issue_for_whom"})
-            tg_send_message(
-                chat_id,
-                "Напиши, для кого берешь личку.\n"
-                "❗️если ты написал неправильно❗️\n"
-                "сразу сообщи ему @JackGrazer_Deputy_Head_Account\n"
-                "или ему @Cillian_Murphy_Head_of_Account"
-            )
+            set_state(user_id, {"mode": "awaiting_issue_department"})
+            send_department_menu(chat_id, "Выбери для кого личка:")
             return
 
         if text == SUBMENU_RETURN:
@@ -1980,13 +2023,44 @@ def handle_message(msg):
                 return
 
             set_state(user_id, {
-                "mode": "awaiting_king_for_whom",
+                "mode": "awaiting_king_department",
                 "king_geo": text
             })
 
-            tg_send_message(chat_id, "Для кого берешь кинг?")
+            send_department_menu(chat_id, "Выбери для кого кинг:")
+            return
+            
+        if state.get("mode") == "awaiting_king_department":
+            if text not in [DEPT_CRYPTO, DEPT_GAMBLA]:
+                send_department_menu(chat_id, "Нужно выбрать отдел кнопкой:")
+                return
+
+            state["mode"] = "awaiting_king_for_whom"
+            state["king_department"] = text
+            set_state(user_id, state)
+
+            send_person_menu(chat_id, text)
             return
 
+        if state.get("mode") == "awaiting_king_for_whom":
+            allowed_names = []
+
+    if state.get("king_department") == DEPT_CRYPTO:
+        allowed_names = CRYPTO_NAMES
+    elif state.get("king_department") == DEPT_GAMBLA:
+        allowed_names = GAMBLA_NAMES
+
+        if text not in allowed_names:
+            send_person_menu(chat_id, state.get("king_department"))
+            return
+
+        state["mode"] = "awaiting_king_name"
+        state["king_for_whom"] = text
+        set_state(user_id, state)
+
+        tg_send_message(chat_id, "Какое название будет у кинга?")
+        return
+        
         if state.get("mode") == "awaiting_search_king_name":
             king_name = text.strip()
 
@@ -2004,18 +2078,6 @@ def handle_message(msg):
 
             tg_send_message(chat_id, result)
             send_kings_menu(chat_id, "Выбери следующее действие:")
-            return
-
-        if state.get("mode") == "awaiting_king_for_whom":
-            if not text.strip():
-                tg_send_message(chat_id, "Напиши, для кого берешь кинг.")
-                return
-
-            state["mode"] = "awaiting_king_name"
-            state["king_for_whom"] = text.strip()
-            set_state(user_id, state)
-
-            tg_send_message(chat_id, "Какое название будет у кинга?")
             return
 
         if state.get("mode") == "awaiting_king_name":
@@ -2090,18 +2152,39 @@ def handle_message(msg):
             send_accounts_menu(chat_id, "Выбери следующее действие:")
             return
 
+
+        if state.get("mode") == "awaiting_issue_department":
+            if text not in [DEPT_CRYPTO, DEPT_GAMBLA]:
+                send_department_menu(chat_id, "Нужно выбрать отдел кнопкой:")
+                return
+
+            state["mode"] = "awaiting_issue_for_whom"
+            state["issue_department"] = text
+            set_state(user_id, state)
+
+            send_person_menu(chat_id, text)
+            return
+
         if state.get("mode") == "awaiting_issue_for_whom":
-            if not text:
-                tg_send_message(chat_id, "Напиши, для кого берешь личку.")
+            allowed_names = []
+
+            if state.get("issue_department") == DEPT_CRYPTO:
+                allowed_names = CRYPTO_NAMES
+            elif state.get("issue_department") == DEPT_GAMBLA:
+                allowed_names = GAMBLA_NAMES
+
+            if text not in allowed_names:
+                send_person_menu(chat_id, state.get("issue_department"))
                 return
 
             set_state(user_id, {
                 "mode": "awaiting_issue_limit",
-                "for_whom": text
+                "for_whom": text,
+                "issue_department": state.get("issue_department")
             })
             send_simple_options(chat_id, "Выбери лимит:", LIMIT_OPTIONS)
             return
-
+        
         if state.get("mode") == "awaiting_issue_limit":
             if text not in LIMIT_OPTIONS:
                 send_simple_options(chat_id, "Нужно выбрать лимит кнопкой:", LIMIT_OPTIONS)
