@@ -2945,14 +2945,17 @@ def health():
 def webhook():
     try:
         update = request.get_json(silent=True) or {}
+
         msg = update.get("message") or update.get("edited_message")
 
         if msg:
             if msg.get("text"):
                 handle_message(msg)
-             elif msg.get("document"):
+
+            elif msg.get("document"):
                 handle_document_message(msg)
-             elif msg.get("photo"):
+
+            elif msg.get("photo"):
                 handle_photo_message(msg)
 
         return jsonify({"ok": True})
@@ -2960,7 +2963,6 @@ def webhook():
     except Exception as e:
         logging.error(f"webhook error: {e}")
         return jsonify({"ok": True})
-
 
 if __name__ == "__main__":
     backup_thread = threading.Thread(target=backup_scheduler_loop, daemon=True)
