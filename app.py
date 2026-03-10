@@ -21,6 +21,7 @@ BOT_TOKEN = os.environ.get("BOT_TOKEN", "")
 SPREADSHEET_ID = os.environ.get("SPREADSHEET_ID", "")
 SERVICE_ACCOUNT_JSON = os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON", "")
 BACKUP_SPREADSHEET_ID = os.environ.get("BACKUP_SPREADSHEET_ID", "")
+OCR_SPACE_API_KEY = os.environ.get("OCR_SPACE_API_KEY", "")
 
 if not BOT_TOKEN:
     raise RuntimeError("BOT_TOKEN не задан")
@@ -33,6 +34,9 @@ if not SERVICE_ACCOUNT_JSON:
 
 if not BACKUP_SPREADSHEET_ID:
     raise RuntimeError("BACKUP_SPREADSHEET_ID не задан")
+
+if not OCR_SPACE_API_KEY:
+    raise RuntimeError("OCR_SPACE_API_KEY не задан")
 # =========================
 # ACCESS CONTROL
 # =========================
@@ -114,6 +118,9 @@ SUBMENU_SEARCH_KING = 'Поиск кинга'
 ADMIN_BACKUP = 'Бэкап таблиц'
 ADMIN_ADD_ACCOUNTS = 'Добавить лички'
 ADMIN_ADD_KINGS = 'Добавить кинги'
+ADMIN_IMPORT_SCREEN = 'Импорт из скрина'
+BTN_OCR_CONFIRM = 'Подтвердить обновление'
+BTN_OCR_REJECT = 'Отмена OCR'
 BTN_BACK_FROM_ADMIN = 'Назад из Admin'
 
 BTN_BACK_TO_MENU = 'В меню'
@@ -364,8 +371,8 @@ def send_kings_menu(chat_id, text="Меню кингов:"):
 def send_admin_menu(chat_id, text="Меню Admin:"):
     keyboard = [
         [{"text": ADMIN_BACKUP}],
-        [{"text": ADMIN_ADD_ACCOUNTS}],
-        [{"text": ADMIN_ADD_KINGS}],
+        [{"text": ADMIN_ADD_ACCOUNTS}, {"text": ADMIN_ADD_KINGS}],
+        [{"text": ADMIN_IMPORT_SCREEN}],
         [{"text": BTN_BACK_FROM_ADMIN}]
     ]
     tg_send_message(chat_id, text, keyboard)
@@ -466,6 +473,168 @@ def tg_download_file_content(file_id):
 
     return resp.content
 
+def tg_download_photo_content(photo_list):
+    if not photo_list:
+        return None
+
+    biggest_photo = photo_list[-1]
+    file_id = biggest_photo.get("file_id")
+
+    if not file_id:
+        return None
+
+    return tg_download_file_content(file_id)
+
+
+def extract_digits(text):
+    return re.sub(r"\D", "", str(text or ""))
+
+
+def normalize_limit_to_bucket(limit_value):
+    try:
+        value = float(str(limit_value).replace(",", ".").strip())
+    except Exception:
+        return None
+
+    if value < 250:
+        return "-250"
+    elif 250 <= value < 500:
+        return "250-500"
+    elif 500 <= value < 1200:
+        return "500-1200"
+    elif 1200 <= value < 1500:
+        return "1200-1500"
+    else:
+        return "unlim"
+
+
+def normalize_threshold_to_bucket(threshold_value):
+    try:
+        value = float(str(threshold_value).replace(",", ".").strip())
+    except Exception:
+        return None
+
+    if 0 <= value <= 49:
+        return "0-49"
+    elif 50 <= value <= 99:
+        return "50-99"
+    elif 100 <= value <= 199:
+        return "100-199"
+    elif 200 <= value <= 499:
+        return "200-499"
+    elif value >= 500:
+        return "500+"
+    return None
+
+
+def normalize_gmt_value(raw_value):
+    if raw_value is None:
+        return None
+
+    text = str(raw_value).strip().upper()
+
+    match = re.search(r'UTC\s*([+-]\d{1,2})', text)
+    if match:
+        return match.group(1).replace("+", "")
+
+    match = re.search(r'GMT\s*([+-]\d{1,2})', text)
+    if match:
+        return match.group(1).replace("+", "")
+
+    match = re.search(r'([+-]\d{1,2})', text)
+    if match:
+        return match.group(1).replace("+", "")
+
+    if text.isdigit():
+        return text
+
+    return None
+
+
+def parse_smit_ocr_text(parsed_text):
+    lines = [line.strip() for line in parsed_text.splitlines() if line.strip()]
+    full_text = "\n".join(lines)
+
+    account_number = None
+    threshold_raw = None
+    limit_raw = None
+    gmt_raw = None
+
+    for line in lines:
+        if not account_number:
+            digits = extract_digits(line)
+            if 6 <= len(digits) <= 20:
+                account_number = digits
+                break
+
+    threshold_match = re.search(r'Threshold[^0-9]*([0-9]+(?:[.,][0-9]+)?)', full_text, re.IGNORECASE)
+    if threshold_match:
+        threshold_raw = threshold_match.group(1)
+
+    remain_match = re.search(r'Remain Threshold[^0-9]*([0-9]+(?:[.,][0-9]+)?)', full_text, re.IGNORECASE)
+    if remain_match and threshold_raw is None:
+        threshold_raw = remain_match.group(1)
+
+    limit_match = re.search(r'Limit[^0-9]*([0-9]+(?:[.,][0-9]+)?)', full_text, re.IGNORECASE)
+    if limit_match:
+        limit_raw = limit_match.group(1)
+
+    gmt_match = re.search(r'(?:Account Time Zone|Time Zone|GMT|UTC)[^\n]*', full_text, re.IGNORECASE)
+    if gmt_match:
+        gmt_raw = gmt_match.group(0)
+
+    limit_bucket = normalize_limit_to_bucket(limit_raw) if limit_raw else None
+    threshold_bucket = normalize_threshold_to_bucket(threshold_raw) if threshold_raw else None
+    gmt_value = normalize_gmt_value(gmt_raw) if gmt_raw else None
+
+    return {
+        "account_number": account_number,
+        "limit_raw": limit_raw,
+        "limit_bucket": limit_bucket,
+        "threshold_raw": threshold_raw,
+        "threshold_bucket": threshold_bucket,
+        "gmt_raw": gmt_raw,
+        "gmt_value": gmt_value,
+        "ocr_text": full_text
+    }
+
+
+def run_ocr_space(image_bytes):
+    url = "https://api.ocr.space/parse/image"
+
+    files = {
+        "filename": ("smit.png", image_bytes)
+    }
+
+    data = {
+        "apikey": OCR_SPACE_API_KEY,
+        "language": "eng",
+        "isOverlayRequired": "false",
+        "OCREngine": "2",
+        "scale": "true"
+    }
+
+    resp = requests.post(url, files=files, data=data, timeout=60)
+    resp.raise_for_status()
+
+    result = resp.json()
+
+    if result.get("IsErroredOnProcessing"):
+        errors = result.get("ErrorMessage") or result.get("ErrorDetails") or ["OCR error"]
+        raise RuntimeError(f"OCR ошибка: {'; '.join(map(str, errors))}")
+
+    parsed_results = result.get("ParsedResults") or []
+    if not parsed_results:
+        raise RuntimeError("OCR не вернул текст")
+
+    parsed_text = "\n".join(
+        item.get("ParsedText", "") for item in parsed_results if item.get("ParsedText")
+    ).strip()
+
+    if not parsed_text:
+        raise RuntimeError("На скриншоте не удалось распознать текст")
+
+    return parsed_text
 
 def is_king_header_line(line):
     line = line.strip()
@@ -599,6 +768,91 @@ def handle_document_message(msg):
             return
 
         state = get_state(user_id)
+        
+def handle_photo_message(msg):
+    try:
+        touch_request_heartbeat()
+
+        chat_id = msg["chat"]["id"]
+        user_id = msg["from"]["id"]
+
+        if not has_access(user_id):
+            tg_send_message(
+                chat_id,
+                f"⛔ У вас нет доступа.\n\nВаш Telegram ID:\n{user_id}"
+            )
+            return
+
+        state = get_state(user_id)
+
+        if state.get("mode") != "awaiting_smit_screenshot":
+            tg_send_message(chat_id, "Я сейчас не жду скриншот. Сначала зайди в Admin → Импорт из скрина.")
+            return
+
+        photo_list = msg.get("photo", [])
+        if not photo_list:
+            tg_send_message(chat_id, "Фото не найдено. Попробуй ещё раз.")
+            return
+
+        image_bytes = tg_download_photo_content(photo_list)
+        if not image_bytes:
+            tg_send_message(chat_id, "Не удалось скачать фото. Попробуй ещё раз.")
+            return
+
+        parsed_text = run_ocr_space(image_bytes)
+        parsed = parse_smit_ocr_text(parsed_text)
+
+        account_number = parsed.get("account_number")
+        limit_bucket = parsed.get("limit_bucket")
+        threshold_bucket = parsed.get("threshold_bucket")
+        gmt_value = parsed.get("gmt_value")
+
+        if not account_number:
+            tg_send_message(chat_id, "Не удалось найти номер лички на скриншоте.")
+            return
+
+        if not limit_bucket:
+            tg_send_message(chat_id, "Не удалось распознать лимит на скриншоте.")
+            return
+
+        if not threshold_bucket:
+            tg_send_message(chat_id, "Не удалось распознать трешхолд на скриншоте.")
+            return
+
+        if not gmt_value:
+            tg_send_message(chat_id, "Не удалось распознать GMT / Account Time Zone на скриншоте.")
+            return
+
+        set_state(user_id, {
+            "mode": "awaiting_ocr_confirm",
+            "ocr_account_number": account_number,
+            "ocr_limit_bucket": limit_bucket,
+            "ocr_threshold_bucket": threshold_bucket,
+            "ocr_gmt_value": gmt_value
+        })
+
+        keyboard = [
+            [{"text": BTN_OCR_CONFIRM}],
+            [{"text": BTN_OCR_REJECT}]
+        ]
+
+        tg_send_message(
+            chat_id,
+            "Нашёл на скриншоте:\n\n"
+            f"Личка: {account_number}\n"
+            f"Лимит: {parsed.get('limit_raw')} -> {limit_bucket}\n"
+            f"Трешхолд: {parsed.get('threshold_raw')} -> {threshold_bucket}\n"
+            f"GMT: {parsed.get('gmt_raw')} -> {gmt_value}\n\n"
+            "Подтвердить обновление?",
+            keyboard
+        )
+
+    except Exception as e:
+        logging.error(f"handle_photo_message error: {e}")
+        try:
+            tg_send_message(msg["chat"]["id"], f"Ошибка OCR: {e}")
+        except Exception:
+            pass
 
         if state.get("mode") != "awaiting_kings_txt":
             tg_send_message(
@@ -945,6 +1199,28 @@ def find_account_in_base(account_number):
             }
     return None
 
+def update_account_from_ocr(account_number, limit_bucket, threshold_bucket, gmt_value):
+    found = find_account_in_base(account_number)
+
+    if not found:
+        return False, f"Личка {account_number} не найдена в таблице."
+
+    row_index = found["row_index"]
+    sheet = get_sheet(SHEET_ACCOUNTS)
+
+    sheet.update(
+        f"E{row_index}:G{row_index}",
+        [[limit_bucket, threshold_bucket, gmt_value]]
+    )
+
+    invalidate_stats_cache()
+    return True, (
+        f"Обновлено ✅\n\n"
+        f"Личка: {account_number}\n"
+        f"Лимит: {limit_bucket}\n"
+        f"Трешхолд: {threshold_bucket}\n"
+        f"GMT: {gmt_value}"
+    )
 
 def find_last_issue_row(account_number):
     sheet = get_sheet(SHEET_ISSUES)
@@ -2021,8 +2297,6 @@ def handle_message(msg):
             )
             return
 
-        state = get_state(user_id)
-
         if state.get("mode") == "awaiting_issue_currency":
             currencies = get_available_currencies(
                 state["limit"],
@@ -2057,6 +2331,8 @@ def handle_message(msg):
 
             show_found_account(chat_id, user_id, found)
             return
+
+        state = get_state(user_id)
 
         if text in ["/start", "/menu"]:
             clear_state(user_id)
@@ -2144,6 +2420,53 @@ def handle_message(msg):
 
             set_state(user_id, {"mode": "awaiting_kings_txt"})
             send_add_kings_instructions(chat_id)
+            return
+
+        if text == ADMIN_IMPORT_SCREEN:
+            if not is_admin(user_id):
+                tg_send_message(chat_id, "У вас нет доступа.")
+                return
+
+            set_state(user_id, {"mode": "awaiting_smit_screenshot"})
+            tg_send_message(
+                chat_id,
+                "Пришли скриншот из SMIT.\n\n"
+                "На скриншоте должны быть видны:\n"
+                "- номер лички\n"
+                "- Threshold\n"
+                "- Limit\n"
+                "- Account Time Zone / GMT"
+            )
+            return
+
+        if text == BTN_OCR_REJECT:
+            state = get_state(user_id)
+            if state.get("mode") == "awaiting_ocr_confirm":
+                clear_state(user_id)
+                send_admin_menu(chat_id, "Импорт из скрина отменён.")
+                return
+
+        if text == BTN_OCR_CONFIRM:
+            state = get_state(user_id)
+
+            if state.get("mode") != "awaiting_ocr_confirm":
+                send_admin_menu(chat_id, "Сначала начни импорт заново.")
+                return
+
+            ok, result_text = update_account_from_ocr(
+                state.get("ocr_account_number"),
+                state.get("ocr_limit_bucket"),
+                state.get("ocr_threshold_bucket"),
+                state.get("ocr_gmt_value")
+            )
+
+            clear_state(user_id)
+            tg_send_message(chat_id, result_text)
+
+            if is_admin(user_id):
+                send_admin_menu(chat_id, "Выбери следующее действие:")
+            else:
+                send_main_menu(chat_id, "Выбери следующее действие:", user_id=user_id)
             return
 
         if text == BTN_KING_CONFIRM:
@@ -2627,8 +2950,10 @@ def webhook():
         if msg:
             if msg.get("text"):
                 handle_message(msg)
-            elif msg.get("document"):
+             elif msg.get("document"):
                 handle_document_message(msg)
+             elif msg.get("photo"):
+                handle_photo_message(msg)
 
         return jsonify({"ok": True})
 
