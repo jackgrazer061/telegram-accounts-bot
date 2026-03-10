@@ -39,10 +39,13 @@ if not BACKUP_SPREADSHEET_ID:
 
 ADMINS = {
     7573650707,  # jack
+    7681133609,  # cilian
 }
 
 OPERATORS = {
     7953116439,   # willem
+    8334712952,   # ariana
+    
 }
 
 def is_admin(user_id):
@@ -75,6 +78,7 @@ GMT_OPTIONS = ['-10', '-9', '-8', '-7', '-6', '-5', '-4', '-3', '-2', '-1', '0',
 MENU_ACCOUNTS = 'Лички'
 MENU_KINGS = 'Кинги'
 MENU_STATS = 'Статистика'
+MENU_MANAGER_STATS = 'Статистика менеджера'
 MENU_ADMIN = 'Admin'
 MENU_CANCEL = 'Отмена'
 
@@ -323,13 +327,14 @@ def send_main_menu(chat_id, text="Главное меню:", user_id=None):
     if user_id is not None and is_admin(user_id):
         keyboard = [
             [{"text": MENU_ACCOUNTS}, {"text": MENU_KINGS}],
-            [{"text": MENU_STATS}, {"text": MENU_ADMIN}],
+            [{"text": MENU_STATS}, {"text": MENU_MANAGER_STATS}],
+            [{"text": MENU_ADMIN}],
             [{"text": MENU_CANCEL}]
         ]
     else:
         keyboard = [
             [{"text": MENU_ACCOUNTS}, {"text": MENU_KINGS}],
-            [{"text": MENU_STATS}],
+            [{"text": MENU_STATS}, {"text": MENU_MANAGER_STATS}],
             [{"text": MENU_CANCEL}]
         ]
 
@@ -723,6 +728,122 @@ def parse_price(value):
         return float(s)
     except ValueError:
         return None
+
+def parse_sheet_date(value):
+    value = str(value).strip()
+    for fmt in ("%d/%m/%Y", "%d.%m.%Y", "%d-%m-%Y", "%Y-%m-%d"):
+        try:
+            return datetime.strptime(value, fmt)
+        except ValueError:
+            pass
+    return None
+
+
+def get_manager_stats_period():
+    now = datetime.now()
+
+    if now.day >= 10:
+        start_date = datetime(now.year, now.month, 10)
+        if now.month == 12:
+            end_date = datetime(now.year + 1, 1, 10)
+        else:
+            end_date = datetime(now.year, now.month + 1, 10)
+    else:
+        if now.month == 1:
+            start_date = datetime(now.year - 1, 12, 10)
+        else:
+            start_date = datetime(now.year, now.month - 1, 10)
+
+        end_date = datetime(now.year, now.month, 10)
+
+    return start_date, end_date
+
+def build_manager_stats_text(username):
+    if not username:
+        return "У тебя не установлен username в Telegram, поэтому я не могу собрать личную статистику."
+
+    username = username.strip().lstrip("@").lower()
+    target_username = f"@{username}"
+
+    start_date, end_date = get_manager_stats_period()
+
+    # ---------- ЛИЧКИ ----------
+    accounts_sheet = get_sheet(SHEET_ACCOUNTS)
+    accounts_rows = accounts_sheet.get_all_values()
+
+    accounts_lines = []
+    for row in accounts_rows[1:]:
+        if len(row) < 12:
+            row = row + [''] * (12 - len(row))
+
+        account_number = str(row[0]).strip()
+        transfer_date_raw = str(row[10]).strip()
+        who_took = str(row[11]).strip().lower()
+        for_whom = str(row[9]).strip()
+
+        if who_took != target_username:
+            continue
+
+        transfer_date = parse_sheet_date(transfer_date_raw)
+        if not transfer_date:
+            continue
+
+        if not (start_date <= transfer_date < end_date):
+            continue
+
+        accounts_lines.append(
+            f"{account_number} | {transfer_date.strftime('%d/%m/%Y')} | {for_whom}"
+        )
+
+    # ---------- КИНГИ ----------
+    kings_sheet = get_sheet(SHEET_KINGS)
+    kings_rows = kings_sheet.get_all_values()
+
+    kings_lines = []
+    for row in kings_rows[1:]:
+        if len(row) < 10:
+            row = row + [''] * (10 - len(row))
+
+        king_name = str(row[0]).strip()
+        transfer_date_raw = str(row[6]).strip()
+        for_whom = str(row[5]).strip()
+        who_took = str(row[8]).strip().lower()
+
+        if who_took != target_username:
+            continue
+
+        transfer_date = parse_sheet_date(transfer_date_raw)
+        if not transfer_date:
+            continue
+
+        if not (start_date <= transfer_date < end_date):
+            continue
+
+        kings_lines.append(
+            f"{king_name} | {transfer_date.strftime('%d/%m/%Y')} | {for_whom}"
+        )
+
+    period_text = (
+        f"Период: {start_date.strftime('%d/%m/%Y')} - "
+        f"{(end_date).strftime('%d/%m/%Y')}"
+    )
+
+    text_parts = [f"Статистика менеджера {target_username}", period_text, ""]
+
+    text_parts.append(f"Кинги: {len(kings_lines)}")
+    if kings_lines:
+        text_parts.extend(kings_lines)
+    else:
+        text_parts.append("нет выдач")
+
+    text_parts.append("")
+    text_parts.append(f"Лички: {len(accounts_lines)}")
+    if accounts_lines:
+        text_parts.extend(accounts_lines)
+    else:
+        text_parts.append("нет выдач")
+
+    return "\n".join(text_parts)
 
 
 def get_state(user_id):
@@ -1824,6 +1945,12 @@ def handle_message(msg):
         if text == MENU_STATS:
             stats_text = build_stats_text()
             tg_send_message(chat_id, stats_text)
+            send_main_menu(chat_id, "Главное меню:", user_id=user_id)
+            return
+
+        if text == MENU_MANAGER_STATS:
+            manager_stats_text = build_manager_stats_text(username)
+            tg_send_message(chat_id, manager_stats_text)
             send_main_menu(chat_id, "Главное меню:", user_id=user_id)
             return
 
