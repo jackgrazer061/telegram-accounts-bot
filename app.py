@@ -100,6 +100,7 @@ GAMBLA_NAMES = [
 ]
 
 SUBMENU_GET = 'Выдать лички'
+SUBMENU_QUICK_GET = 'Быстро выдать личку'
 SUBMENU_FREE = 'Свободные лички'
 SUBMENU_RETURN = 'Вернуть личку'
 SUBMENU_SEARCH = 'Поиск лички'
@@ -343,7 +344,7 @@ def send_main_menu(chat_id, text="Главное меню:", user_id=None):
 
 def send_accounts_menu(chat_id, text="Меню личек:"):
     keyboard = [
-        [{"text": SUBMENU_GET}],
+        [{"text": SUBMENU_GET}, {"text": SUBMENU_QUICK_GET}],
         [{"text": SUBMENU_FREE}, {"text": SUBMENU_RETURN}],
         [{"text": SUBMENU_SEARCH}, {"text": BTN_BACK_TO_MENU}]
     ]
@@ -1237,6 +1238,46 @@ def add_accounts_from_text(text):
 
     return message
 
+def find_oldest_free_account(exclude_account=None):
+    sheet = get_sheet(SHEET_ACCOUNTS)
+    rows = sheet.get_all_values()
+
+    candidates = []
+
+    for idx, row in enumerate(rows[1:], start=2):
+        if len(row) < 12:
+            row = row + [''] * (12 - len(row))
+
+        status = str(row[8]).strip().lower()
+
+        if status != "free":
+            continue
+
+        if exclude_account and str(row[0]).strip() == exclude_account:
+            continue
+
+        purchase_date = parse_date(row[1]) or datetime.max
+        currency = ""
+        if len(row) > ACCOUNT_CURRENCY_COL:
+            currency = str(row[ACCOUNT_CURRENCY_COL]).strip()
+
+        candidates.append((idx, purchase_date, row, currency))
+
+    if not candidates:
+        return None
+
+    candidates.sort(key=lambda x: x[1])
+    row_idx, _, row, currency = candidates[0]
+
+    return {
+        "row_index": row_idx,
+        "account_number": row[0],
+        "purchase_date": row[1],
+        "price": row[2],
+        "supplier": row[3],
+        "warehouses": row[7],
+        "currency": currency,
+    }
 
 # =========================
 # ISSUE FLOW
@@ -1326,8 +1367,8 @@ def confirm_issue(chat_id, user_id, username):
     try:
         with issue_lock:
             state = get_state(user_id)
-
-            if state.get("mode") != "account_found":
+            
+            if state.get("mode") not in ["account_found", "quick_account_found"]:
                 send_main_menu(chat_id, "Сначала найди личку.", user_id=user_id)
                 return
 
@@ -2169,6 +2210,12 @@ def handle_message(msg):
             send_department_menu(chat_id, "Выбери для кого личка:")
             return
 
+        if text == SUBMENU_QUICK_GET:
+            clear_state(user_id)
+            set_state(user_id, {"mode": "awaiting_quick_issue_department"})
+            send_department_menu(chat_id, "Выбери для кого быстро выдать личку:")
+            return
+
         if text == SUBMENU_RETURN:
             set_state(user_id, {"mode": "awaiting_return_account"})
             tg_send_message(chat_id, "Впиши номер лички, которую нужно отправить в ban.")
@@ -2202,13 +2249,26 @@ def handle_message(msg):
                 send_main_menu(chat_id, "Начни заново.", user_id=user_id)
                 return
 
+            if state.get("mode") == "quick_account_found":
+                found = find_oldest_free_account(
+                    exclude_account=state.get("found_account")
+                )
+
+                if not found:
+                    clear_state(user_id)
+                    send_accounts_menu(chat_id, "Свободных личек больше нет.")
+                    return
+
+                show_found_account(chat_id, user_id, found)
+                return
+
             found = find_matching_free_account(
                 state["limit"],
                 state["threshold"],
                 state["gmt"],
                 state["currency"],
                 exclude_account=state.get("found_account")
-             )
+            )
 
             if not found:
                 clear_state(user_id)
@@ -2390,6 +2450,18 @@ def handle_message(msg):
             send_person_menu(chat_id, text)
             return
 
+        if state.get("mode") == "awaiting_quick_issue_department":
+            if text not in [DEPT_CRYPTO, DEPT_GAMBLA]:
+                send_department_menu(chat_id, "Нужно выбрать отдел кнопкой:")
+                return
+
+            state["mode"] = "awaiting_quick_issue_for_whom"
+            state["issue_department"] = text
+            set_state(user_id, state)
+
+            send_person_menu(chat_id, text)
+            return
+
         if state.get("mode") == "awaiting_issue_for_whom":
             allowed_names = []
 
@@ -2408,6 +2480,32 @@ def handle_message(msg):
                 "issue_department": state.get("issue_department")
             })
             send_simple_options(chat_id, "Выбери лимит:", LIMIT_OPTIONS)
+            return
+
+        if state.get("mode") == "awaiting_quick_issue_for_whom":
+            allowed_names = []
+
+            if state.get("issue_department") == DEPT_CRYPTO:
+                allowed_names = CRYPTO_NAMES
+            elif state.get("issue_department") == DEPT_GAMBLA:
+                allowed_names = GAMBLA_NAMES
+
+            if text not in allowed_names:
+                send_person_menu(chat_id, state.get("issue_department"))
+                return
+
+            state["mode"] = "quick_account_found"
+            state["for_whom"] = text
+            set_state(user_id, state)
+
+            found = find_oldest_free_account()
+
+            if not found:
+                clear_state(user_id)
+                send_accounts_menu(chat_id, "Свободных личек сейчас нет.")
+                return
+
+            show_found_account(chat_id, user_id, found)
             return
         
         if state.get("mode") == "awaiting_issue_limit":
