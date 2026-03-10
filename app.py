@@ -1137,9 +1137,9 @@ def send_bulk_add_instructions(chat_id):
         "• 9\n"
         "• 10\n\n"
         "Пример:\n"
-        "номер;дата покупки;цена;поставщик;лимит;трешхолд;GMT;склады\n"
-        "RK001; 15/02/2026; 300; WD; 250-500; 50-99; 3; sklad1,sklad2\n"
-        "RK002; 16/02/2026; 500; WD; unlim; 100-199; 2; sklad3"
+        "номер;дата покупки;цена;поставщик;лимит;трешхолд;GMT;валюта;склады\n"
+        "RK001; 15/02/2026; 300; WD; 250-500; 50-99; 3; usd; sklad1,sklad2\n"
+        "RK002; 16/02/2026; 500; WD; unlim; 100-199; 2; eur; sklad3"
     )
     tg_send_message(chat_id, text)
 
@@ -1160,11 +1160,11 @@ def add_accounts_from_text(text):
 
     for i, line in enumerate(lines, start=1):
         fields = [x.strip() for x in line.split(";")]
-        if len(fields) != 8:
-            errors.append(f"Строка {i}: должно быть 8 полей через ';'")
+        if len(fields) != 9:
+            errors.append(f"Строка {i}: должно быть 9 полей через ';'")
             continue
 
-        account_number, purchase_date_raw, price_raw, supplier, limit_val, threshold_val, gmt_val, warehouses = fields
+        account_number, purchase_date_raw, price_raw, supplier, limit_val, threshold_val, gmt_val, currency, warehouses = fields
 
         if not account_number:
             errors.append(f"Строка {i}: пустой номер лички")
@@ -1196,6 +1196,12 @@ def add_accounts_from_text(text):
             errors.append(f"Строка {i}: неверный GMT '{gmt_val}'")
             continue
 
+        currency = currency.strip().upper()
+
+        if not currency:
+            errors.append(f"Строка {i}: валюта не указана")
+            continue
+
         to_append.append([
             account_number,
             purchase_date.strftime("%d/%m/%Y"),
@@ -1208,7 +1214,8 @@ def add_accounts_from_text(text):
             "free",
             "",
             "",
-            ""
+            "",
+            currency
         ])
         existing_accounts.add(account_number)
 
