@@ -768,91 +768,6 @@ def handle_document_message(msg):
             return
 
         state = get_state(user_id)
-        
-def handle_photo_message(msg):
-    try:
-        touch_request_heartbeat()
-
-        chat_id = msg["chat"]["id"]
-        user_id = msg["from"]["id"]
-
-        if not has_access(user_id):
-            tg_send_message(
-                chat_id,
-                f"⛔ У вас нет доступа.\n\nВаш Telegram ID:\n{user_id}"
-            )
-            return
-
-        state = get_state(user_id)
-
-        if state.get("mode") != "awaiting_smit_screenshot":
-            tg_send_message(chat_id, "Я сейчас не жду скриншот. Сначала зайди в Admin → Импорт из скрина.")
-            return
-
-        photo_list = msg.get("photo", [])
-        if not photo_list:
-            tg_send_message(chat_id, "Фото не найдено. Попробуй ещё раз.")
-            return
-
-        image_bytes = tg_download_photo_content(photo_list)
-        if not image_bytes:
-            tg_send_message(chat_id, "Не удалось скачать фото. Попробуй ещё раз.")
-            return
-
-        parsed_text = run_ocr_space(image_bytes)
-        parsed = parse_smit_ocr_text(parsed_text)
-
-        account_number = parsed.get("account_number")
-        limit_bucket = parsed.get("limit_bucket")
-        threshold_bucket = parsed.get("threshold_bucket")
-        gmt_value = parsed.get("gmt_value")
-
-        if not account_number:
-            tg_send_message(chat_id, "Не удалось найти номер лички на скриншоте.")
-            return
-
-        if not limit_bucket:
-            tg_send_message(chat_id, "Не удалось распознать лимит на скриншоте.")
-            return
-
-        if not threshold_bucket:
-            tg_send_message(chat_id, "Не удалось распознать трешхолд на скриншоте.")
-            return
-
-        if not gmt_value:
-            tg_send_message(chat_id, "Не удалось распознать GMT / Account Time Zone на скриншоте.")
-            return
-
-        set_state(user_id, {
-            "mode": "awaiting_ocr_confirm",
-            "ocr_account_number": account_number,
-            "ocr_limit_bucket": limit_bucket,
-            "ocr_threshold_bucket": threshold_bucket,
-            "ocr_gmt_value": gmt_value
-        })
-
-        keyboard = [
-            [{"text": BTN_OCR_CONFIRM}],
-            [{"text": BTN_OCR_REJECT}]
-        ]
-
-        tg_send_message(
-            chat_id,
-            "Нашёл на скриншоте:\n\n"
-            f"Личка: {account_number}\n"
-            f"Лимит: {parsed.get('limit_raw')} -> {limit_bucket}\n"
-            f"Трешхолд: {parsed.get('threshold_raw')} -> {threshold_bucket}\n"
-            f"GMT: {parsed.get('gmt_raw')} -> {gmt_value}\n\n"
-            "Подтвердить обновление?",
-            keyboard
-        )
-
-    except Exception as e:
-        logging.error(f"handle_photo_message error: {e}")
-        try:
-            tg_send_message(msg["chat"]["id"], f"Ошибка OCR: {e}")
-        except Exception:
-            pass
 
         if state.get("mode") != "awaiting_kings_txt":
             tg_send_message(
@@ -2271,6 +2186,91 @@ def watchdog_loop():
 # =========================
 # MESSAGE HANDLER
 # =========================
+def handle_photo_message(msg):
+    try:
+        touch_request_heartbeat()
+
+        chat_id = msg["chat"]["id"]
+        user_id = msg["from"]["id"]
+
+        if not has_access(user_id):
+            tg_send_message(
+                chat_id,
+                f"⛔ У вас нет доступа.\n\nВаш Telegram ID:\n{user_id}"
+            )
+            return
+
+        state = get_state(user_id)
+
+        if state.get("mode") != "awaiting_smit_screenshot":
+            tg_send_message(chat_id, "Я сейчас не жду скриншот. Сначала зайди в Admin → Импорт из скрина.")
+            return
+
+        photo_list = msg.get("photo", [])
+        if not photo_list:
+            tg_send_message(chat_id, "Фото не найдено. Попробуй ещё раз.")
+            return
+
+        image_bytes = tg_download_photo_content(photo_list)
+        if not image_bytes:
+            tg_send_message(chat_id, "Не удалось скачать фото. Попробуй ещё раз.")
+            return
+
+        parsed_text = run_ocr_space(image_bytes)
+        parsed = parse_smit_ocr_text(parsed_text)
+
+        account_number = parsed.get("account_number")
+        limit_bucket = parsed.get("limit_bucket")
+        threshold_bucket = parsed.get("threshold_bucket")
+        gmt_value = parsed.get("gmt_value")
+
+        if not account_number:
+            tg_send_message(chat_id, "Не удалось найти номер лички на скриншоте.")
+            return
+
+        if not limit_bucket:
+            tg_send_message(chat_id, "Не удалось распознать лимит на скриншоте.")
+            return
+
+        if not threshold_bucket:
+            tg_send_message(chat_id, "Не удалось распознать трешхолд на скриншоте.")
+            return
+
+        if not gmt_value:
+            tg_send_message(chat_id, "Не удалось распознать GMT / Account Time Zone на скриншоте.")
+            return
+
+        set_state(user_id, {
+            "mode": "awaiting_ocr_confirm",
+            "ocr_account_number": account_number,
+            "ocr_limit_bucket": limit_bucket,
+            "ocr_threshold_bucket": threshold_bucket,
+            "ocr_gmt_value": gmt_value
+        })
+
+        keyboard = [
+            [{"text": BTN_OCR_CONFIRM}],
+            [{"text": BTN_OCR_REJECT}]
+        ]
+
+        tg_send_message(
+            chat_id,
+            "Нашёл на скриншоте:\n\n"
+            f"Личка: {account_number}\n"
+            f"Лимит: {parsed.get('limit_raw')} -> {limit_bucket}\n"
+            f"Трешхолд: {parsed.get('threshold_raw')} -> {threshold_bucket}\n"
+            f"GMT: {parsed.get('gmt_raw')} -> {gmt_value}\n\n"
+            "Подтвердить обновление?",
+            keyboard
+        )
+
+    except Exception as e:
+        logging.error(f"handle_photo_message error: {e}")
+        try:
+            tg_send_message(msg["chat"]["id"], f"Ошибка OCR: {e}")
+        except Exception:
+            pass
+            
 def handle_message(msg):
     try:
         cleanup_states()
