@@ -1952,7 +1952,7 @@ def handle_message(msg):
         cleanup_states()
 
         touch_request_heartbeat()
-        
+
         chat_id = msg["chat"]["id"]
         user_id = msg["from"]["id"]
 
@@ -1974,6 +1974,41 @@ def handle_message(msg):
             return
 
         state = get_state(user_id)
+
+        if state.get("mode") == "awaiting_issue_currency":
+            currencies = get_available_currencies(
+                state["limit"],
+                state["threshold"],
+                state["gmt"]
+            )
+
+            if not currencies:
+                clear_state(user_id)
+                send_accounts_menu(chat_id, "Подходящих свободных личек не найдено.")
+                return
+
+            if text not in currencies:
+                send_currency_options(chat_id, currencies)
+                return
+
+            state["mode"] = "searching_account"
+            state["currency"] = text
+            set_state(user_id, state)
+
+            found = find_matching_free_account(
+                state["limit"],
+                state["threshold"],
+                state["gmt"],
+                state["currency"]
+            )
+
+            if not found:
+                clear_state(user_id)
+                send_accounts_menu(chat_id, "Подходящих свободных личек не найдено.")
+                return
+
+            show_found_account(chat_id, user_id, found)
+            return
 
         if text in ["/start", "/menu"]:
             clear_state(user_id)
@@ -2451,36 +2486,6 @@ def handle_message(msg):
             return
 
         send_main_menu(chat_id, "Не понял команду. Выбери кнопку из меню:", user_id=user_id)
-
-        if state.get("mode") == "awaiting_issue_currency":
-            currencies = get_available_currencies(
-                state["limit"],
-                state["threshold"],
-                state["gmt"]
-            )
-
-            if text not in currencies:
-                send_currency_options(chat_id, currencies)
-                return
-
-            state["mode"] = "searching_account"
-            state["currency"] = text
-            set_state(user_id, state)
-
-            found = find_matching_free_account(
-                state["limit"],
-                state["threshold"],
-                state["gmt"],
-                state["currency"]
-            )
-
-            if not found:
-                clear_state(user_id)
-                send_accounts_menu(chat_id, "Подходящих свободных личек не найдено.")
-                return
-
-            show_found_account(chat_id, user_id, found)
-            return
 
     except Exception as e:
         logging.error(f"handle_message error: {e}")
