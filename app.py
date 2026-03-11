@@ -531,22 +531,30 @@ def normalize_gmt_value(raw_value):
     if raw_value is None:
         return None
 
-    text = str(raw_value).strip().upper()
+    text = str(raw_value).strip()
 
-    match = re.search(r'UTC\s*([+-]\d{1,2})', text)
+    # убираем лишние пробелы
+    text = re.sub(r"\s+", " ", text)
+
+    # 1) Account Time Zone / GMT / UTC + число
+    match = re.search(r'(?:ACCOUNT TIME ZONE|TIME ZONE|GMT|UTC)[^+\-\d]*([+-]\d{1,2})', text, re.IGNORECASE)
     if match:
         return match.group(1).replace("+", "")
 
-    match = re.search(r'GMT\s*([+-]\d{1,2})', text)
+    # 2) Формат вида Europe/Rome | +1
+    match = re.search(r'[A-Za-z_]+/[A-Za-z_]+(?:\s*\|\s*|\s+)([+-]\d{1,2})', text)
     if match:
         return match.group(1).replace("+", "")
 
+    # 3) Просто любое число со знаком
     match = re.search(r'([+-]\d{1,2})', text)
     if match:
         return match.group(1).replace("+", "")
 
-    if text.isdigit():
-        return text
+    # 4) Просто число без знака
+    match = re.search(r'\b(\d{1,2})\b', text)
+    if match:
+        return match.group(1)
 
     return None
 
@@ -579,14 +587,30 @@ def parse_smit_ocr_text(parsed_text):
     if limit_match:
         limit_raw = limit_match.group(1)
 
+        # Сначала ищем строку с названием колонки / GMT / UTC
     gmt_match = re.search(r'(?:Account Time Zone|Time Zone|GMT|UTC)[^\n]*', full_text, re.IGNORECASE)
     if gmt_match:
         gmt_raw = gmt_match.group(0)
+
+    # Если не нашли — ищем строку формата Europe/Rome | +1
+    if not gmt_raw:
+        for line in lines:
+            if re.search(r'[A-Za-z_]+/[A-Za-z_]+', line) and re.search(r'[+-]\d{1,2}', line):
+                gmt_raw = line
+                break
 
     limit_bucket = normalize_limit_to_bucket(limit_raw) if limit_raw else None
     threshold_bucket = normalize_threshold_to_bucket(threshold_raw) if threshold_raw else None
     gmt_value = normalize_gmt_value(gmt_raw) if gmt_raw else None
 
+    if not gmt_value:
+        for line in lines:
+            test_gmt = normalize_gmt_value(line)
+            if test_gmt in GMT_OPTIONS:
+                gmt_raw = line
+                gmt_value = test_gmt
+                break
+                
     return {
         "account_number": account_number,
         "limit_raw": limit_raw,
