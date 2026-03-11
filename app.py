@@ -1319,44 +1319,11 @@ def send_free_accounts(chat_id):
 def send_bulk_add_instructions(chat_id):
     text = (
         "Отправь список личек, каждая с новой строки.\n\n"
-        "Какой есть лимит:\n"
-        "• -250\n"
-        "• 250-500\n"
-        "• 500-1200\n"
-        "• 1200-1500\n"
-        "• unlim\n\n"
-        "Какой есть трешхолд:\n"
-        "• 0-49\n"
-        "• 50-99\n"
-        "• 100-199\n"
-        "• 200-499\n"
-        "• 500+\n\n"
-        "GMT:\n"
-        "• -10\n"
-        "• -9\n"
-        "• -8\n"
-        "• -7\n"
-        "• -6\n"
-        "• -5\n"
-        "• -4\n"
-        "• -3\n"
-        "• -2\n"
-        "• -1\n"
-        "• 0\n"
-        "• 1\n"
-        "• 2\n"
-        "• 3\n"
-        "• 4\n"
-        "• 5\n"
-        "• 6\n"
-        "• 7\n"
-        "• 8\n"
-        "• 9\n"
-        "• 10\n\n"
+        "Формат:\n"
+        "номер;дата покупки;цена;поставщик;склады\n\n"
         "Пример:\n"
-        "номер;дата покупки;цена;поставщик;лимит;трешхолд;GMT;валюта;склады\n"
-        "RK001; 15/02/2026; 300; WD; 250-500; 50-99; 3; usd; sklad1,sklad2\n"
-        "RK002; 16/02/2026; 500; WD; unlim; 100-199; 2; eur; sklad3"
+        "RK001; 15/02/2026; 300; WD; sklad1,sklad2\n"
+        "RK002; 16/02/2026; 500; WD; sklad3"
     )
     tg_send_message(chat_id, text)
 
@@ -1377,11 +1344,11 @@ def add_accounts_from_text(text):
 
     for i, line in enumerate(lines, start=1):
         fields = [x.strip() for x in line.split(";")]
-        if len(fields) != 9:
-            errors.append(f"Строка {i}: должно быть 9 полей через ';'")
+        if len(fields) != 5:
+            errors.append(f"Строка {i}: должно быть 5 полей через ';'")
             continue
 
-        account_number, purchase_date_raw, price_raw, supplier, limit_val, threshold_val, gmt_val, currency, warehouses = fields
+        account_number, purchase_date_raw, price_raw, supplier, warehouses = fields
 
         if not account_number:
             errors.append(f"Строка {i}: пустой номер лички")
@@ -1401,38 +1368,19 @@ def add_accounts_from_text(text):
             errors.append(f"Строка {i}: неверная цена '{price_raw}'")
             continue
 
-        if limit_val not in LIMIT_OPTIONS:
-            errors.append(f"Строка {i}: неверный лимит '{limit_val}'")
-            continue
-
-        if threshold_val not in THRESHOLD_OPTIONS:
-            errors.append(f"Строка {i}: неверный трешхолд '{threshold_val}'")
-            continue
-
-        if gmt_val not in GMT_OPTIONS:
-            errors.append(f"Строка {i}: неверный GMT '{gmt_val}'")
-            continue
-
-        currency = currency.strip().upper()
-
-        if not currency:
-            errors.append(f"Строка {i}: валюта не указана")
-            continue
-
         to_append.append([
-            account_number,
-            purchase_date.strftime("%d/%m/%Y"),
-            price,
-            supplier,
-            limit_val,
-            threshold_val,
-            gmt_val,
-            warehouses,
-            "free",
-            "",
-            "",
-            "",
-            currency
+            account_number,                         # A номер
+            purchase_date.strftime("%d/%m/%Y"),    # B дата покупки
+            price,                                 # C цена
+            supplier,                              # D поставщик
+            "",                                    # E лимит
+            "",                                    # F трешхолд
+            "",                                    # G GMT
+            warehouses,                            # H склады
+            "free",                                # I статус
+            "",                                    # J кому выдали
+            "",                                    # K дата взятия
+            ""                                     # L кто взял
         ])
         existing_accounts.add(account_number)
 
@@ -2829,11 +2777,57 @@ def handle_message(msg):
                 return
 
             set_state(user_id, {
-                "mode": "awaiting_issue_limit",
+                "mode": "awaiting_issue_account_number",
                 "for_whom": text,
                 "issue_department": state.get("issue_department")
             })
-            send_simple_options(chat_id, "Выбери лимит:", LIMIT_OPTIONS)
+
+            tg_send_message(chat_id, "Теперь напиши номер лички, которую хочешь выдать.")
+            return
+
+        if state.get("mode") == "awaiting_issue_account_number":
+            account_number = text.strip()
+
+            if not account_number:
+                tg_send_message(chat_id, "Впиши номер лички.")
+                return
+
+            found = find_account_in_base(account_number)
+
+            if not found:
+                tg_send_message(chat_id, "Личка не найдена. Впиши номер ещё раз.")
+                return
+
+            row = found["row"]
+
+            if len(row) < 12:
+                row = row + [''] * (12 - len(row))
+
+            status = str(row[8]).strip().lower()
+
+            if status == "taken":
+                tg_send_message(chat_id, "Эта личка уже занята. Впиши другую.")
+                return
+
+            if status == "ban":
+                tg_send_message(chat_id, "Эта личка в ban. Впиши другую.")
+                return
+
+            if status != "free":
+                tg_send_message(chat_id, "Эта личка недоступна. Впиши другую.")
+                return
+
+            found_data = {
+                "row_index": found["row_index"],
+                "account_number": row[0],
+                "purchase_date": row[1],
+                "price": row[2],
+                "supplier": row[3],
+                "warehouses": row[7],
+                "currency": ""
+            }
+
+            show_found_account(chat_id, user_id, found_data)
             return
 
         if state.get("mode") == "awaiting_quick_issue_for_whom":
@@ -2860,17 +2854,6 @@ def handle_message(msg):
                 return
 
             show_found_account(chat_id, user_id, found)
-            return
-        
-        if state.get("mode") == "awaiting_issue_limit":
-            if text not in LIMIT_OPTIONS:
-                send_simple_options(chat_id, "Нужно выбрать лимит кнопкой:", LIMIT_OPTIONS)
-                return
-
-            state["mode"] = "awaiting_issue_threshold"
-            state["limit"] = text
-            set_state(user_id, state)
-            send_simple_options(chat_id, "Выбери трешхолд:", THRESHOLD_OPTIONS)
             return
 
         if state.get("mode") == "awaiting_return_king_name":
@@ -2901,40 +2884,6 @@ def handle_message(msg):
                 f"Внимание: кинг '{king_name}' будет перемещён в ban.\nПодтвердить?",
                 keyboard
             )
-            return
-
-        if state.get("mode") == "awaiting_issue_threshold":
-            if text not in THRESHOLD_OPTIONS:
-                send_simple_options(chat_id, "Нужно выбрать трешхолд кнопкой:", THRESHOLD_OPTIONS)
-                return
-
-            state["mode"] = "awaiting_issue_gmt"
-            state["threshold"] = text
-            set_state(user_id, state)
-            send_simple_options(chat_id, "Выбери GMT:", GMT_OPTIONS)
-            return
-
-        if state.get("mode") == "awaiting_issue_gmt":
-            if text not in GMT_OPTIONS:
-                send_simple_options(chat_id, "Нужно выбрать GMT кнопкой:", GMT_OPTIONS)
-                return
-
-            state["mode"] = "awaiting_issue_currency"
-            state["gmt"] = text
-            set_state(user_id, state)
-
-            currencies = get_available_currencies(
-                state["limit"],
-                state["threshold"],
-                state["gmt"]
-            )
-
-            if not currencies:
-                clear_state(user_id)
-                send_accounts_menu(chat_id, "Подходящих свободных личек не найдено.")
-                return
-
-            send_currency_options(chat_id, currencies)
             return
 
         send_main_menu(chat_id, "Не понял команду. Выбери кнопку из меню:", user_id=user_id)
