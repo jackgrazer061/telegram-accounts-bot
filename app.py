@@ -1991,7 +1991,6 @@ def build_bm_search_text(bm_id):
     bm_id = row[0]
     purchase_date = row[1] or "не указана"
     price = row[2] or "не указана"
-    supplier = row[3] or "не указан"
     status = row[4] or "не указан"
     for_whom = row[5] or "не указано"
     who_took = row[6] or "не указано"
@@ -2002,7 +2001,6 @@ def build_bm_search_text(bm_id):
         f"ID БМа: {bm_id}\n"
         f"Дата покупки: {purchase_date}\n"
         f"Цена: {price}\n"
-        f"У кого купили: {supplier}\n"
         f"Статус: {status}\n"
         f"Для кого: {for_whom}\n"
         f"Кто взял: {who_took}\n"
