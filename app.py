@@ -181,6 +181,14 @@ def reset_google_cache():
             SHEET_BMS: {"rows": None, "updated_at": 0},
         }
 
+    with table_cache_lock:
+        table_cache = {
+            SHEET_ACCOUNTS: {"rows": None, "updated_at": 0},
+            SHEET_ISSUES: {"rows": None, "updated_at": 0},
+            SHEET_KINGS: {"rows": None, "updated_at": 0},
+            SHEET_BMS: {"rows": None, "updated_at": 0},
+        }
+
 def reset_table_cache():
     global table_cache
     with table_cache_lock:
