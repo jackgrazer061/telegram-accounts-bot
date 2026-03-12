@@ -182,42 +182,68 @@ def check_google_available():
             f"Google Sheets временно перегружен, попробуй через {wait_left} сек."
         )
 
-stats_cache = {
-    "text": None,
-    "updated_at": 0
-}
-
-STATS_CACHE_TTL = 30
-
-free_king_geos_cache = {
-    "data": None,
-    "updated_at": 0
-}
-
-free_accounts_cache = {
-    "text": None,
-    "updated_at": 0
-}
-
-free_kings_cache = {
-    "text": None,
-    "updated_at": 0
-}
-
-FREE_CACHE_TTL = 20
 
 def invalidate_stats_cache():
-    stats_cache["text"] = None
-    stats_cache["updated_at"] = 0
+    pass
 
-    free_king_geos_cache["data"] = None
-    free_king_geos_cache["updated_at"] = 0
+# =========================
+# AUTO CACHE FOR SHEETS
+# =========================
+TABLE_CACHE_TTL = 5  # сек; можно 3-5
 
-    free_accounts_cache["text"] = None
-    free_accounts_cache["updated_at"] = 0
+table_cache = {
+    SHEET_ACCOUNTS: {"rows": None, "updated_at": 0},
+    SHEET_ISSUES: {"rows": None, "updated_at": 0},
+    SHEET_KINGS: {"rows": None, "updated_at": 0},
+    SHEET_BMS: {"rows": None, "updated_at": 0},
+}
 
-    free_kings_cache["text"] = None
-    free_kings_cache["updated_at"] = 0
+table_cache_lock = threading.Lock()
+
+
+def refresh_sheet_cache(sheet_name):
+    sheet = get_sheet(sheet_name)
+    rows = sheet.get_all_values()
+
+    with table_cache_lock:
+        table_cache[sheet_name]["rows"] = rows
+        table_cache[sheet_name]["updated_at"] = time.time()
+
+    return rows
+
+
+def get_sheet_rows_cached(sheet_name, force=False):
+    now = time.time()
+
+    with table_cache_lock:
+        cache = table_cache.get(sheet_name)
+        if cache:
+            is_fresh = (
+                cache["rows"] is not None
+                and (now - cache["updated_at"] < TABLE_CACHE_TTL)
+            )
+            if is_fresh and not force:
+                return cache["rows"]
+
+    return refresh_sheet_cache(sheet_name)
+
+
+def sheet_update_and_refresh(sheet_name, cell_range, values):
+    sheet = get_sheet(sheet_name)
+    sheet.update(cell_range, values)
+    refresh_sheet_cache(sheet_name)
+
+
+def sheet_append_row_and_refresh(sheet_name, row, value_input_option="USER_ENTERED"):
+    sheet = get_sheet(sheet_name)
+    sheet.append_row(row, value_input_option=value_input_option)
+    refresh_sheet_cache(sheet_name)
+
+
+def sheet_append_rows_and_refresh(sheet_name, rows, value_input_option="USER_ENTERED"):
+    sheet = get_sheet(sheet_name)
+    sheet.append_rows(rows, value_input_option=value_input_option)
+    refresh_sheet_cache(sheet_name)
 
 
 # =========================
@@ -424,31 +450,22 @@ def send_add_bms_instructions(chat_id):
     text = (
         "Пришли БМы сообщением.\n\n"
         "Формат каждого блока:\n\n"
-        "1) 123456789; 15/02/2026; 300\n"
+        "1) 123456789; 15/02/2026; 300; WD\n"
         "login - example\n"
         "password - 12345\n"
         "2fa - qwerty\n\n"
-        "2) 987654321; 18/02/2026; 500\n"
+        "2) 987654321; 18/02/2026; 500; TT\n"
         "login - example2\n"
         "password - 99999\n"
         "2fa - zzzzzz\n\n"
         "Первая строка блока:\n"
-        "номер) id БМа; дата покупки; цена\n"
+        "номер) id БМа; дата покупки; цена; у кого купили\n"
         "Ниже — данные БМа."
     )
     tg_send_message(chat_id, text)
 
 def get_free_king_geos():
-    now = time.time()
-
-    if (
-        free_king_geos_cache["data"] is not None
-        and now - free_king_geos_cache["updated_at"] < FREE_CACHE_TTL
-    ):
-        return free_king_geos_cache["data"]
-
-    sheet = get_sheet(SHEET_KINGS)
-    rows = sheet.get_all_values()
+    rows = get_sheet_rows_cached(SHEET_KINGS)
 
     geos = []
     seen = set()
@@ -463,9 +480,6 @@ def get_free_king_geos():
         if status == "free" and geo and geo not in seen:
             geos.append(geo)
             seen.add(geo)
-
-    free_king_geos_cache["data"] = geos
-    free_king_geos_cache["updated_at"] = now
 
     return geos
 
@@ -815,11 +829,11 @@ def parse_bms_txt(text):
         header_clean = re.sub(r'^\d+[.)]\s*', '', header).strip()
         parts = [x.strip() for x in header_clean.split(";")]
 
-        if len(parts) != 3:
-            errors.append(f"Блок {idx}: нужно 3 поля: id БМа; дата покупки; цена")
+        if len(parts) != 4:
+            errors.append(f"Блок {idx}: нужно 4 поля: id БМа; дата покупки; цена; у кого купили")
             continue
 
-        bm_id, purchase_date_raw, price_raw = parts
+        bm_id, purchase_date_raw, price_raw, supplier = parts
 
         purchase_date = parse_date(purchase_date_raw)
         if not purchase_date:
@@ -835,6 +849,10 @@ def parse_bms_txt(text):
             errors.append(f"Блок {idx}: пустой id БМа")
             continue
 
+        if not supplier:
+            errors.append(f"Блок {idx}: не указан поставщик")
+            continue
+
         data_text = "\n".join(data_lines).strip()
 
         if not data_text:
@@ -845,13 +863,13 @@ def parse_bms_txt(text):
             "bm_id": bm_id,
             "purchase_date": purchase_date.strftime("%d/%m/%Y"),
             "price": price,
+            "supplier": supplier,
             "data_text": data_text
         })
 
     return parsed, errors
 
 def add_kings_from_txt_content(file_text):
-    sheet = get_sheet(SHEET_KINGS)
     rows, errors = parse_kings_txt(file_text)
 
     if not rows:
@@ -874,7 +892,7 @@ def add_kings_from_txt_content(file_text):
             item["data_text"]       # J данные
         ])
 
-    sheet.append_rows(to_append, value_input_option="USER_ENTERED")
+    sheet_append_rows_and_refresh(SHEET_KINGS, to_append)
     invalidate_stats_cache()
 
     message = (
@@ -891,15 +909,14 @@ def add_kings_from_txt_content(file_text):
     return message
 
 def add_bms_from_txt_content(file_text):
-    sheet = get_sheet(SHEET_BMS)
-    rows, errors = parse_bms_txt(file_text)
+    parsed_rows, errors = parse_bms_txt(file_text)
 
-    if not rows:
+    if not parsed_rows:
         if errors:
             return "Ничего не добавил.\n\nОшибки:\n" + "\n".join(errors[:10])
-        return "Ничего не добавил. Не удалось разобрать файл."
+        return "Ничего не добавил. Не удалось разобрать текст."
 
-    existing_rows = sheet.get_all_values()
+    existing_rows = get_sheet_rows_cached(SHEET_BMS)
     existing_ids = set()
 
     for row in existing_rows[1:]:
@@ -909,7 +926,7 @@ def add_bms_from_txt_content(file_text):
     to_append = []
     duplicates = 0
 
-    for item in rows:
+    for item in parsed_rows:
         bm_id = item["bm_id"]
 
         if bm_id in existing_ids:
@@ -920,16 +937,17 @@ def add_bms_from_txt_content(file_text):
             item["bm_id"],           # A id БМа
             item["purchase_date"],   # B дата покупки
             item["price"],           # C цена
-            "free",                  # D статус
-            "",                      # E для кого
-            "",                      # F кто взял
-            "",                      # G дата выдачи
-            item["data_text"]        # H данные
+            item["supplier"],        # D у кого купили
+            "free",                  # E статус
+            "",                      # F для кого
+            "",                      # G кто взял
+            "",                      # H дата выдачи
+            item["data_text"]        # I данные
         ])
         existing_ids.add(bm_id)
 
     if to_append:
-        sheet.append_rows(to_append, value_input_option="USER_ENTERED")
+        sheet_append_rows_and_refresh(SHEET_BMS, to_append)
         invalidate_stats_cache()
 
     message = (
@@ -1041,8 +1059,7 @@ def send_simple_options(chat_id, title, options):
     tg_send_message(chat_id, title, rows)
 
 def get_available_currencies(limit_val, threshold_val, gmt_val):
-    sheet = get_sheet(SHEET_ACCOUNTS)
-    rows = sheet.get_all_values()
+    rows = get_sheet_rows_cached(SHEET_ACCOUNTS)
 
     currencies = []
     seen = set()
@@ -1189,8 +1206,7 @@ def build_manager_stats_text(username):
     start_date, end_date = get_manager_stats_period()
 
     # ---------- ЛИЧКИ ----------
-    accounts_sheet = get_sheet(SHEET_ACCOUNTS)
-    accounts_rows = accounts_sheet.get_all_values()
+    accounts_rows = get_sheet_rows_cached(SHEET_ACCOUNTS)
 
     accounts_lines = []
     for row in accounts_rows[1:]:
@@ -1217,8 +1233,7 @@ def build_manager_stats_text(username):
         )
 
     # ---------- КИНГИ ----------
-    kings_sheet = get_sheet(SHEET_KINGS)
-    kings_rows = kings_sheet.get_all_values()
+    kings_rows = get_sheet_rows_cached(SHEET_KINGS)
 
     kings_lines = []
     for row in kings_rows[1:]:
@@ -1244,6 +1259,33 @@ def build_manager_stats_text(username):
             f"{king_name} | {transfer_date.strftime('%d/%m/%Y')} | {for_whom}"
         )
 
+    # ---------- БМы ----------
+    bms_rows = get_sheet_rows_cached(SHEET_BMS)
+
+    bms_lines = []
+    for row in bms_rows[1:]:
+        if len(row) < 9:
+            row = row + [''] * (9 - len(row))
+
+        bm_id = str(row[0]).strip()
+        transfer_date_raw = str(row[7]).strip()
+        for_whom = str(row[5]).strip()
+        who_took = str(row[6]).strip().lower()
+
+        if who_took != target_username:
+            continue
+
+        transfer_date = parse_sheet_date(transfer_date_raw)
+        if not transfer_date:
+            continue
+
+        if not (start_date <= transfer_date < end_date):
+            continue
+
+        bms_lines.append(
+            f"{bm_id} | {transfer_date.strftime('%d/%m/%Y')} | {for_whom}"
+        )
+
     period_text = (
         f"Период: {start_date.strftime('%d/%m/%Y')} - "
         f"{(end_date).strftime('%d/%m/%Y')}"
@@ -1261,6 +1303,13 @@ def build_manager_stats_text(username):
     text_parts.append(f"Лички: {len(accounts_lines)}")
     if accounts_lines:
         text_parts.extend(accounts_lines)
+    else:
+        text_parts.append("нет выдач")
+
+    text_parts.append("")
+    text_parts.append(f"БМы: {len(bms_lines)}")
+    if bms_lines:
+        text_parts.extend(bms_lines)
     else:
         text_parts.append("нет выдач")
 
@@ -1302,8 +1351,7 @@ def clear_state(user_id):
     user_states.pop(str(user_id), None)
 
 def find_account_in_base(account_number):
-    sheet = get_sheet(SHEET_ACCOUNTS)
-    rows = sheet.get_all_values()
+    rows = get_sheet_rows_cached(SHEET_ACCOUNTS)
 
     for idx, row in enumerate(rows[1:], start=2):
         if len(row) < 11:
@@ -1322,9 +1370,8 @@ def update_account_from_ocr(account_number, limit_bucket, threshold_bucket, gmt_
         return False, f"Личка {account_number} не найдена в таблице."
 
     row_index = found["row_index"]
-    sheet = get_sheet(SHEET_ACCOUNTS)
-
-    sheet.update(
+    sheet_update_and_refresh(
+        SHEET_ACCOUNTS,
         f"E{row_index}:G{row_index}",
         [[limit_bucket, threshold_bucket, gmt_value]]
     )
@@ -1339,8 +1386,7 @@ def update_account_from_ocr(account_number, limit_bucket, threshold_bucket, gmt_
     )
 
 def find_last_issue_row(account_number):
-    sheet = get_sheet(SHEET_ISSUES)
-    rows = sheet.get_all_values()
+    rows = get_sheet_rows_cached(SHEET_ISSUES)
 
     last_match = None
     for idx, row in enumerate(rows[1:], start=2):
@@ -1382,15 +1428,18 @@ def return_account_to_ban(account_number):
     if status == "ban":
         return False, "Эта личка уже в ban."
 
-    base_sheet = get_sheet(SHEET_ACCOUNTS)
-
-    # J = кому выдали
-    base_sheet.update(f"J{base_info['row_index']}", [["ban"]])
+    sheet_update_and_refresh(
+        SHEET_ACCOUNTS,
+        f"J{base_info['row_index']}",
+        [["ban"]]
+    )
 
     if issue_info:
-        issue_sheet = get_sheet(SHEET_ISSUES)
-        # G = кому передали
-        issue_sheet.update(f"G{issue_info['row_index']}", [["ban"]])
+        sheet_update_and_refresh(
+            SHEET_ISSUES,
+            f"G{issue_info['row_index']}",
+            [["ban"]]
+        )
 
     invalidate_stats_cache()
     return True, "Личка переведена в ban."
@@ -1439,17 +1488,7 @@ def build_account_search_text(account_number):
 # FREE ACCOUNTS
 # =========================
 def send_free_accounts(chat_id):
-    now = time.time()
-
-    if (
-        free_accounts_cache["text"] is not None
-        and now - free_accounts_cache["updated_at"] < FREE_CACHE_TTL
-    ):
-        tg_send_message(chat_id, free_accounts_cache["text"])
-        return
-
-    sheet = get_sheet(SHEET_ACCOUNTS)
-    rows = sheet.get_all_values()
+    rows = get_sheet_rows_cached(SHEET_ACCOUNTS)
 
     if len(rows) < 2:
         tg_send_message(chat_id, "В базе пока нет личек.")
@@ -1484,9 +1523,6 @@ def send_free_accounts(chat_id):
     if len(free_rows) > max_to_show:
         text += f"\n\nПоказаны первые {max_to_show}."
 
-    free_accounts_cache["text"] = text
-    free_accounts_cache["updated_at"] = now
-
     tg_send_message(chat_id, text)
 
 
@@ -1506,8 +1542,7 @@ def send_bulk_add_instructions(chat_id):
 
 
 def add_accounts_from_text(text):
-    sheet = get_sheet(SHEET_ACCOUNTS)
-    existing_rows = sheet.get_all_values()
+    existing_rows = get_sheet_rows_cached(SHEET_ACCOUNTS)
     existing_accounts = set()
 
     for row in existing_rows[1:]:
@@ -1562,7 +1597,7 @@ def add_accounts_from_text(text):
         existing_accounts.add(account_number)
 
     if to_append:
-        sheet.append_rows(to_append, value_input_option="USER_ENTERED")
+        sheet_append_rows_and_refresh(SHEET_ACCOUNTS, to_append)
         invalidate_stats_cache()
 
     message = (
@@ -1580,8 +1615,7 @@ def add_accounts_from_text(text):
     return message
 
 def find_oldest_free_account(exclude_account=None):
-    sheet = get_sheet(SHEET_ACCOUNTS)
-    rows = sheet.get_all_values()
+    rows = get_sheet_rows_cached(SHEET_ACCOUNTS)
 
     candidates = []
 
@@ -1624,8 +1658,7 @@ def find_oldest_free_account(exclude_account=None):
 # ISSUE FLOW
 # =========================
 def find_matching_free_account(limit_val, threshold_val, gmt_val, currency, exclude_account=None):
-    sheet = get_sheet(SHEET_ACCOUNTS)
-    rows = sheet.get_all_values()
+    rows = get_sheet_rows_cached(SHEET_ACCOUNTS)
 
     candidates = []
     for idx, row in enumerate(rows[1:], start=2):
@@ -1698,16 +1731,18 @@ def show_found_account(chat_id, user_id, found):
 
 
 def append_issue_row(account_number, purchase_date, price, transfer_date, supplier, for_whom):
-    sheet = get_sheet(SHEET_ISSUES)
-    sheet.append_row([
-        account_number,
-        "РК",
-        purchase_date,
-        price,
-        transfer_date,
-        supplier,
-        for_whom
-    ], value_input_option="USER_ENTERED")
+    sheet_append_row_and_refresh(
+        SHEET_ISSUES,
+        [
+            account_number,
+            "РК",
+            purchase_date,
+            price,
+            transfer_date,
+            supplier,
+            for_whom
+        ]
+    )
 
 
 def confirm_issue(chat_id, user_id, username):
@@ -1724,8 +1759,14 @@ def confirm_issue(chat_id, user_id, username):
                 send_main_menu(chat_id, "Не нашёл выбранную личку. Начни заново.", user_id=user_id)
                 return
 
-            sheet = get_sheet(SHEET_ACCOUNTS)
-            row = sheet.row_values(row_index)
+            rows = get_sheet_rows_cached(SHEET_ACCOUNTS)
+
+            if row_index - 1 >= len(rows):
+                clear_state(user_id)
+                send_main_menu(chat_id, "Личка не найдена в таблице. Начни заново.", user_id=user_id)
+                return
+
+            row = rows[row_index - 1]
 
             if len(row) < 12:
                 row = row + [''] * (12 - len(row))
@@ -1755,7 +1796,8 @@ def confirm_issue(chat_id, user_id, username):
 
             who_took_text = f"@{username}" if username else "без username"
 
-            sheet.update(
+            sheet_update_and_refresh(
+                SHEET_ACCOUNTS,
                 f"I{row_index}:L{row_index}",
                 [["taken", state["for_whom"], today, who_took_text]]
             )
@@ -1787,8 +1829,7 @@ def confirm_issue(chat_id, user_id, username):
         send_main_menu(chat_id, "Главное меню:", user_id=user_id)
 
 def king_name_exists(king_name):
-    sheet = get_sheet(SHEET_KINGS)
-    rows = sheet.get_all_values()
+    rows = get_sheet_rows_cached(SHEET_KINGS)
 
     target = str(king_name).strip().lower()
     if not target:
@@ -1803,8 +1844,7 @@ def king_name_exists(king_name):
 
 
 def find_free_king_by_geo(geo, exclude_row=None):
-    sheet = get_sheet(SHEET_KINGS)
-    rows = sheet.get_all_values()
+    rows = get_sheet_rows_cached(SHEET_KINGS)
 
     candidates = []
 
@@ -1844,19 +1884,18 @@ def find_free_king_by_geo(geo, exclude_row=None):
     return candidates[0]
 
 def find_free_bm(exclude_bm_id=None):
-    sheet = get_sheet(SHEET_BMS)
-    rows = sheet.get_all_values()
+    rows = get_sheet_rows_cached(SHEET_BMS)
 
     candidates = []
 
     for idx, row in enumerate(rows[1:], start=2):
-        if len(row) < 8:
-            row = row + [''] * (8 - len(row))
+        if len(row) < 9:
+            row = row + [''] * (9 - len(row))
 
         bm_id = str(row[0]).strip()
         purchase_date_raw = str(row[1]).strip()
-        status = str(row[3]).strip().lower()
-        data_text = str(row[7]).strip()
+        status = str(row[4]).strip().lower()
+        data_text = str(row[8]).strip()
 
         if status != "free":
             continue
@@ -1872,6 +1911,7 @@ def find_free_bm(exclude_bm_id=None):
             "purchase_date_obj": purchase_date,
             "purchase_date": purchase_date_raw,
             "price": row[2],
+            "supplier": row[3],
             "data_text": data_text
         })
 
@@ -1882,27 +1922,25 @@ def find_free_bm(exclude_bm_id=None):
     return candidates[0]
 
 def count_free_bms():
-    sheet = get_sheet(SHEET_BMS)
-    rows = sheet.get_all_values()
+    rows = get_sheet_rows_cached(SHEET_BMS)
 
     count = 0
     for row in rows[1:]:
-        if len(row) < 4:
-            row = row + [''] * (4 - len(row))
+        if len(row) < 5:
+            row = row + [''] * (5 - len(row))
 
-        status = str(row[3]).strip().lower()  # D колонка
+        status = str(row[4]).strip().lower()  # E колонка
         if status == "free":
             count += 1
 
     return count
 
 def find_bm_in_base(bm_id):
-    sheet = get_sheet(SHEET_BMS)
-    rows = sheet.get_all_values()
+    rows = get_sheet_rows_cached(SHEET_BMS)
 
     for idx, row in enumerate(rows[1:], start=2):
-        if len(row) < 6:
-            row = row + [''] * (6 - len(row))
+        if len(row) < 9:
+            row = row + [''] * (9 - len(row))
 
         if str(row[0]).strip() == str(bm_id).strip():
             return {
@@ -1921,22 +1959,24 @@ def build_bm_search_text(bm_id):
 
     row = bm_info["row"]
 
-    if len(row) < 8:
-        row = row + [''] * (8 - len(row))
+    if len(row) < 9:
+        row = row + [''] * (9 - len(row))
 
     bm_id = row[0]
     purchase_date = row[1] or "не указана"
     price = row[2] or "не указана"
-    status = row[3] or "не указан"
-    for_whom = row[4] or "не указано"
-    who_took = row[5] or "не указано"
-    issue_date = row[6] or "не указана"
-    data_text = row[7] or "нет данных"
+    supplier = row[3] or "не указан"
+    status = row[4] or "не указан"
+    for_whom = row[5] or "не указано"
+    who_took = row[6] or "не указано"
+    issue_date = row[7] or "не указана"
+    data_text = row[8] or "нет данных"
 
     text = (
         f"ID БМа: {bm_id}\n"
         f"Дата покупки: {purchase_date}\n"
         f"Цена: {price}\n"
+        f"У кого купили: {supplier}\n"
         f"Статус: {status}\n"
         f"Для кого: {for_whom}\n"
         f"Кто взял: {who_took}\n"
@@ -1982,22 +2022,29 @@ def confirm_bm_issue(chat_id, user_id, username):
                 send_bms_menu(chat_id, "Не найден выбранный БМ. Начни заново.")
                 return
 
-            sheet = get_sheet(SHEET_BMS)
-            row = sheet.row_values(row_index)
+            rows = get_sheet_rows_cached(SHEET_BMS)
 
-            if len(row) < 8:
-                row = row + [''] * (8 - len(row))
+            if row_index - 1 >= len(rows):
+                clear_state(user_id)
+                send_bms_menu(chat_id, "БМ не найден в таблице. Начни заново.")
+                return
+
+            row = rows[row_index - 1]
+
+            if len(row) < 9:
+                row = row + [''] * (9 - len(row))
 
             # A id БМа
             # B дата покупки
             # C цена
-            # D статус
-            # E для кого
-            # F кто взял
-            # G дата выдачи
-            # H данные
+            # D у кого купили
+            # E статус
+            # F для кого
+            # G кто взял
+            # H дата выдачи
+            # I данные
 
-            status = str(row[3]).strip().lower()
+            status = str(row[4]).strip().lower()
 
             if status == "taken":
                 clear_state(user_id)
@@ -2010,11 +2057,15 @@ def confirm_bm_issue(chat_id, user_id, username):
                 return
 
             bm_id = row[0]
+            purchase_date = row[1]
+            price = row[2]
+            supplier = row[3]
             today = datetime.now().strftime("%d/%m/%Y")
             who_took_text = f"@{username}" if username else "без username"
 
-            sheet.update(
-                f"D{row_index}:G{row_index}",
+            sheet_update_and_refresh(
+                SHEET_BMS,
+                f"E{row_index}:H{row_index}",
                 [[
                     "taken",
                     state["bm_for_whom"],
@@ -2023,7 +2074,21 @@ def confirm_bm_issue(chat_id, user_id, username):
                 ]]
             )
 
-            data_text = row[7] if len(row) > 7 else ""
+            sheet_append_row_and_refresh(
+                SHEET_ISSUES,
+                [
+                    bm_id,
+                    "БМ",
+                    purchase_date,
+                    price,
+                    today,
+                    supplier,
+                    state["bm_for_whom"]
+                ]
+            )
+
+            data_text = row[8] if len(row) > 8 else ""
+            invalidate_stats_cache()
             clear_state(user_id)
 
         tg_send_message(
@@ -2047,6 +2112,7 @@ def confirm_bm_issue(chat_id, user_id, username):
         tg_send_message(chat_id, "Ошибка выдачи БМа. Попробуй ещё раз.")
         send_bms_menu(chat_id, "Меню БМов:")
 
+    
 def show_found_king(chat_id, user_id, found):
     state = get_state(user_id)
 
@@ -2084,8 +2150,14 @@ def confirm_king_issue(chat_id, user_id, username):
                 send_kings_menu(chat_id, "Не найден выбранный кинг. Начни заново.")
                 return
 
-            sheet = get_sheet(SHEET_KINGS)
-            row = sheet.row_values(row_index)
+            rows = get_sheet_rows_cached(SHEET_KINGS)
+
+            if row_index - 1 >= len(rows):
+                clear_state(user_id)
+                send_kings_menu(chat_id, "Кинг не найден в таблице. Начни заново.")
+                return
+
+            row = rows[row_index - 1]
 
             if len(row) < 10:
                 row = row + [''] * (10 - len(row))
@@ -2119,7 +2191,8 @@ def confirm_king_issue(chat_id, user_id, username):
             today = datetime.now().strftime("%d/%m/%Y")
             who_took_text = f"@{username}" if username else "без username"
 
-            sheet.update(
+            sheet_update_and_refresh(
+                SHEET_KINGS,
                 f"A{row_index}:I{row_index}",
                 [[
                     king_name,
@@ -2170,20 +2243,21 @@ def confirm_king_issue(chat_id, user_id, username):
         send_kings_menu(chat_id, "Меню кингов:")
 
 def append_king_to_issues_sheet(king_name, purchase_date, price, transfer_date, supplier, for_whom):
-    sheet = get_sheet(SHEET_ISSUES)
-    sheet.append_row([
-        king_name,       # A
-        "KING",          # B
-        purchase_date,   # C
-        price,           # D
-        transfer_date,   # E
-        supplier,        # F
-        for_whom         # G
-    ], value_input_option="USER_ENTERED")
+    sheet_append_row_and_refresh(
+        SHEET_ISSUES,
+        [
+            king_name,
+            "KING",
+            purchase_date,
+            price,
+            transfer_date,
+            supplier,
+            for_whom
+        ]
+    )
 
 def find_last_king_issue_row(king_name):
-    sheet = get_sheet(SHEET_ISSUES)
-    rows = sheet.get_all_values()
+    rows = get_sheet_rows_cached(SHEET_ISSUES)
 
     last_match = None
     target = str(king_name).strip().lower()
@@ -2205,8 +2279,7 @@ def find_last_king_issue_row(king_name):
 
 
 def find_king_in_base_by_name(king_name):
-    sheet = get_sheet(SHEET_KINGS)
-    rows = sheet.get_all_values()
+    rows = get_sheet_rows_cached(SHEET_KINGS)
 
     target = str(king_name).strip().lower()
 
@@ -2240,20 +2313,18 @@ def return_king_to_ban(king_name):
     if status == "ban":
         return False, "Этот кинг уже в ban."
 
-    base_sheet = get_sheet(SHEET_KINGS)
 
     # E = статус, F = кому выдали
-    base_sheet.update(
+    sheet_update_and_refresh(
+        SHEET_KINGS,
         f"E{base_info['row_index']}:F{base_info['row_index']}",
         [["ban", "ban"]]
     )
 
     issue_info = find_last_king_issue_row(king_name)
     if issue_info:
-        issue_sheet = get_sheet(SHEET_ISSUES)
-
-        # G = кому передали
-        issue_sheet.update(
+        sheet_update_and_refresh(
+            SHEET_ISSUES,
             f"G{issue_info['row_index']}",
             [["ban"]]
         )
@@ -2308,17 +2379,9 @@ def build_king_search_text(king_name):
     return text
 
 def build_stats_text():
-    now = time.time()
-
-    if (
-        stats_cache["text"] is not None
-        and now - stats_cache["updated_at"] < STATS_CACHE_TTL
-    ):
-        return stats_cache["text"]
 
     # ---------- КИНГИ ----------
-    kings_sheet = get_sheet(SHEET_KINGS)
-    kings_rows = kings_sheet.get_all_values()
+    kings_rows = get_sheet_rows_cached(SHEET_KINGS)
 
     kings_free = 0
     kings_taken = 0
@@ -2342,8 +2405,7 @@ def build_stats_text():
             kings_ban += 1
 
     # ---------- ЛИЧКИ ----------
-    accounts_sheet = get_sheet(SHEET_ACCOUNTS)
-    accounts_rows = accounts_sheet.get_all_values()
+    accounts_rows = get_sheet_rows_cached(SHEET_ACCOUNTS)
 
     accounts_free = 0
     accounts_taken = 0
@@ -2374,6 +2436,23 @@ def build_stats_text():
         elif status == "taken":
             accounts_taken += 1
 
+    # ---------- БМы ----------
+    bms_rows = get_sheet_rows_cached(SHEET_BMS)
+
+    bms_free = 0
+    bms_taken = 0
+
+    for row in bms_rows[1:]:
+        if len(row) < 9:
+            row = row + [''] * (9 - len(row))
+
+        status = str(row[4]).strip().lower()
+
+        if status == "free":
+            bms_free += 1
+        elif status == "taken":
+            bms_taken += 1
+
     geo_lines = []
     for geo, count in sorted(kings_geo_stats.items()):
         geo_lines.append(f"{geo}: {count}")
@@ -2399,25 +2478,17 @@ def build_stats_text():
         f"В бане: {accounts_ban}\n\n"
         "По лимиту:\n"
         + "\n".join(limit_lines)
+        + "\n\n"
+        "БМы:\n\n"
+        f"Свободные: {bms_free}\n"
+        f"Выдано: {bms_taken}"
     )
-
-    stats_cache["text"] = text
-    stats_cache["updated_at"] = now
 
     return text
 
+
 def send_free_kings(chat_id):
-    now = time.time()
-
-    if (
-        free_kings_cache["text"] is not None
-        and now - free_kings_cache["updated_at"] < FREE_CACHE_TTL
-    ):
-        tg_send_message(chat_id, free_kings_cache["text"])
-        return
-
-    sheet = get_sheet(SHEET_KINGS)
-    rows = sheet.get_all_values()
+    rows = get_sheet_rows_cached(SHEET_KINGS)
 
     free_rows = []
 
@@ -2446,9 +2517,6 @@ def send_free_kings(chat_id):
         f"Свободные кинги: {len(free_rows)}\n\n"
         + "\n".join(lines)
     )
-
-    free_kings_cache["text"] = text
-    free_kings_cache["updated_at"] = now
 
     tg_send_message(chat_id, text)
     
