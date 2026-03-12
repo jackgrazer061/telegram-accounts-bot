@@ -169,9 +169,27 @@ GOOGLE_ERROR_COOLDOWN = 5
 google_error_count = 0
 
 def reset_google_cache():
-    global gspread_client, sheet_cache
+    global gspread_client, sheet_cache, table_cache
     gspread_client = None
     sheet_cache = {}
+
+    with table_cache_lock:
+        table_cache = {
+            SHEET_ACCOUNTS: {"rows": None, "updated_at": 0},
+            SHEET_ISSUES: {"rows": None, "updated_at": 0},
+            SHEET_KINGS: {"rows": None, "updated_at": 0},
+            SHEET_BMS: {"rows": None, "updated_at": 0},
+        }
+
+def reset_table_cache():
+    global table_cache
+    with table_cache_lock:
+        table_cache = {
+            SHEET_ACCOUNTS: {"rows": None, "updated_at": 0},
+            SHEET_ISSUES: {"rows": None, "updated_at": 0},
+            SHEET_KINGS: {"rows": None, "updated_at": 0},
+            SHEET_BMS: {"rows": None, "updated_at": 0},
+        }
 
 def check_google_available():
     global google_error_until
@@ -189,7 +207,7 @@ def invalidate_stats_cache():
 # =========================
 # AUTO CACHE FOR SHEETS
 # =========================
-TABLE_CACHE_TTL = 5  # сек; можно 3-5
+TABLE_CACHE_TTL = 3  # сек; можно 3-5
 
 table_cache = {
     SHEET_ACCOUNTS: {"rows": None, "updated_at": 0},
@@ -2565,12 +2583,14 @@ def backup_tables():
             last_backup_date = datetime.now(MOSCOW_TZ).date()
 
             reset_google_cache()
+            reset_table_cache()
             logging.info("Daily backup completed successfully")
             return True
 
         except Exception as e:
             logging.error(f"Backup error: {e}")
             reset_google_cache()
+            reset_table_cache()
             return False
 
 def backup_scheduler_loop():
