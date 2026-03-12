@@ -1197,6 +1197,16 @@ def parse_price(value):
     except ValueError:
         return None
 
+def normalize_numeric_for_sheet(value):
+    num = parse_price(value)
+    if num is None:
+        return value
+
+    if float(num).is_integer():
+        return int(num)
+
+    return float(num)
+
 def parse_sheet_date(value):
     value = str(value).strip()
     for fmt in ("%d/%m/%Y", "%d.%m.%Y", "%d-%m-%Y", "%Y-%m-%d"):
@@ -1770,7 +1780,7 @@ def append_issue_row(account_number, purchase_date, price, transfer_date, suppli
             account_number,
             "РК",
             purchase_date,
-            price,
+            normalize_numeric_for_sheet(price),
             transfer_date,
             supplier,
             for_whom
@@ -2114,7 +2124,7 @@ def confirm_bm_issue(chat_id, user_id, username):
                     bm_id,
                     "БМ",
                     purchase_date,
-                    price,
+                    normalize_numeric_for_sheet(price),
                     today,
                     supplier,
                     state["bm_for_whom"]
@@ -2286,7 +2296,7 @@ def append_king_to_issues_sheet(king_name, purchase_date, price, transfer_date, 
             king_name,
             "KING",
             purchase_date,
-            price,
+            normalize_numeric_for_sheet(price),
             transfer_date,
             supplier,
             for_whom
