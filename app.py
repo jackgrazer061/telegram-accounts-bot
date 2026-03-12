@@ -271,6 +271,10 @@ def sheet_append_rows_and_refresh(sheet_name, rows, value_input_option="USER_ENT
     sheet.append_rows(rows, value_input_option=value_input_option)
     refresh_sheet_cache(sheet_name)
 
+def get_next_empty_row_in_issues():
+    rows = get_sheet_rows_cached(SHEET_ISSUES)
+    return len(rows) + 1
+
 
 # =========================
 # GOOGLE SHEETS
@@ -1757,9 +1761,12 @@ def show_found_account(chat_id, user_id, found):
 
 
 def append_issue_row(account_number, purchase_date, price, transfer_date, supplier, for_whom):
-    sheet_append_row_and_refresh(
+    next_row = get_next_empty_row_in_issues()
+
+    sheet_update_and_refresh(
         SHEET_ISSUES,
-        [
+        f"A{next_row}:G{next_row}",
+        [[
             account_number,
             "РК",
             purchase_date,
@@ -1767,7 +1774,7 @@ def append_issue_row(account_number, purchase_date, price, transfer_date, suppli
             transfer_date,
             supplier,
             for_whom
-        ]
+        ]]
     )
 
 
@@ -2098,9 +2105,12 @@ def confirm_bm_issue(chat_id, user_id, username):
                 ]]
             )
 
-            sheet_append_row_and_refresh(
+            next_row = get_next_empty_row_in_issues()
+
+            sheet_update_and_refresh(
                 SHEET_ISSUES,
-                [
+                f"A{next_row}:G{next_row}",
+                [[
                     bm_id,
                     "БМ",
                     purchase_date,
@@ -2108,7 +2118,7 @@ def confirm_bm_issue(chat_id, user_id, username):
                     today,
                     supplier,
                     state["bm_for_whom"]
-                ]
+                ]]
             )
 
             data_text = row[8] if len(row) > 8 else ""
@@ -2267,9 +2277,12 @@ def confirm_king_issue(chat_id, user_id, username):
         send_kings_menu(chat_id, "Меню кингов:")
 
 def append_king_to_issues_sheet(king_name, purchase_date, price, transfer_date, supplier, for_whom):
-    sheet_append_row_and_refresh(
+    next_row = get_next_empty_row_in_issues()
+
+    sheet_update_and_refresh(
         SHEET_ISSUES,
-        [
+        f"A{next_row}:G{next_row}",
+        [[
             king_name,
             "KING",
             purchase_date,
@@ -2277,7 +2290,7 @@ def append_king_to_issues_sheet(king_name, purchase_date, price, transfer_date, 
             transfer_date,
             supplier,
             for_whom
-        ]
+        ]]
     )
 
 def find_last_king_issue_row(king_name):
