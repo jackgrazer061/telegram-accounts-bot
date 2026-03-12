@@ -456,8 +456,11 @@ def send_admin_menu(chat_id, text="Меню Admin:"):
 
 def send_add_kings_instructions(chat_id):
     text = (
-        "Пришли txt файл.\n\n"
-        "Формат каждого блока такой:\n\n"
+        "Пришли Кинги txt файлом.\n\n"
+        "Формат:\n"
+        "номер) дата покупки; цена; поставщик; гео\n"
+        "данные кинга.\n\n"
+        "Пример:\n"
         "1) 15/02/2026; 300; WD; usa\n"
         "login - example1\n"
         "password - 12345\n"
@@ -469,28 +472,21 @@ def send_add_kings_instructions(chat_id):
         "3) 17/02/2026; 250; WD; italy\n"
         "login - example3\n"
         "password - 11111\n"
-        "cookie - zzzzzz\n\n"
-        "Первая строка блока:\n"
-        "номер) дата покупки; цена; поставщик; гео\n"
-        "Ниже — данные кинга.\n\n"
+        "cookie - zzzzzz"
     )
     tg_send_message(chat_id, text)
 
 def send_add_bms_instructions(chat_id):
     text = (
         "Пришли БМы сообщением.\n\n"
-        "Формат каждого блока:\n\n"
-        "1) 123456789; 15/02/2026; 300; WD\n"
-        "login - example\n"
-        "password - 12345\n"
-        "2fa - qwerty\n\n"
-        "2) 987654321; 18/02/2026; 500; TT\n"
-        "login - example2\n"
-        "password - 99999\n"
-        "2fa - zzzzzz\n\n"
-        "Первая строка блока:\n"
+        "Формат:\n"
         "номер) id БМа; дата покупки; цена; у кого купили\n"
-        "Ниже — данные БМа."
+        "инвайт ссылка на БМ.\n\n"
+        "Пример:\n"
+        "1) 123456789; 15/02/2026; 300; WD\n"
+        "https://business.facebook.com/invitation/?token=......\n\n"
+        "2) 987654321; 18/02/2026; 500; TT\n"
+        "https://business.facebook.com/invitation/?token=......"
     )
     tg_send_message(chat_id, text)
 
@@ -1571,9 +1567,9 @@ def send_free_accounts(chat_id):
 # =========================
 def send_bulk_add_instructions(chat_id):
     text = (
-        "Отправь список личек, каждая с новой строки.\n\n"
+        "Отправь лички сообщением, каждая с новой строки.\n\n"
         "Формат:\n"
-        "номер;дата покупки;цена;поставщик;склады\n\n"
+        "номер; дата покупки; цена; поставщик; склады\n\n"
         "Пример:\n"
         "RK001; 15/02/2026; 300; WD; sklad1,sklad2\n"
         "RK002; 16/02/2026; 500; WD; sklad3"
