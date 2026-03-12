@@ -424,16 +424,16 @@ def send_add_bms_instructions(chat_id):
     text = (
         "Пришли БМы сообщением.\n\n"
         "Формат каждого блока:\n\n"
-        "1) 123456789\n"
+        "1) 123456789; 15/02/2026; 300\n"
         "login - example\n"
         "password - 12345\n"
         "2fa - qwerty\n\n"
-        "2) 987654321\n"
+        "2) 987654321; 18/02/2026; 500\n"
         "login - example2\n"
         "password - 99999\n"
         "2fa - zzzzzz\n\n"
         "Первая строка блока:\n"
-        "номер) id бма\n"
+        "номер) id БМа; дата покупки; цена\n"
         "Ниже — данные БМа."
     )
     tg_send_message(chat_id, text)
@@ -812,7 +812,24 @@ def parse_bms_txt(text):
     errors = []
 
     for idx, (header, data_lines) in enumerate(blocks, start=1):
-        bm_id = re.sub(r'^\d+[.)]\s*', '', header).strip()
+        header_clean = re.sub(r'^\d+[.)]\s*', '', header).strip()
+        parts = [x.strip() for x in header_clean.split(";")]
+
+        if len(parts) != 3:
+            errors.append(f"Блок {idx}: нужно 3 поля: id БМа; дата покупки; цена")
+            continue
+
+        bm_id, purchase_date_raw, price_raw = parts
+
+        purchase_date = parse_date(purchase_date_raw)
+        if not purchase_date:
+            errors.append(f"Блок {idx}: неверная дата '{purchase_date_raw}'")
+            continue
+
+        price = parse_price(price_raw)
+        if price is None:
+            errors.append(f"Блок {idx}: неверная цена '{price_raw}'")
+            continue
 
         if not bm_id:
             errors.append(f"Блок {idx}: пустой id БМа")
@@ -826,6 +843,8 @@ def parse_bms_txt(text):
 
         parsed.append({
             "bm_id": bm_id,
+            "purchase_date": purchase_date.strftime("%d/%m/%Y"),
+            "price": price,
             "data_text": data_text
         })
 
@@ -898,12 +917,14 @@ def add_bms_from_txt_content(file_text):
             continue
 
         to_append.append([
-            bm_id,              # A id БМа
-            "free",             # B статус
-            "",                 # C для кого
-            "",                 # D кто взял
-            "",                 # E дата выдачи
-            item["data_text"]   # F данные
+            item["bm_id"],           # A id БМа
+            item["purchase_date"],   # B дата покупки
+            item["price"],           # C цена
+            "free",                  # D статус
+            "",                      # E для кого
+            "",                      # F кто взял
+            "",                      # G дата выдачи
+            item["data_text"]        # H данные
         ])
         existing_ids.add(bm_id)
 
@@ -940,11 +961,12 @@ def handle_document_message(msg):
             return
 
         state = get_state(user_id)
+        mode = state.get("mode")
 
-        if state.get("mode") != "awaiting_kings_txt":
+        if mode not in ["awaiting_kings_txt", "awaiting_bms_text"]:
             tg_send_message(
                 chat_id,
-                "Я не жду сейчас txt файл. Сначала открой Admin → Добавить кинги."
+                "Я сейчас не жду файл. Сначала открой Admin → Добавить кинги или Admin → Добавить БМы."
             )
             return
 
@@ -980,11 +1002,14 @@ def handle_document_message(msg):
                     )
                     return
 
-        if state.get("mode") == "awaiting_kings_txt":
+        if mode == "awaiting_kings_txt":
             result_message = add_kings_from_txt_content(file_text)
-        else:
+        elif mode == "awaiting_bms_text":
             result_message = add_bms_from_txt_content(file_text)
-            
+        else:
+            tg_send_message(chat_id, "Неизвестный режим загрузки файла.")
+            return
+
         clear_state(user_id)
         tg_send_message(chat_id, result_message)
 
@@ -994,7 +1019,7 @@ def handle_document_message(msg):
             send_main_menu(chat_id, "Выбери следующее действие:", user_id=user_id)
 
     except Exception as e:
-        logging.error(f"handle_document_message error: {e}")
+        logging.exception("handle_document_message crashed")
         try:
             error_text = str(e)
 
@@ -1822,12 +1847,16 @@ def find_free_bm(exclude_bm_id=None):
     sheet = get_sheet(SHEET_BMS)
     rows = sheet.get_all_values()
 
+    candidates = []
+
     for idx, row in enumerate(rows[1:], start=2):
-        if len(row) < 6:
-            row = row + [''] * (6 - len(row))
+        if len(row) < 8:
+            row = row + [''] * (8 - len(row))
 
         bm_id = str(row[0]).strip()
-        status = str(row[1]).strip().lower()
+        purchase_date_raw = str(row[1]).strip()
+        status = str(row[3]).strip().lower()
+        data_text = str(row[7]).strip()
 
         if status != "free":
             continue
@@ -1835,18 +1864,22 @@ def find_free_bm(exclude_bm_id=None):
         if exclude_bm_id and bm_id == exclude_bm_id:
             continue
 
-        return {
+        purchase_date = parse_date(purchase_date_raw) or datetime.max
+
+        candidates.append({
             "row_index": idx,
             "bm_id": bm_id,
-            "status": row[1],
-            "for_whom": row[2],
-            "who_took": row[3],
-            "issue_date": row[4],
-            "data_text": row[5]
-        }
+            "purchase_date_obj": purchase_date,
+            "purchase_date": purchase_date_raw,
+            "price": row[2],
+            "data_text": data_text
+        })
 
-    return None
+    if not candidates:
+        return None
 
+    candidates.sort(key=lambda x: x["purchase_date_obj"])
+    return candidates[0]
 
 def count_free_bms():
     sheet = get_sheet(SHEET_BMS)
@@ -1854,13 +1887,14 @@ def count_free_bms():
 
     count = 0
     for row in rows[1:]:
-        if len(row) < 2:
-            continue
-        if str(row[1]).strip().lower() == "free":
+        if len(row) < 4:
+            row = row + [''] * (4 - len(row))
+
+        status = str(row[3]).strip().lower()  # D колонка
+        if status == "free":
             count += 1
 
     return count
-
 
 def find_bm_in_base(bm_id):
     sheet = get_sheet(SHEET_BMS)
@@ -1887,18 +1921,22 @@ def build_bm_search_text(bm_id):
 
     row = bm_info["row"]
 
-    if len(row) < 6:
-        row = row + [''] * (6 - len(row))
+    if len(row) < 8:
+        row = row + [''] * (8 - len(row))
 
     bm_id = row[0]
-    status = row[1] or "не указан"
-    for_whom = row[2] or "не указано"
-    who_took = row[3] or "не указано"
-    issue_date = row[4] or "не указана"
-    data_text = row[5] or "нет данных"
+    purchase_date = row[1] or "не указана"
+    price = row[2] or "не указана"
+    status = row[3] or "не указан"
+    for_whom = row[4] or "не указано"
+    who_took = row[5] or "не указано"
+    issue_date = row[6] or "не указана"
+    data_text = row[7] or "нет данных"
 
     text = (
         f"ID БМа: {bm_id}\n"
+        f"Дата покупки: {purchase_date}\n"
+        f"Цена: {price}\n"
         f"Статус: {status}\n"
         f"Для кого: {for_whom}\n"
         f"Кто взял: {who_took}\n"
@@ -1947,10 +1985,19 @@ def confirm_bm_issue(chat_id, user_id, username):
             sheet = get_sheet(SHEET_BMS)
             row = sheet.row_values(row_index)
 
-            if len(row) < 6:
-                row = row + [''] * (6 - len(row))
+            if len(row) < 8:
+                row = row + [''] * (8 - len(row))
 
-            status = str(row[1]).strip().lower()
+            # A id БМа
+            # B дата покупки
+            # C цена
+            # D статус
+            # E для кого
+            # F кто взял
+            # G дата выдачи
+            # H данные
+
+            status = str(row[3]).strip().lower()
 
             if status == "taken":
                 clear_state(user_id)
@@ -1967,12 +2014,16 @@ def confirm_bm_issue(chat_id, user_id, username):
             who_took_text = f"@{username}" if username else "без username"
 
             sheet.update(
-                f"B{row_index}:E{row_index}",
-                [["taken", state["bm_for_whom"], who_took_text, today]]
+                f"D{row_index}:G{row_index}",
+                [[
+                    "taken",
+                    state["bm_for_whom"],
+                    who_took_text,
+                    today
+                ]]
             )
 
-            data_text = row[5] if len(row) > 5 else ""
-            invalidate_stats_cache()
+            data_text = row[7] if len(row) > 7 else ""
             clear_state(user_id)
 
         tg_send_message(
@@ -1980,7 +2031,8 @@ def confirm_bm_issue(chat_id, user_id, username):
             f"Готово ✅\n\n"
             f"БМ выдан.\n"
             f"ID БМа: {bm_id}\n"
-            f"Для кого: {state['bm_for_whom']}"
+            f"Для кого: {state['bm_for_whom']}\n"
+            f"Кто взял в боте: {who_took_text}"
         )
 
         if data_text:
@@ -1991,7 +2043,7 @@ def confirm_bm_issue(chat_id, user_id, username):
         send_bms_menu(chat_id, "Выбери следующее действие:")
 
     except Exception as e:
-        logging.error(f"confirm_bm_issue error: {e}")
+        logging.exception("confirm_bm_issue crashed")
         tg_send_message(chat_id, "Ошибка выдачи БМа. Попробуй ещё раз.")
         send_bms_menu(chat_id, "Меню БМов:")
 
@@ -2413,18 +2465,22 @@ def backup_tables():
             accounts = main_spreadsheet.worksheet(SHEET_ACCOUNTS)
             kings = main_spreadsheet.worksheet(SHEET_KINGS)
             issues = main_spreadsheet.worksheet(SHEET_ISSUES)
+            bms = main_spreadsheet.worksheet(SHEET_BMS)
 
             backup_accounts = backup_spreadsheet.worksheet("backup_accounts")
             backup_kings = backup_spreadsheet.worksheet("backup_kings")
             backup_issues = backup_spreadsheet.worksheet("backup_issues")
+            backup_bms = backup_spreadsheet.worksheet("backup_bms")
 
             accounts_data = accounts.get_all_values()
             kings_data = kings.get_all_values()
             issues_data = issues.get_all_values()
+            bms_data = bms.get_all_values()
 
             backup_accounts.clear()
             backup_kings.clear()
             backup_issues.clear()
+            backup_bms.clear()
 
             if accounts_data:
                 backup_accounts.append_rows(accounts_data)
@@ -2434,6 +2490,9 @@ def backup_tables():
 
             if issues_data:
                 backup_issues.append_rows(issues_data)
+
+            if bms_data:
+                backup_bms.append_rows(bms_data)
 
             last_backup_date = datetime.now(MOSCOW_TZ).date()
 
@@ -2575,14 +2634,12 @@ def handle_photo_message(msg):
 def handle_message(msg):
     try:
         cleanup_states()
-
         touch_request_heartbeat()
 
         chat_id = msg["chat"]["id"]
         user_id = msg["from"]["id"]
 
         now = time.time()
-
         last = last_user_action.get(user_id, 0)
         if now - last < ACTION_COOLDOWN:
             return
@@ -2600,41 +2657,7 @@ def handle_message(msg):
 
         state = get_state(user_id)
 
-        if state.get("mode") == "awaiting_issue_currency":
-            currencies = get_available_currencies(
-                state["limit"],
-                state["threshold"],
-                state["gmt"]
-            )
-
-            if not currencies:
-                clear_state(user_id)
-                send_accounts_menu(chat_id, "Подходящих свободных личек не найдено.")
-                return
-
-            if text not in currencies:
-                send_currency_options(chat_id, currencies)
-                return
-
-            state["mode"] = "searching_account"
-            state["currency"] = text
-            set_state(user_id, state)
-
-            found = find_matching_free_account(
-                state["limit"],
-                state["threshold"],
-                state["gmt"],
-                state["currency"]
-            )
-
-            if not found:
-                clear_state(user_id)
-                send_accounts_menu(chat_id, "Подходящих свободных личек не найдено.")
-                return
-
-            show_found_account(chat_id, user_id, found)
-            return
-
+        # ========= БАЗОВЫЕ КОМАНДЫ =========
         if text in ["/start", "/menu"]:
             clear_state(user_id)
             send_main_menu(chat_id, user_id=user_id)
@@ -2658,12 +2681,13 @@ def handle_message(msg):
         if text == "/ping":
             tg_send_message(chat_id, "бот работает")
             return
-            
+
         if text == MENU_CANCEL:
             clear_state(user_id)
             send_main_menu(chat_id, "Действие отменено.", user_id=user_id)
             return
 
+        # ========= ГЛАВНОЕ МЕНЮ =========
         if text == MENU_STATS:
             stats_text = build_stats_text()
             tg_send_message(chat_id, stats_text)
@@ -2690,6 +2714,27 @@ def handle_message(msg):
             send_main_menu(chat_id, user_id=user_id)
             return
 
+        if text == MENU_ACCOUNTS:
+            clear_state(user_id)
+            send_accounts_menu(chat_id)
+            return
+
+        if text == MENU_KINGS:
+            clear_state(user_id)
+            send_kings_menu(chat_id)
+            return
+
+        if text == MENU_BMS:
+            clear_state(user_id)
+            send_bms_menu(chat_id)
+            return
+
+        if text == BTN_BACK_TO_MENU:
+            clear_state(user_id)
+            send_main_menu(chat_id, user_id=user_id)
+            return
+
+        # ========= ADMIN =========
         if text == ADMIN_BACKUP:
             if not is_admin(user_id):
                 tg_send_message(chat_id, "У вас нет доступа.")
@@ -2750,15 +2795,12 @@ def handle_message(msg):
             return
 
         if text == BTN_OCR_REJECT:
-            state = get_state(user_id)
             if state.get("mode") == "awaiting_ocr_confirm":
                 clear_state(user_id)
                 send_admin_menu(chat_id, "Импорт из скрина отменён.")
                 return
 
         if text == BTN_OCR_CONFIRM:
-            state = get_state(user_id)
-
             if state.get("mode") != "awaiting_ocr_confirm":
                 send_admin_menu(chat_id, "Сначала начни импорт заново.")
                 return
@@ -2772,102 +2814,28 @@ def handle_message(msg):
 
             clear_state(user_id)
             tg_send_message(chat_id, result_text)
-
-            if is_admin(user_id):
-                send_admin_menu(chat_id, "Выбери следующее действие:")
-            else:
-                send_main_menu(chat_id, "Выбери следующее действие:", user_id=user_id)
+            send_admin_menu(chat_id, "Выбери следующее действие:")
             return
 
-        if text == BTN_KING_CONFIRM:
-            confirm_king_issue(chat_id, user_id, username)
-            return
-
-        if text == BTN_KING_NEXT:
-            state = get_state(user_id)
-
-            if not state or not state.get("king_geo"):
-                send_kings_menu(chat_id, "Начни заново.")
-                return
-
-            found = find_free_king_by_geo(
-                state["king_geo"],
-                exclude_row=state.get("king_row")
-            )
-
-            if not found:
-                clear_state(user_id)
-                send_kings_menu(chat_id, "Свободных кингов с таким GEO больше нет.")
-                return
-
-            show_found_king(chat_id, user_id, found)
-            return
-
-        if text == MENU_ACCOUNTS:
-            clear_state(user_id)
-            send_accounts_menu(chat_id)
-            return
-
-        if text == MENU_BMS:
-            clear_state(user_id)
-            send_bms_menu(chat_id)
-            return
-
-        if text == MENU_KINGS:
-            clear_state(user_id)
-            send_kings_menu(chat_id)
-            return
-
-        if text == SUBMENU_SEARCH_KING:
-            set_state(user_id, {"mode": "awaiting_search_king_name"})
-            tg_send_message(chat_id, "Впиши название кинга.")
-            return
-
-        if text == SUBMENU_SEARCH_BM:
-            set_state(user_id, {"mode": "awaiting_search_bm"})
-            tg_send_message(chat_id, "Впиши ID БМа для поиска.")
-            return
-
-        if text == SUBMENU_FREE_KINGS:
-            send_free_kings(chat_id)
-            send_kings_menu(chat_id, "Выбери следующее действие:")
-            return
-
-        if text == SUBMENU_GET_KINGS:
-            clear_state(user_id)
-            set_state(user_id, {"mode": "awaiting_king_geo"})
-            send_king_geo_options(chat_id)
-            return
-
-        if text == SUBMENU_GET_BM:
-            clear_state(user_id)
-            set_state(user_id, {"mode": "awaiting_bm_department"})
-            send_department_menu(chat_id, "Выбери для кого БМ:")
-            return
-
-        if text == SUBMENU_RETURN_KING:
-            set_state(user_id, {"mode": "awaiting_return_king_name"})
-            tg_send_message(chat_id, "Впиши название кинга, который нужно перевести в ban.")
-            return
-
-        if text == BTN_BACK_TO_MENU:
-            clear_state(user_id)
-            send_main_menu(chat_id, user_id=user_id)
-            return
-
+        # ========= ЛИЧКИ =========
         if text == SUBMENU_FREE:
             clear_state(user_id)
             send_free_accounts(chat_id)
             send_accounts_menu(chat_id, "Выбери следующее действие:")
             return
 
-        if text == SUBMENU_FREE_BMS:
-            free_count = count_free_bms()
-            tg_send_message(chat_id, f"Свободных БМов: {free_count}")
-            send_bms_menu(chat_id, "Выбери следующее действие:")
+        if text == SUBMENU_SEARCH:
+            set_state(user_id, {"mode": "awaiting_search_account"})
+            tg_send_message(chat_id, "Впиши номер лички для поиска.")
+            return
+
+        if text == SUBMENU_RETURN:
+            set_state(user_id, {"mode": "awaiting_return_account"})
+            tg_send_message(chat_id, "Впиши номер лички, которую нужно отправить в ban.")
             return
 
         if text == SUBMENU_GET:
+            clear_state(user_id)
             set_state(user_id, {"mode": "awaiting_issue_department"})
             send_department_menu(chat_id, "Выбери для кого личка:")
             return
@@ -2878,36 +2846,8 @@ def handle_message(msg):
             send_department_menu(chat_id, "Выбери для кого быстро выдать личку:")
             return
 
-        if text == SUBMENU_RETURN:
-            set_state(user_id, {"mode": "awaiting_return_account"})
-            tg_send_message(chat_id, "Впиши номер лички, которую нужно отправить в ban.")
-            return
-
-        if text == SUBMENU_SEARCH:
-            set_state(user_id, {"mode": "awaiting_search_account"})
-            tg_send_message(chat_id, "Впиши номер лички для поиска.")
-            return
-
         if text == BTN_ISSUE_CONFIRM:
             confirm_issue(chat_id, user_id, username)
-            return
-
-        if text == BTN_BM_CONFIRM:
-            confirm_bm_issue(chat_id, user_id, username)
-            return
-
-        if text == BTN_KING_BAN_CONFIRM:
-            state = get_state(user_id)
-
-            if state.get("mode") != "awaiting_return_king_confirm":
-                send_kings_menu(chat_id, "Сначала выбери действие заново.")
-                return
-
-            king_name = state.get("return_king_name", "")
-            ok, message = return_king_to_ban(king_name)
-
-            clear_state(user_id)
-            send_kings_menu(chat_id, message)
             return
 
         if text == BTN_ISSUE_NEXT:
@@ -2928,39 +2868,20 @@ def handle_message(msg):
                 show_found_account(chat_id, user_id, found)
                 return
 
-            found = find_matching_free_account(
-                state["limit"],
-                state["threshold"],
-                state["gmt"],
-                state["currency"],
-                exclude_account=state.get("found_account")
-            )
+            found_account_number = state.get("found_account")
+            if not found_account_number:
+                clear_state(user_id)
+                send_accounts_menu(chat_id, "Начни выдачу заново.")
+                return
+
+            found = find_oldest_free_account(exclude_account=found_account_number)
 
             if not found:
                 clear_state(user_id)
-                send_accounts_menu(chat_id, "Подходящих свободных личек больше нет.")
+                send_accounts_menu(chat_id, "Свободных личек больше нет.")
                 return
 
             show_found_account(chat_id, user_id, found)
-            return
-
-        if text == BTN_BM_NEXT:
-            state = get_state(user_id)
-
-            if not state:
-                send_bms_menu(chat_id, "Начни заново.")
-                return
-
-            found = find_free_bm(
-                exclude_bm_id=state.get("found_bm_id")
-            )
-
-            if not found:
-                clear_state(user_id)
-                send_bms_menu(chat_id, "Свободных БМов больше нет.")
-                return
-
-            show_found_bm(chat_id, user_id, found)
             return
 
         if text == BTN_RETURN_CONFIRM:
@@ -2974,11 +2895,105 @@ def handle_message(msg):
             send_accounts_menu(chat_id, message)
             return
 
+        # ========= КИНГИ =========
+        if text == SUBMENU_FREE_KINGS:
+            send_free_kings(chat_id)
+            send_kings_menu(chat_id, "Выбери следующее действие:")
+            return
+
+        if text == SUBMENU_SEARCH_KING:
+            set_state(user_id, {"mode": "awaiting_search_king_name"})
+            tg_send_message(chat_id, "Впиши название кинга.")
+            return
+
+        if text == SUBMENU_RETURN_KING:
+            set_state(user_id, {"mode": "awaiting_return_king_name"})
+            tg_send_message(chat_id, "Впиши название кинга, который нужно перевести в ban.")
+            return
+
+        if text == SUBMENU_GET_KINGS:
+            clear_state(user_id)
+            set_state(user_id, {"mode": "awaiting_king_geo"})
+            send_king_geo_options(chat_id)
+            return
+
+        if text == BTN_KING_CONFIRM:
+            confirm_king_issue(chat_id, user_id, username)
+            return
+
+        if text == BTN_KING_NEXT:
+            if not state or not state.get("king_geo"):
+                send_kings_menu(chat_id, "Начни заново.")
+                return
+
+            found = find_free_king_by_geo(
+                state["king_geo"],
+                exclude_row=state.get("king_row")
+            )
+
+            if not found:
+                clear_state(user_id)
+                send_kings_menu(chat_id, "Свободных кингов с таким GEO больше нет.")
+                return
+
+            show_found_king(chat_id, user_id, found)
+            return
+
+        if text == BTN_KING_BAN_CONFIRM:
+            if state.get("mode") != "awaiting_return_king_confirm":
+                send_kings_menu(chat_id, "Сначала выбери действие заново.")
+                return
+
+            king_name = state.get("return_king_name", "")
+            ok, message = return_king_to_ban(king_name)
+
+            clear_state(user_id)
+            send_kings_menu(chat_id, message)
+            return
+
+        # ========= БМы =========
+        if text == SUBMENU_FREE_BMS:
+            free_count = count_free_bms()
+            tg_send_message(chat_id, f"Свободных БМов: {free_count}")
+            send_bms_menu(chat_id, "Выбери следующее действие:")
+            return
+
+        if text == SUBMENU_SEARCH_BM:
+            set_state(user_id, {"mode": "awaiting_search_bm"})
+            tg_send_message(chat_id, "Впиши ID БМа для поиска.")
+            return
+
+        if text == SUBMENU_GET_BM:
+            clear_state(user_id)
+            set_state(user_id, {"mode": "awaiting_bm_department"})
+            send_department_menu(chat_id, "Выбери для кого БМ:")
+            return
+
+        if text == BTN_BM_CONFIRM:
+            confirm_bm_issue(chat_id, user_id, username)
+            return
+
+        if text == BTN_BM_NEXT:
+            if not state:
+                send_bms_menu(chat_id, "Начни заново.")
+                return
+
+            found = find_free_bm(exclude_bm_id=state.get("found_bm_id"))
+
+            if not found:
+                clear_state(user_id)
+                send_bms_menu(chat_id, "Свободных БМов больше нет.")
+                return
+
+            show_found_bm(chat_id, user_id, found)
+            return
+
+        # ========= СОСТОЯНИЯ: ДОБАВЛЕНИЕ =========
         if state.get("mode") == "awaiting_bulk_add":
             result = add_accounts_from_text(text)
             clear_state(user_id)
             tg_send_message(chat_id, result)
-            
+
             if is_admin(user_id):
                 send_admin_menu(chat_id, "Выбери следующее действие:")
             else:
@@ -2996,94 +3011,23 @@ def handle_message(msg):
                 send_main_menu(chat_id, "Готово. Выбери следующее действие:", user_id=user_id)
             return
 
-        if state.get("mode") == "awaiting_king_geo":
-            geos = get_free_king_geos()
+        # ========= СОСТОЯНИЯ: ПОИСК / ВОЗВРАТ ЛИЧЕК =========
+        if state.get("mode") == "awaiting_search_account":
+            account_number = text.strip()
 
-            if text not in geos:
-                send_king_geo_options(chat_id)
+            if not account_number:
+                tg_send_message(chat_id, "Впиши номер лички.")
                 return
 
-            set_state(user_id, {
-                "mode": "awaiting_king_department",
-                "king_geo": text
-            })
-
-            send_department_menu(chat_id, "Выбери для кого кинг:")
-            return
-            
-        if state.get("mode") == "awaiting_king_department":
-            if text not in [DEPT_CRYPTO, DEPT_GAMBLA]:
-                send_department_menu(chat_id, "Нужно выбрать отдел кнопкой:")
-                return
-
-            state["mode"] = "awaiting_king_for_whom"
-            state["king_department"] = text
-            set_state(user_id, state)
-
-            send_person_menu(chat_id, text)
-            return
-
-        if state.get("mode") == "awaiting_king_for_whom":
-            allowed_names = []
-
-            if state.get("king_department") == DEPT_CRYPTO:
-                allowed_names = CRYPTO_NAMES
-            elif state.get("king_department") == DEPT_GAMBLA:
-                allowed_names = GAMBLA_NAMES
-
-            if text not in allowed_names:
-                send_person_menu(chat_id, state.get("king_department"))
-                return
-
-            state["mode"] = "awaiting_king_name"
-            state["king_for_whom"] = text
-            set_state(user_id, state)
-
-            tg_send_message(chat_id, "Какое название будет у кинга?")
-            return
-        
-        if state.get("mode") == "awaiting_search_king_name":
-            king_name = text.strip()
-
-            if not king_name:
-                tg_send_message(chat_id, "Впиши название кинга.")
-                return
-
-            result = build_king_search_text(king_name)
-
+            result = build_account_search_text(account_number)
             clear_state(user_id)
 
             if not result:
-                send_kings_menu(chat_id, "Кинг не найден.")
+                send_accounts_menu(chat_id, "Личка не найдена.")
                 return
 
             tg_send_message(chat_id, result)
-            send_kings_menu(chat_id, "Выбери следующее действие:")
-            return
-
-        if state.get("mode") == "awaiting_king_name":
-            king_name = text.strip()
-
-            if not king_name:
-                tg_send_message(chat_id, "Напиши название кинга.")
-                return
-
-            if king_name_exists(king_name):
-                tg_send_message(chat_id, f"Название '{king_name}' уже существует. Напиши другое.")
-                return
-
-            state["mode"] = "searching_king"
-            state["king_name"] = king_name
-            set_state(user_id, state)
-
-            found = find_free_king_by_geo(state["king_geo"])
-
-            if not found:
-                clear_state(user_id)
-                send_kings_menu(chat_id, "Свободных кингов с таким GEO нет.")
-                return
-
-            show_found_king(chat_id, user_id, found)
+            send_accounts_menu(chat_id, "Выбери следующее действие:")
             return
 
         if state.get("mode") == "awaiting_return_account":
@@ -3115,155 +3059,13 @@ def handle_message(msg):
             )
             return
 
-        if state.get("mode") == "awaiting_search_account":
-            account_number = text.strip()
-
-            if not account_number:
-                tg_send_message(chat_id, "Впиши номер лички.")
-                return
-
-            result = build_account_search_text(account_number)
-            clear_state(user_id)
-
-            if not result:
-                send_accounts_menu(chat_id, "Личка не найдена.")
-                return
-
-            tg_send_message(chat_id, result)
-            send_accounts_menu(chat_id, "Выбери следующее действие:")
-            return
-
-        if state.get("mode") == "awaiting_bm_department":
-            if text not in [DEPT_CRYPTO, DEPT_GAMBLA]:
-                send_department_menu(chat_id, "Нужно выбрать отдел кнопкой:")
-                return
-
-            state["mode"] = "awaiting_bm_for_whom"
-            state["bm_department"] = text
-            set_state(user_id, state)
-
-            send_person_menu(chat_id, text)
-            return
-
-
-        if state.get("mode") == "awaiting_bm_for_whom":
-            allowed_names = []
-
-            if state.get("bm_department") == DEPT_CRYPTO:
-                allowed_names = CRYPTO_NAMES
-            elif state.get("bm_department") == DEPT_GAMBLA:
-                allowed_names = GAMBLA_NAMES
-
-            if text not in allowed_names:
-                send_person_menu(chat_id, state.get("bm_department"))
-                return
-
-            state["bm_for_whom"] = text
-            set_state(user_id, state)
-
-            found = find_free_bm()
-
-            if not found:
-                clear_state(user_id)
-                send_bms_menu(chat_id, "Свободных БМов сейчас нет.")
-                return
-
-            show_found_bm(chat_id, user_id, found)
-            return
-
-
-        if state.get("mode") == "awaiting_search_bm":
-            bm_id = text.strip()
-
-            if not bm_id:
-                tg_send_message(chat_id, "Впиши ID БМа.")
-                return
-
-            result = build_bm_search_text(bm_id)
-            clear_state(user_id)
-
-            if not result:
-                send_bms_menu(chat_id, "БМ не найден.")
-                return
-
-            tg_send_message(chat_id, result)
-            send_bms_menu(chat_id, "Выбери следующее действие:")
-            return
-
-    if state.get("mode") == "awaiting_bm_department":
-        if text not in [DEPT_CRYPTO, DEPT_GAMBLA]:
-            send_department_menu(chat_id, "Нужно выбрать отдел кнопкой:")
-            return
-
-        state["mode"] = "awaiting_bm_for_whom"
-        state["bm_department"] = text
-        set_state(user_id, state)
-
-        send_person_menu(chat_id, text)
-        return
-
-
-    if state.get("mode") == "awaiting_bm_for_whom":
-        allowed_names = []
-
-        if state.get("bm_department") == DEPT_CRYPTO:
-            allowed_names = CRYPTO_NAMES
-        elif state.get("bm_department") == DEPT_GAMBLA:
-            allowed_names = GAMBLA_NAMES
-
-        if text not in allowed_names:
-            send_person_menu(chat_id, state.get("bm_department"))
-            return
-
-        state["bm_for_whom"] = text
-        set_state(user_id, state)
-
-        found = find_free_bm()
-
-        if not found:
-            clear_state(user_id)
-            send_bms_menu(chat_id, "Свободных БМов сейчас нет.")
-            return
-
-        show_found_bm(chat_id, user_id, found)
-        return
-
-
-    if state.get("mode") == "awaiting_search_bm":
-        bm_id = text.strip()
-
-        if not bm_id:
-            tg_send_message(chat_id, "Впиши ID БМа.")
-            return
-
-        result = build_bm_search_text(bm_id)
-        clear_state(user_id)
-
-        if not result:
-            send_bms_menu(chat_id, "БМ не найден.")
-            return
-
-        tg_send_message(chat_id, result)
-        send_bms_menu(chat_id, "Выбери следующее действие:")
-        return
+        # ========= СОСТОЯНИЯ: ВЫДАЧА ЛИЧЕК =========
         if state.get("mode") == "awaiting_issue_department":
             if text not in [DEPT_CRYPTO, DEPT_GAMBLA]:
                 send_department_menu(chat_id, "Нужно выбрать отдел кнопкой:")
                 return
 
             state["mode"] = "awaiting_issue_for_whom"
-            state["issue_department"] = text
-            set_state(user_id, state)
-
-            send_person_menu(chat_id, text)
-            return
-
-        if state.get("mode") == "awaiting_quick_issue_department":
-            if text not in [DEPT_CRYPTO, DEPT_GAMBLA]:
-                send_department_menu(chat_id, "Нужно выбрать отдел кнопкой:")
-                return
-
-            state["mode"] = "awaiting_quick_issue_for_whom"
             state["issue_department"] = text
             set_state(user_id, state)
 
@@ -3336,6 +3138,18 @@ def handle_message(msg):
             show_found_account(chat_id, user_id, found_data)
             return
 
+        if state.get("mode") == "awaiting_quick_issue_department":
+            if text not in [DEPT_CRYPTO, DEPT_GAMBLA]:
+                send_department_menu(chat_id, "Нужно выбрать отдел кнопкой:")
+                return
+
+            state["mode"] = "awaiting_quick_issue_for_whom"
+            state["issue_department"] = text
+            set_state(user_id, state)
+
+            send_person_menu(chat_id, text)
+            return
+
         if state.get("mode") == "awaiting_quick_issue_for_whom":
             allowed_names = []
 
@@ -3360,6 +3174,96 @@ def handle_message(msg):
                 return
 
             show_found_account(chat_id, user_id, found)
+            return
+
+        # ========= СОСТОЯНИЯ: КИНГИ =========
+        if state.get("mode") == "awaiting_king_geo":
+            geos = get_free_king_geos()
+
+            if text not in geos:
+                send_king_geo_options(chat_id)
+                return
+
+            set_state(user_id, {
+                "mode": "awaiting_king_department",
+                "king_geo": text
+            })
+
+            send_department_menu(chat_id, "Выбери для кого кинг:")
+            return
+
+        if state.get("mode") == "awaiting_king_department":
+            if text not in [DEPT_CRYPTO, DEPT_GAMBLA]:
+                send_department_menu(chat_id, "Нужно выбрать отдел кнопкой:")
+                return
+
+            state["mode"] = "awaiting_king_for_whom"
+            state["king_department"] = text
+            set_state(user_id, state)
+
+            send_person_menu(chat_id, text)
+            return
+
+        if state.get("mode") == "awaiting_king_for_whom":
+            allowed_names = []
+
+            if state.get("king_department") == DEPT_CRYPTO:
+                allowed_names = CRYPTO_NAMES
+            elif state.get("king_department") == DEPT_GAMBLA:
+                allowed_names = GAMBLA_NAMES
+
+            if text not in allowed_names:
+                send_person_menu(chat_id, state.get("king_department"))
+                return
+
+            state["mode"] = "awaiting_king_name"
+            state["king_for_whom"] = text
+            set_state(user_id, state)
+
+            tg_send_message(chat_id, "Какое название будет у кинга?")
+            return
+
+        if state.get("mode") == "awaiting_king_name":
+            king_name = text.strip()
+
+            if not king_name:
+                tg_send_message(chat_id, "Напиши название кинга.")
+                return
+
+            if king_name_exists(king_name):
+                tg_send_message(chat_id, f"Название '{king_name}' уже существует. Напиши другое.")
+                return
+
+            state["mode"] = "searching_king"
+            state["king_name"] = king_name
+            set_state(user_id, state)
+
+            found = find_free_king_by_geo(state["king_geo"])
+
+            if not found:
+                clear_state(user_id)
+                send_kings_menu(chat_id, "Свободных кингов с таким GEO нет.")
+                return
+
+            show_found_king(chat_id, user_id, found)
+            return
+
+        if state.get("mode") == "awaiting_search_king_name":
+            king_name = text.strip()
+
+            if not king_name:
+                tg_send_message(chat_id, "Впиши название кинга.")
+                return
+
+            result = build_king_search_text(king_name)
+            clear_state(user_id)
+
+            if not result:
+                send_kings_menu(chat_id, "Кинг не найден.")
+                return
+
+            tg_send_message(chat_id, result)
+            send_kings_menu(chat_id, "Выбери следующее действие:")
             return
 
         if state.get("mode") == "awaiting_return_king_name":
@@ -3390,6 +3294,62 @@ def handle_message(msg):
                 f"Внимание: кинг '{king_name}' будет перемещён в ban.\nПодтвердить?",
                 keyboard
             )
+            return
+
+        # ========= СОСТОЯНИЯ: БМы =========
+        if state.get("mode") == "awaiting_bm_department":
+            if text not in [DEPT_CRYPTO, DEPT_GAMBLA]:
+                send_department_menu(chat_id, "Нужно выбрать отдел кнопкой:")
+                return
+
+            state["mode"] = "awaiting_bm_for_whom"
+            state["bm_department"] = text
+            set_state(user_id, state)
+
+            send_person_menu(chat_id, text)
+            return
+
+        if state.get("mode") == "awaiting_bm_for_whom":
+            allowed_names = []
+
+            if state.get("bm_department") == DEPT_CRYPTO:
+                allowed_names = CRYPTO_NAMES
+            elif state.get("bm_department") == DEPT_GAMBLA:
+                allowed_names = GAMBLA_NAMES
+
+            if text not in allowed_names:
+                send_person_menu(chat_id, state.get("bm_department"))
+                return
+
+            state["bm_for_whom"] = text
+            set_state(user_id, state)
+
+            found = find_free_bm()
+
+            if not found:
+                clear_state(user_id)
+                send_bms_menu(chat_id, "Свободных БМов сейчас нет.")
+                return
+
+            show_found_bm(chat_id, user_id, found)
+            return
+
+        if state.get("mode") == "awaiting_search_bm":
+            bm_id = text.strip()
+
+            if not bm_id:
+                tg_send_message(chat_id, "Впиши ID БМа.")
+                return
+
+            result = build_bm_search_text(bm_id)
+            clear_state(user_id)
+
+            if not result:
+                send_bms_menu(chat_id, "БМ не найден.")
+                return
+
+            tg_send_message(chat_id, result)
+            send_bms_menu(chat_id, "Выбери следующее действие:")
             return
 
         send_main_menu(chat_id, "Не понял команду. Выбери кнопку из меню:", user_id=user_id)
