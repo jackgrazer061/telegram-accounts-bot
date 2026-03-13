@@ -661,6 +661,46 @@ def normalize_gmt_value(raw_value):
 
     return None
 
+def convert_to_usd(amount_raw, currency_code):
+    try:
+        if amount_raw is None:
+            return None
+
+        value = float(str(amount_raw).replace(",", ""))
+
+        currency_code = str(currency_code or "").upper().strip()
+
+        # если уже USD — ничего не делаем
+        if currency_code == "USD":
+            return round(value, 2)
+
+        # запрос курса
+        url = f"{EXCHANGE_API_BASE}/latest"
+        resp = requests.get(
+            url,
+            params={
+                "base": currency_code,
+                "symbols": "USD"
+            },
+            timeout=20
+        )
+
+        resp.raise_for_status()
+        data = resp.json()
+
+        rate = data.get("rates", {}).get("USD")
+
+        if not rate:
+            return value
+
+        usd_value = value * float(rate)
+
+        return round(usd_value, 2)
+
+    except Exception as e:
+        logging.warning(f"Currency convert error: {e}")
+        return None
+
 def normalize_currency_value(raw_value):
     if raw_value is None:
         return None
