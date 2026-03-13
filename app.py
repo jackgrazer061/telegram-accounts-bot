@@ -642,18 +642,27 @@ def normalize_currency_value(raw_value):
     if raw_value is None:
         return None
 
-    text = str(raw_value).strip().upper()
-    text = re.sub(r"\s+", " ", text)
+    text = str(raw_value).upper().strip()
 
-    # 1) Форматы типа TRY-TS / EUR-TS / MXN-TS
-    match = re.search(r'\b([A-Z]{3})-[A-Z]{2,}\b', text)
-    if match:
-        return match.group(1)
+    # нормализуем мусор от OCR
+    text = text.replace("—", "-").replace("–", "-").replace("_", "-")
+    text = re.sub(r"\s+", "", text)
 
-    # 2) Обычный код валюты USD / EUR / TRY
-    match = re.search(r'\b([A-Z]{3})\b', text)
-    if match:
-        return match.group(1)
+    allowed = {
+        "USD", "EUR", "TRY", "GBP", "AED", "JPY", "CAD", "AUD",
+        "BRL", "MXN", "SGD", "HKD", "INR", "THB", "IDR", "MYR",
+        "PEN"
+    }
+
+    # 1) TRY-TS / EUR-TS / MXN-TS / USDTS
+    for code in allowed:
+        if text.startswith(code):
+            return code
+
+    # 2) ищем код в любом месте строки
+    for code in allowed:
+        if code in text:
+            return code
 
     return None
 
@@ -665,18 +674,25 @@ def extract_currency_from_lines(lines):
         "PEN"
     }
 
-    # 1) сначала ищем строку, где есть Currency
-    for line in lines:
+    # 1) сначала пробуем строки рядом с заголовком Currency
+    for i, line in enumerate(lines):
         if re.search(r'Currency', line, re.IGNORECASE):
-            curr = normalize_currency_value(line)
-            if curr in allowed:
-                return curr
+            for j in range(i, min(i + 6, len(lines))):
+                curr = normalize_currency_value(lines[j])
+                if curr in allowed:
+                    return curr
 
-    # 2) потом ищем значения типа TRY-TS / EUR-TS / MXN-TS в любых строках
+    # 2) потом ищем по всем строкам
     for line in lines:
         curr = normalize_currency_value(line)
         if curr in allowed:
             return curr
+
+    # 3) потом ищем даже внутри "склеенного" текста
+    full_text = " ".join(lines)
+    curr = normalize_currency_value(full_text)
+    if curr in allowed:
+        return curr
 
     return None
 
@@ -849,6 +865,8 @@ def parse_smit_ocr_text(parsed_text):
             )
     except Exception as e:
         logging.warning(f"Currency conversion failed: {e}")
+
+    currency_value = extract_currency_from_lines(lines)
         
     return {
         "account_number": account_number,
@@ -2883,6 +2901,14 @@ def handle_photo_message(msg):
 
         if not currency_value:
             tg_send_message(chat_id, "Не удалось распознать Currency на скриншоте.")
+            return
+
+        if not currency_value:
+            tg_send_message(
+                chat_id,
+                "Не удалось распознать Currency на скриншоте.\n\n"
+                f"OCR увидел так:\n{parsed.get('ocr_text', '')[:1500]}"
+            )
             return
 
         set_state(user_id, {
