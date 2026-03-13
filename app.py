@@ -3240,7 +3240,10 @@ def handle_photo_message(msg):
         state = get_state(user_id)
 
         if state.get("mode") != "awaiting_smit_screenshot":
-            tg_send_message(chat_id, "Я сейчас не жду скриншот. Сначала зайди в Admin → Импорт из скрина.")
+            tg_send_message(
+                chat_id,
+                "Я сейчас не жду скриншот. Сначала зайди в Admin → Импорт из скрина."
+            )
             return
 
         photo_list = msg.get("photo", [])
@@ -3312,7 +3315,10 @@ def handle_photo_message(msg):
             )
 
         if not prepared_rows:
-            tg_send_message(chat_id, "Не удалось корректно разобрать строки таблицы на скриншоте.")
+            tg_send_message(
+                chat_id,
+                "Не удалось корректно разобрать строки таблицы на скриншоте."
+            )
             return
 
         set_state(user_id, {
