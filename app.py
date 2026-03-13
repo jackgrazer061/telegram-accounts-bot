@@ -22,6 +22,7 @@ SPREADSHEET_ID = os.environ.get("SPREADSHEET_ID", "")
 SERVICE_ACCOUNT_JSON = os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON", "")
 BACKUP_SPREADSHEET_ID = os.environ.get("BACKUP_SPREADSHEET_ID", "")
 OCR_SPACE_API_KEY = os.environ.get("OCR_SPACE_API_KEY", "")
+EXCHANGE_API_BASE = os.environ.get("EXCHANGE_API_BASE", "https://api.frankfurter.dev/v1")
 
 if not BOT_TOKEN:
     raise RuntimeError("BOT_TOKEN не задан")
@@ -637,6 +638,83 @@ def normalize_gmt_value(raw_value):
 
     return None
 
+def normalize_currency_value(raw_value):
+    if raw_value is None:
+        return None
+
+    text = str(raw_value).strip().upper()
+
+    # Ищем стандартный 3-буквенный код валюты
+    match = re.search(r'\b([A-Z]{3})\b', text)
+    if match:
+        return match.group(1)
+
+    return None
+
+
+def extract_currency_from_lines(lines):
+    # сначала ищем строку, где явно есть Currency
+    for line in lines:
+        if re.search(r'Currency', line, re.IGNORECASE):
+            curr = normalize_currency_value(line)
+            if curr:
+                return curr
+
+    # запасной вариант: ищем любые валютные коды
+    allowed = {
+        "USD", "EUR", "TRY", "GBP", "AED", "JPY", "CAD", "AUD",
+        "BRL", "MXN", "SGD", "HKD", "INR", "THB", "IDR", "MYR",
+        "PEN"
+    }
+
+    for line in lines:
+        curr = normalize_currency_value(line)
+        if curr in allowed:
+            return curr
+
+    return None
+
+
+def get_fx_rate_to_usd(currency_code):
+    currency_code = str(currency_code or "").strip().upper()
+
+    if not currency_code:
+        raise RuntimeError("Не указана валюта для конвертации")
+
+    if currency_code == "USD":
+        return 1.0
+
+    url = f"{EXCHANGE_API_BASE}/latest"
+    resp = requests.get(
+        url,
+        params={
+            "base": currency_code,
+            "symbols": "USD"
+        },
+        timeout=20
+    )
+    resp.raise_for_status()
+
+    data = resp.json()
+    rates = data.get("rates", {})
+    rate = rates.get("USD")
+
+    if rate is None:
+        raise RuntimeError(f"Не удалось получить курс {currency_code} -> USD")
+
+    return float(rate)
+
+
+def convert_amount_to_usd(amount_value, currency_code):
+    if amount_value is None:
+        return None
+
+    currency_code = str(currency_code or "").strip().upper()
+    if not currency_code or currency_code == "USD":
+        return float(amount_value)
+
+    rate = get_fx_rate_to_usd(currency_code)
+    return round(float(amount_value) * rate, 2)
 
 def parse_smit_ocr_text(parsed_text):
     lines = [line.strip() for line in parsed_text.splitlines() if line.strip()]
@@ -648,6 +726,8 @@ def parse_smit_ocr_text(parsed_text):
     threshold_raw = None
     limit_raw = None
     gmt_raw = None
+    currency_value = extract_currency_from_lines(lines)
+    currency_value = None
 
     # =========================
     # ИЩЕМ НОМЕРА ЛИЧЕК
@@ -746,13 +826,34 @@ def parse_smit_ocr_text(parsed_text):
                 gmt_value = test_gmt
                 break
 
+    threshold_usd = None
+    limit_usd = None
+
+    try:
+        if currency_value and threshold_raw:
+            threshold_usd = convert_amount_to_usd(
+                float(str(threshold_raw).replace(",", ".")),
+                currency_value
+            )
+
+        if currency_value and limit_raw:
+            limit_usd = convert_amount_to_usd(
+                float(str(limit_raw).replace(",", ".")),
+                currency_value
+            )
+    except Exception as e:
+        logging.warning(f"Currency conversion failed: {e}")
+        
     return {
         "account_number": account_number,
         "account_candidates": unique_candidates,
         "limit_raw": limit_raw,
-        "limit_bucket": limit_bucket,
+        "limit_usd": limit_usd,
+        "limit_bucket": normalize_limit_to_bucket(limit_usd if limit_usd is not None else limit_raw) if (limit_usd is not None or limit_raw) else None,
         "threshold_raw": threshold_raw,
-        "threshold_bucket": threshold_bucket,
+        "threshold_usd": threshold_usd,
+        "threshold_bucket": normalize_threshold_to_bucket(threshold_usd if threshold_usd is not None else threshold_raw) if (threshold_usd is not None or threshold_raw) else None,
+        "currency_value": currency_value,
         "gmt_raw": gmt_raw,
         "gmt_value": gmt_value,
         "ocr_text": full_text
@@ -2754,6 +2855,9 @@ def handle_photo_message(msg):
         limit_bucket = parsed.get("limit_bucket")
         threshold_bucket = parsed.get("threshold_bucket")
         gmt_value = parsed.get("gmt_value")
+        currency_value = parsed.get("currency_value")
+        limit_usd = parsed.get("limit_usd")
+        threshold_usd = parsed.get("threshold_usd")
 
         if not account_number:
             tg_send_message(chat_id, "Не удалось найти номер лички на скриншоте.")
@@ -2769,6 +2873,10 @@ def handle_photo_message(msg):
 
         if not gmt_value:
             tg_send_message(chat_id, "Не удалось распознать GMT / Account Time Zone на скриншоте.")
+            return
+
+        if not currency_value:
+            tg_send_message(chat_id, "Не удалось распознать Currency на скриншоте.")
             return
 
         set_state(user_id, {
@@ -2789,8 +2897,9 @@ def handle_photo_message(msg):
             "Нашёл на скриншоте:\n\n"
             f"Личка: {account_number}\n"
             f"Найдено ID на скрине: {len(account_candidates)}\n"
-            f"Лимит: {parsed.get('limit_raw')} -> {limit_bucket}\n"
-            f"Трешхолд: {parsed.get('threshold_raw')} -> {threshold_bucket}\n"
+            f"Валюта: {currency_value or 'не найдена'}\n"
+            f"Лимит: {parsed.get('limit_raw')} -> {limit_usd if limit_usd is not None else parsed.get('limit_raw')} USD -> {limit_bucket}\n"
+            f"Трешхолд: {parsed.get('threshold_raw')} -> {threshold_usd if threshold_usd is not None else parsed.get('threshold_raw')} USD -> {threshold_bucket}\n"
             f"GMT: {parsed.get('gmt_raw')} -> {gmt_value}\n\n"
             "Подтвердить обновление?",
             keyboard
