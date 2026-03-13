@@ -1061,7 +1061,7 @@ def run_ocr_space(image_bytes):
     data = {
         "apikey": OCR_SPACE_API_KEY,
         "language": "eng",
-        "isOverlayRequired": "false",
+        "isOverlayRequired": "true",
         "OCREngine": "2",
         "scale": "true"
     }
@@ -1079,14 +1079,228 @@ def run_ocr_space(image_bytes):
     if not parsed_results:
         raise RuntimeError("OCR не вернул текст")
 
-    parsed_text = "\n".join(
-        item.get("ParsedText", "") for item in parsed_results if item.get("ParsedText")
-    ).strip()
+    return result
 
-    if not parsed_text:
-        raise RuntimeError("На скриншоте не удалось распознать текст")
+def _safe_float(text):
+    if text is None:
+        return None
 
-    return parsed_text
+    s = str(text).strip().replace(" ", "")
+    s = s.replace(",", "")
+
+    try:
+        return float(s)
+    except Exception:
+        return None
+
+
+def _extract_currency_code(text):
+    if not text:
+        return None
+
+    text = str(text).upper().strip()
+
+    match = re.search(r'\b([A-Z]{3})[-_ ]?TS\b', text)
+    if match:
+        return match.group(1)
+
+    match = re.search(r'\b([A-Z]{3})\b', text)
+    if match:
+        return match.group(1)
+
+    return None
+
+
+def _extract_gmt_from_timezone_text(text):
+    if not text:
+        return None
+
+    text = str(text).strip()
+
+    match = re.search(r'([+-]\d{1,2})', text)
+    if match:
+        return match.group(1).replace("+", "")
+
+    return None
+
+
+def parse_smit_ocr_table(result):
+    parsed_results = result.get("ParsedResults") or []
+    if not parsed_results:
+        raise RuntimeError("OCR не вернул ParsedResults")
+
+    overlay = parsed_results[0].get("TextOverlay") or {}
+    lines = overlay.get("Lines") or []
+
+    if not lines:
+        raise RuntimeError("OCR не вернул координаты текста")
+
+    words = []
+    for line in lines:
+        line_top = line.get("MinTop", 0)
+        line_height = line.get("MaxHeight", 0)
+
+        for w in line.get("Words", []):
+            text = str(w.get("WordText", "")).strip()
+            if not text:
+                continue
+
+            words.append({
+                "text": text,
+                "left": int(w.get("Left", 0)),
+                "top": int(w.get("Top", line_top)),
+                "height": int(w.get("Height", line_height)),
+                "width": int(w.get("Width", 0))
+            })
+
+    if not words:
+        raise RuntimeError("OCR не нашел слов на изображении")
+
+    # ---------- ищем заголовки колонок ----------
+    account_x = None
+    threshold_x = None
+    limit_x = None
+    currency_x = None
+    timezone_x = None
+
+    full_lines = []
+    for line in lines:
+        line_words = [str(w.get("WordText", "")).strip() for w in line.get("Words", []) if str(w.get("WordText", "")).strip()]
+        if not line_words:
+            continue
+
+        line_text = " ".join(line_words)
+        line_left = min(int(w.get("Left", 0)) for w in line.get("Words", []))
+        full_lines.append((line_text, line_left, line))
+
+    for line_text, _, line_obj in full_lines:
+        upper = line_text.upper()
+
+        if "ACCOUNT" in upper and account_x is None:
+            for w in line_obj.get("Words", []):
+                if "ACCOUNT" in str(w.get("WordText", "")).upper():
+                    account_x = int(w.get("Left", 0))
+                    break
+
+        if "THRESHOLD" in upper and threshold_x is None:
+            for w in line_obj.get("Words", []):
+                if "THRESHOLD" in str(w.get("WordText", "")).upper():
+                    threshold_x = int(w.get("Left", 0))
+                    break
+
+        if "LIMIT" in upper and limit_x is None:
+            for w in line_obj.get("Words", []):
+                if "LIMIT" == str(w.get("WordText", "")).upper():
+                    limit_x = int(w.get("Left", 0))
+                    break
+
+        if "CURRENCY" in upper and currency_x is None:
+            for w in line_obj.get("Words", []):
+                if "CURRENCY" in str(w.get("WordText", "")).upper():
+                    currency_x = int(w.get("Left", 0))
+                    break
+
+        if "ACCOUNT TIME ZONE" in upper and timezone_x is None:
+            for w in line_obj.get("Words", []):
+                if "ACCOUNT" in str(w.get("WordText", "")).upper():
+                    timezone_x = int(w.get("Left", 0))
+                    break
+
+    if None in [account_x, threshold_x, limit_x, currency_x, timezone_x]:
+        raise RuntimeError("Не удалось определить колонки таблицы на скриншоте")
+
+    # границы колонок по X
+    account_right = threshold_x
+    threshold_right = limit_x
+    limit_right = currency_x
+    currency_right = timezone_x
+    timezone_right = 99999
+
+    # ---------- группировка по строкам ----------
+    row_groups = []
+    sorted_words = sorted(words, key=lambda x: (x["top"], x["left"]))
+
+    for w in sorted_words:
+        placed = False
+        for group in row_groups:
+            if abs(group["top"] - w["top"]) <= 14:
+                group["words"].append(w)
+                group["tops"].append(w["top"])
+                placed = True
+                break
+
+        if not placed:
+            row_groups.append({
+                "top": w["top"],
+                "tops": [w["top"]],
+                "words": [w]
+            })
+
+    for group in row_groups:
+        group["top"] = sum(group["tops"]) / len(group["tops"])
+        group["words"] = sorted(group["words"], key=lambda x: x["left"])
+
+    row_groups.sort(key=lambda x: x["top"])
+
+    records = []
+
+    for group in row_groups:
+        row_words = group["words"]
+
+        account_words = [w["text"] for w in row_words if account_x <= w["left"] < account_right]
+        threshold_words = [w["text"] for w in row_words if threshold_x <= w["left"] < threshold_right]
+        limit_words = [w["text"] for w in row_words if limit_x <= w["left"] < limit_right]
+        currency_words = [w["text"] for w in row_words if currency_x <= w["left"] < currency_right]
+        timezone_words = [w["text"] for w in row_words if timezone_x <= w["left"] < timezone_right]
+
+        # account id: берем только чистый цифровой ID
+        account_id = None
+        for token in account_words:
+            digits = extract_digits(token)
+            if len(digits) >= 6:
+                account_id = digits
+                break
+
+        if not account_id:
+            continue
+
+        threshold_raw = None
+        for token in threshold_words:
+            val = _safe_float(token)
+            if val is not None:
+                threshold_raw = val
+                break
+
+        limit_raw = None
+        for token in limit_words:
+            val = _safe_float(token)
+            if val is not None:
+                limit_raw = val
+                break
+
+        currency_raw_text = " ".join(currency_words).strip()
+        currency_code = _extract_currency_code(currency_raw_text)
+
+        timezone_text = " ".join(timezone_words).strip()
+        gmt_value = _extract_gmt_from_timezone_text(timezone_text)
+
+        # пропускаем явно мусорные/неполные строки
+        if threshold_raw is None and limit_raw is None:
+            continue
+
+        records.append({
+            "account_number": account_id,
+            "threshold_raw": threshold_raw,
+            "limit_raw": limit_raw,
+            "currency": currency_code,
+            "gmt_raw": timezone_text,
+            "gmt_value": gmt_value
+        })
+
+    if not records:
+        raise RuntimeError("Не удалось разобрать строки таблицы на скриншоте")
+
+    return records
 
 def is_king_header_line(line):
     line = line.strip()
@@ -3038,8 +3252,8 @@ def handle_photo_message(msg):
             tg_send_message(chat_id, "Не удалось скачать фото. Попробуй ещё раз.")
             return
 
-        parsed_text = run_ocr_space(image_bytes)
-        parsed = parse_smit_ocr_rows(parsed_text)
+        ocr_result = run_ocr_space(image_bytes)
+        parsed_rows = parse_smit_ocr_table(ocr_result)
         found_rows = parsed.get("rows", [])
 
         if not found_rows:
@@ -3047,16 +3261,80 @@ def handle_photo_message(msg):
             return
 
         preview_lines = []
-        state_rows = []
+        prepared_rows = []
 
-        for item in found_rows[:20]:
+        for item in parsed_rows:
             account_number = item.get("account_number")
             threshold_raw = item.get("threshold_raw")
             limit_raw = item.get("limit_raw")
-            currency_value = item.get("currency_value")
+            currency_code = item.get("currency")
             gmt_value = item.get("gmt_value")
 
-            if not account_number or not threshold_raw or not limit_raw or not currency_value or not gmt_value:
+            if not account_number:
+                continue
+            if threshold_raw is None:
+                continue
+            if limit_raw is None:
+                continue
+            if not currency_code:
+                continue
+            if not gmt_value:
+                continue
+
+            threshold_usd = convert_to_usd(threshold_raw, currency_code)
+            limit_usd = convert_to_usd(limit_raw, currency_code)
+
+            if threshold_usd is None or limit_usd is None:
+                continue
+
+            threshold_bucket = normalize_threshold_to_bucket(threshold_usd)
+            limit_bucket = normalize_limit_to_bucket(limit_usd)
+
+            if not threshold_bucket or not limit_bucket:
+                continue
+
+            prepared_rows.append({
+                "account_number": account_number,
+                "currency": currency_code,
+                "threshold_raw": threshold_raw,
+                "threshold_usd": threshold_usd,
+                "threshold_bucket": threshold_bucket,
+                "limit_raw": limit_raw,
+                "limit_usd": limit_usd,
+                "limit_bucket": limit_bucket,
+                "gmt_value": gmt_value
+            })
+
+            preview_lines.append(
+                f"{account_number} | {currency_code} | "
+                f"thr {threshold_raw}->{threshold_usd} | "
+                f"lim {limit_raw}->{limit_usd} | GMT {gmt_value}"
+            )
+
+        if not prepared_rows:
+            tg_send_message(chat_id, "Не удалось корректно разобрать строки таблицы на скриншоте.")
+            return
+
+        set_state(user_id, {
+            "mode": "awaiting_ocr_confirm",
+            "ocr_rows": prepared_rows
+        })
+
+        keyboard = [
+            [{"text": BTN_OCR_CONFIRM}],
+            [{"text": BTN_OCR_REJECT}]
+        ]
+
+        preview_text = "Нашёл на скриншоте:\n\n" + "\n".join(preview_lines[:15])
+
+        if len(prepared_rows) > 15:
+            preview_text += f"\n\n... и ещё {len(prepared_rows) - 15} строк"
+
+        preview_text += "\n\nПодтвердить обновление?"
+
+        tg_send_message(chat_id, preview_text, keyboard)
+
+        if not account_number or not threshold_raw or not limit_raw or not currency_value or not gmt_value:
                 continue
 
             converted_threshold = convert_to_usd(threshold_raw, currency_value)
@@ -3314,33 +3592,40 @@ def handle_message(msg):
                 return
 
         if text == BTN_OCR_CONFIRM:
-            if state.get("mode") != "awaiting_ocr_confirm_bulk":
+            if state.get("mode") != "awaiting_ocr_confirm":
                 send_admin_menu(chat_id, "Сначала начни импорт заново.")
                 return
 
-            ocr_rows = state.get("ocr_rows", [])
+            rows_to_update = state.get("ocr_rows", [])
+            if not rows_to_update:
+                clear_state(user_id)
+                send_admin_menu(chat_id, "Нет данных для обновления. Запусти импорт заново.")
+                return
+
             updated = 0
             not_found = []
 
-            for item in ocr_rows:
+            for item in rows_to_update:
                 ok, _ = update_account_from_ocr(
-                    item.get("account_number"),
-                    item.get("limit_bucket"),
-                    item.get("threshold_bucket"),
-                    item.get("gmt_value")
+                    item["account_number"],
+                    item["limit_bucket"],
+                    item["threshold_bucket"],
+                    item["gmt_value"]
                 )
+
                 if ok:
                     updated += 1
                 else:
-                    not_found.append(item.get("account_number"))
+                    not_found.append(item["account_number"])
 
             clear_state(user_id)
 
-            msg_text = f"Обновлено личек: {updated}"
-            if not_found:
-                msg_text += "\nНе найдены:\n" + "\n".join(not_found[:20])
+            text_result = f"Готово ✅\n\nОбновлено личек: {updated}"
 
-            tg_send_message(chat_id, msg_text)
+            if not_found:
+                text_result += "\nНе найдены в таблице:\n" + "\n".join(not_found[:20])
+
+            tg_send_message(chat_id, text_result)
             send_admin_menu(chat_id, "Выбери следующее действие:")
             return
 
