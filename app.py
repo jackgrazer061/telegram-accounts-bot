@@ -643,8 +643,14 @@ def normalize_currency_value(raw_value):
         return None
 
     text = str(raw_value).strip().upper()
+    text = re.sub(r"\s+", " ", text)
 
-    # Ищем стандартный 3-буквенный код валюты
+    # 1) Форматы типа TRY-TS / EUR-TS / MXN-TS
+    match = re.search(r'\b([A-Z]{3})-[A-Z]{2,}\b', text)
+    if match:
+        return match.group(1)
+
+    # 2) Обычный код валюты USD / EUR / TRY
     match = re.search(r'\b([A-Z]{3})\b', text)
     if match:
         return match.group(1)
@@ -653,20 +659,20 @@ def normalize_currency_value(raw_value):
 
 
 def extract_currency_from_lines(lines):
-    # сначала ищем строку, где явно есть Currency
-    for line in lines:
-        if re.search(r'Currency', line, re.IGNORECASE):
-            curr = normalize_currency_value(line)
-            if curr:
-                return curr
-
-    # запасной вариант: ищем любые валютные коды
     allowed = {
         "USD", "EUR", "TRY", "GBP", "AED", "JPY", "CAD", "AUD",
         "BRL", "MXN", "SGD", "HKD", "INR", "THB", "IDR", "MYR",
         "PEN"
     }
 
+    # 1) сначала ищем строку, где есть Currency
+    for line in lines:
+        if re.search(r'Currency', line, re.IGNORECASE):
+            curr = normalize_currency_value(line)
+            if curr in allowed:
+                return curr
+
+    # 2) потом ищем значения типа TRY-TS / EUR-TS / MXN-TS в любых строках
     for line in lines:
         curr = normalize_currency_value(line)
         if curr in allowed:
