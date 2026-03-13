@@ -182,14 +182,6 @@ def reset_google_cache():
             SHEET_BMS: {"rows": None, "updated_at": 0},
         }
 
-    with table_cache_lock:
-        table_cache = {
-            SHEET_ACCOUNTS: {"rows": None, "updated_at": 0},
-            SHEET_ISSUES: {"rows": None, "updated_at": 0},
-            SHEET_KINGS: {"rows": None, "updated_at": 0},
-            SHEET_BMS: {"rows": None, "updated_at": 0},
-        }
-
 def reset_table_cache():
     global table_cache
     with table_cache_lock:
@@ -834,7 +826,6 @@ def parse_smit_ocr_text(parsed_text):
     limit_raw = None
     gmt_raw = None
     currency_value = extract_currency_from_lines(lines)
-    currency_value = None
 
     # =========================
     # ИЩЕМ НОМЕРА ЛИЧЕК
@@ -3254,62 +3245,61 @@ def handle_photo_message(msg):
 
         ocr_result = run_ocr_space(image_bytes)
         parsed_rows = parse_smit_ocr_table(ocr_result)
-        found_rows = parsed.get("rows", [])
 
-        if not found_rows:
+        if not parsed_rows:
             tg_send_message(chat_id, "Не удалось распознать ни одной лички на скриншоте.")
             return
 
         preview_lines = []
         prepared_rows = []
 
-    for item in parsed_rows:
-        account_number = item.get("account_number")
-        threshold_raw = item.get("threshold_raw")
-        limit_raw = item.get("limit_raw")
-        currency_code = item.get("currency")
-        gmt_value = item.get("gmt_value")
+        for item in parsed_rows:
+            account_number = item.get("account_number")
+            threshold_raw = item.get("threshold_raw")
+            limit_raw = item.get("limit_raw")
+            currency_code = item.get("currency")
+            gmt_value = item.get("gmt_value")
 
-        if not account_number:
-            continue
-        if threshold_raw is None:
-            continue
-        if limit_raw is None:
-            continue
-        if not currency_code:
-            continue
-        if not gmt_value:
-            continue
+            if not account_number:
+                continue
+            if threshold_raw is None:
+                continue
+            if limit_raw is None:
+                continue
+            if not currency_code:
+                continue
+            if not gmt_value:
+                continue
 
-        threshold_usd = convert_to_usd(threshold_raw, currency_code)
-        limit_usd = convert_to_usd(limit_raw, currency_code)
+            threshold_usd = convert_to_usd(threshold_raw, currency_code)
+            limit_usd = convert_to_usd(limit_raw, currency_code)
 
-        if threshold_usd is None or limit_usd is None:
-            continue
+            if threshold_usd is None or limit_usd is None:
+                continue
 
-        threshold_bucket = normalize_threshold_to_bucket(threshold_usd)
-        limit_bucket = normalize_limit_to_bucket(limit_usd)
+            threshold_bucket = normalize_threshold_to_bucket(threshold_usd)
+            limit_bucket = normalize_limit_to_bucket(limit_usd)
 
-        if not threshold_bucket or not limit_bucket:
-            continue
+            if not threshold_bucket or not limit_bucket:
+                continue
 
-        prepared_rows.append({
-            "account_number": account_number,
-            "currency": currency_code,
-            "threshold_raw": threshold_raw,
-            "threshold_usd": threshold_usd,
-            "threshold_bucket": threshold_bucket,
-            "limit_raw": limit_raw,
-            "limit_usd": limit_usd,
-            "limit_bucket": limit_bucket,
-            "gmt_value": gmt_value
-        })
+            prepared_rows.append({
+                "account_number": account_number,
+                "currency": currency_code,
+                "threshold_raw": threshold_raw,
+                "threshold_usd": threshold_usd,
+                "threshold_bucket": threshold_bucket,
+                "limit_raw": limit_raw,
+                "limit_usd": limit_usd,
+                "limit_bucket": limit_bucket,
+                "gmt_value": gmt_value
+            })
 
-        preview_lines.append(
-            f"{account_number} | {currency_code} | "
-            f"thr {threshold_raw}->{threshold_usd} | "
-            f"lim {limit_raw}->{limit_usd} | GMT {gmt_value}"
-        )
+            preview_lines.append(
+                f"{account_number} | {currency_code} | "
+                f"thr {threshold_raw}->{threshold_usd} | "
+                f"lim {limit_raw}->{limit_usd} | GMT {gmt_value}"
+            )
 
         if not prepared_rows:
             tg_send_message(chat_id, "Не удалось корректно разобрать строки таблицы на скриншоте.")
@@ -3333,87 +3323,6 @@ def handle_photo_message(msg):
         preview_text += "\n\nПодтвердить обновление?"
 
         tg_send_message(chat_id, preview_text, keyboard)
-
-        if not account_number or not threshold_raw or not limit_raw or not currency_value or not gmt_value:
-                continue
-
-            converted_threshold = convert_to_usd(threshold_raw, currency_value)
-            converted_limit = convert_to_usd(limit_raw, currency_value)
-
-            threshold_bucket = normalize_threshold_to_bucket(converted_threshold)
-            limit_bucket = normalize_limit_to_bucket(converted_limit)
-
-            state_rows.append({
-                "account_number": account_number,
-                "threshold_raw": threshold_raw,
-                "limit_raw": limit_raw,
-                "currency_value": currency_value,
-                "gmt_value": gmt_value,
-                "converted_threshold": converted_threshold,
-                "converted_limit": converted_limit,
-                "threshold_bucket": threshold_bucket,
-                "limit_bucket": limit_bucket
-            })
-
-            preview_lines.append(
-                f"{account_number} | {currency_value} | "
-                f"thr {threshold_raw}->{converted_threshold} | "
-                f"lim {limit_raw}->{converted_limit} | GMT {gmt_value}"
-            )
-
-        if not state_rows:
-            tg_send_message(
-                chat_id,
-                "Не удалось собрать корректные строки со скрина.\n\n"
-                f"OCR увидел так:\n{parsed.get('ocr_text', '')[:1500]}"
-            )
-            return
-
-        if not account_number:
-            tg_send_message(chat_id, "Не удалось найти номер лички на скриншоте.")
-            return
-
-        if not limit_bucket:
-            tg_send_message(chat_id, "Не удалось распознать лимит на скриншоте.")
-            return
-
-        if not threshold_bucket:
-            tg_send_message(chat_id, "Не удалось распознать трешхолд на скриншоте.")
-            return
-
-        if not gmt_value:
-            tg_send_message(chat_id, "Не удалось распознать GMT / Account Time Zone на скриншоте.")
-            return
-
-        if not currency_value:
-            tg_send_message(chat_id, "Не удалось распознать Currency на скриншоте.")
-            return
-
-        if not currency_value:
-            tg_send_message(
-                chat_id,
-                "Не удалось распознать Currency на скриншоте.\n\n"
-                f"OCR увидел так:\n{parsed.get('ocr_text', '')[:1500]}"
-            )
-            return
-
-        set_state(user_id, {
-            "mode": "awaiting_ocr_confirm_bulk",
-            "ocr_rows": state_rows
-        })
-
-        keyboard = [
-            [{"text": BTN_OCR_CONFIRM}],
-            [{"text": BTN_OCR_REJECT}]
-        ]
-
-        tg_send_message(
-            chat_id,
-            "Нашёл на скриншоте:\n\n"
-            + "\n".join(preview_lines[:15])
-            + "\n\nПодтвердить обновление?",
-            keyboard
-        )
 
     except Exception as e:
         logging.exception("handle_photo_message crashed")
