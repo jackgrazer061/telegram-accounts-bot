@@ -643,40 +643,96 @@ def parse_smit_ocr_text(parsed_text):
     full_text = "\n".join(lines)
 
     account_number = None
+    account_candidates = []
+
     threshold_raw = None
     limit_raw = None
     gmt_raw = None
 
+    # =========================
+    # ИЩЕМ НОМЕРА ЛИЧЕК
+    # =========================
+    # Логика:
+    # - берем только строки, где почти нет букв
+    # - пропускаем строки с названием аккаунта
+    # - берем только чистые numeric id длиной 6-20
     for line in lines:
-        if not account_number:
-            digits = extract_digits(line)
-            if 6 <= len(digits) <= 20:
-                account_number = digits
-                break
+        clean_line = line.strip()
+        digits = extract_digits(clean_line)
 
-    threshold_match = re.search(r'Threshold[^0-9]*([0-9]+(?:[.,][0-9]+)?)', full_text, re.IGNORECASE)
+        if not digits:
+            continue
+
+        # если в строке есть буквы, и это похоже на название аккаунта — пропускаем
+        has_letters = bool(re.search(r'[A-Za-zА-Яа-я]', clean_line))
+        if has_letters:
+            # если строка не состоит почти целиком из цифр — это не id
+            non_digit_ratio = len(re.sub(r'[\d\s]', '', clean_line)) / max(len(clean_line), 1)
+            if non_digit_ratio > 0.05:
+                continue
+
+        # берем только чистые id
+        if re.fullmatch(r'\d{6,20}', digits):
+            account_candidates.append(digits)
+
+    # убираем дубли, сохраняя порядок
+    unique_candidates = []
+    seen = set()
+    for acc in account_candidates:
+        if acc not in seen:
+            seen.add(acc)
+            unique_candidates.append(acc)
+
+    if unique_candidates:
+        account_number = unique_candidates[0]
+
+    # =========================
+    # THRESHOLD
+    # =========================
+    threshold_match = re.search(
+        r'Threshold[^0-9]*([0-9]+(?:[.,][0-9]+)?)',
+        full_text,
+        re.IGNORECASE
+    )
     if threshold_match:
         threshold_raw = threshold_match.group(1)
 
-    remain_match = re.search(r'Remain Threshold[^0-9]*([0-9]+(?:[.,][0-9]+)?)', full_text, re.IGNORECASE)
+    remain_match = re.search(
+        r'Remain Threshold[^0-9]*([0-9]+(?:[.,][0-9]+)?)',
+        full_text,
+        re.IGNORECASE
+    )
     if remain_match and threshold_raw is None:
         threshold_raw = remain_match.group(1)
 
-    limit_match = re.search(r'Limit[^0-9]*([0-9]+(?:[.,][0-9]+)?)', full_text, re.IGNORECASE)
+    # =========================
+    # LIMIT
+    # =========================
+    limit_match = re.search(
+        r'Limit[^0-9]*([0-9][0-9,]*(?:[.][0-9]+)?)',
+        full_text,
+        re.IGNORECASE
+    )
     if limit_match:
-        limit_raw = limit_match.group(1)
+        limit_raw = limit_match.group(1).replace(",", "")
 
-        # Сначала ищем строку с названием колонки / GMT / UTC
-    gmt_match = re.search(r'(?:Account Time Zone|Time Zone|GMT|UTC)[^\n]*', full_text, re.IGNORECASE)
-    if gmt_match:
-        gmt_raw = gmt_match.group(0)
+    # =========================
+    # GMT / TIME ZONE
+    # =========================
+    # Ищем только нормальную строку, где есть timezone вида Area/City и смещение
+    for line in lines:
+        if re.search(r'[A-Za-z_]+/[A-Za-z_]+', line) and re.search(r'[+-]\d{1,2}', line):
+            gmt_raw = line
+            break
 
-    # Если не нашли — ищем строку формата Europe/Rome | +1
     if not gmt_raw:
-        for line in lines:
-            if re.search(r'[A-Za-z_]+/[A-Za-z_]+', line) and re.search(r'[+-]\d{1,2}', line):
-                gmt_raw = line
-                break
+        gmt_match = re.search(
+            r'(?:Account Time Zone|Time Zone|GMT|UTC)[^\n]*',
+            full_text,
+            re.IGNORECASE
+        )
+        if gmt_match:
+            gmt_raw = gmt_match.group(0)
 
     limit_bucket = normalize_limit_to_bucket(limit_raw) if limit_raw else None
     threshold_bucket = normalize_threshold_to_bucket(threshold_raw) if threshold_raw else None
@@ -689,9 +745,10 @@ def parse_smit_ocr_text(parsed_text):
                 gmt_raw = line
                 gmt_value = test_gmt
                 break
-                
+
     return {
         "account_number": account_number,
+        "account_candidates": unique_candidates,
         "limit_raw": limit_raw,
         "limit_bucket": limit_bucket,
         "threshold_raw": threshold_raw,
@@ -2693,6 +2750,7 @@ def handle_photo_message(msg):
         parsed = parse_smit_ocr_text(parsed_text)
 
         account_number = parsed.get("account_number")
+        account_candidates = parsed.get("account_candidates", [])
         limit_bucket = parsed.get("limit_bucket")
         threshold_bucket = parsed.get("threshold_bucket")
         gmt_value = parsed.get("gmt_value")
@@ -2730,6 +2788,7 @@ def handle_photo_message(msg):
             chat_id,
             "Нашёл на скриншоте:\n\n"
             f"Личка: {account_number}\n"
+            f"Найдено ID на скрине: {len(account_candidates)}\n"
             f"Лимит: {parsed.get('limit_raw')} -> {limit_bucket}\n"
             f"Трешхолд: {parsed.get('threshold_raw')} -> {threshold_bucket}\n"
             f"GMT: {parsed.get('gmt_raw')} -> {gmt_value}\n\n"
