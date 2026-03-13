@@ -2998,6 +2998,7 @@ def handle_photo_message(msg):
             tg_send_message(chat_id, "Не удалось скачать фото. Попробуй ещё раз.")
             return
 
+        parsed_text = run_ocr_space(image_bytes)
         parsed = parse_smit_ocr_rows(parsed_text)
         found_rows = parsed.get("rows", [])
 
