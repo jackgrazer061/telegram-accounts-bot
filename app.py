@@ -569,6 +569,29 @@ def tg_download_photo_content(photo_list):
 def extract_digits(text):
     return re.sub(r"\D", "", str(text or ""))
 
+def extract_account_ids_from_lines(lines):
+    result = []
+
+    for line in lines:
+        clean = str(line).strip()
+        digits = extract_digits(clean)
+
+        # берем только строки, где почти весь текст — это ID
+        # это отсечет названия типа MNQ... и оставит 38218890
+        if 6 <= len(digits) <= 20:
+            non_digits_removed = re.sub(r'[\s\-_]', '', clean)
+            if digits == non_digits_removed or clean == digits:
+                result.append(digits)
+
+    # убираем дубли, сохраняя порядок
+    unique = []
+    seen = set()
+    for x in result:
+        if x not in seen:
+            seen.add(x)
+            unique.append(x)
+
+    return unique
 
 def normalize_limit_to_bucket(limit_value):
     try:
@@ -666,6 +689,28 @@ def normalize_currency_value(raw_value):
 
     return None
 
+def extract_numeric_values_from_lines(lines):
+    values = []
+
+    for line in lines:
+        text = str(line).strip()
+
+        # числа формата 11,088.61 / 4478.12 / 200 / 36
+        matches = re.findall(r'\d{1,3}(?:,\d{3})*(?:\.\d+)?|\d+(?:\.\d+)?', text)
+
+        for m in matches:
+            raw = m.replace(",", "")
+            try:
+                num = float(raw)
+                values.append({
+                    "raw": m,
+                    "value": num,
+                    "line": text
+                })
+            except Exception:
+                pass
+
+    return values
 
 def extract_currency_from_lines(lines):
     allowed = {
@@ -883,6 +928,88 @@ def parse_smit_ocr_text(parsed_text):
         "ocr_text": full_text
     }
 
+def parse_smit_ocr_rows(parsed_text):
+    lines = [line.strip() for line in parsed_text.splitlines() if line.strip()]
+
+    account_ids = extract_account_ids_from_lines(lines)
+    currency_value = extract_currency_from_lines(lines)
+
+    gmt_raw = None
+    gmt_value = None
+    for line in lines:
+        test_gmt = normalize_gmt_value(line)
+        if test_gmt in GMT_OPTIONS:
+            gmt_raw = line
+            gmt_value = test_gmt
+            break
+
+    numeric_values = extract_numeric_values_from_lines(lines)
+
+    # убираем account ids из списка чисел, чтобы они не попадали в limit/threshold
+    account_id_set = set(account_ids)
+    filtered_numbers = []
+
+    for item in numeric_values:
+        digits_only = extract_digits(item["raw"])
+        if digits_only in account_id_set:
+            continue
+        filtered_numbers.append(item)
+
+    # кандидаты для threshold: обычно небольшие числа
+    threshold_candidates = [
+        x for x in filtered_numbers
+        if 0 <= x["value"] <= 500
+    ]
+
+    # кандидаты для limit: обычно больше threshold
+    limit_candidates = [
+        x for x in filtered_numbers
+        if x["value"] > 50
+    ]
+
+    results = []
+
+    # очень грубая, но рабочая логика:
+    # на каждую найденную личку берем следующий threshold и следующий limit
+    t_idx = 0
+    l_idx = 0
+
+    for acc in account_ids:
+        threshold_raw = None
+        limit_raw = None
+
+        if t_idx < len(threshold_candidates):
+            threshold_raw = threshold_candidates[t_idx]["raw"]
+            t_idx += 1
+
+        if l_idx < len(limit_candidates):
+            limit_raw = limit_candidates[l_idx]["raw"]
+            l_idx += 1
+
+        # защита: если limit совпал с threshold, пробуем следующий
+        if threshold_raw and limit_raw:
+            try:
+                t_val = float(threshold_raw.replace(",", ""))
+                l_val = float(limit_raw.replace(",", ""))
+                if l_val == t_val and l_idx < len(limit_candidates):
+                    limit_raw = limit_candidates[l_idx]["raw"]
+                    l_idx += 1
+            except Exception:
+                pass
+
+        results.append({
+            "account_number": acc,
+            "threshold_raw": threshold_raw,
+            "limit_raw": limit_raw,
+            "currency_value": currency_value,
+            "gmt_raw": gmt_raw,
+            "gmt_value": gmt_value
+        })
+
+    return {
+        "rows": results,
+        "ocr_text": "\n".join(lines)
+    }
 
 def run_ocr_space(image_bytes):
     url = "https://api.ocr.space/parse/image"
@@ -2871,17 +2998,57 @@ def handle_photo_message(msg):
             tg_send_message(chat_id, "Не удалось скачать фото. Попробуй ещё раз.")
             return
 
-        parsed_text = run_ocr_space(image_bytes)
-        parsed = parse_smit_ocr_text(parsed_text)
+        parsed = parse_smit_ocr_rows(parsed_text)
+        found_rows = parsed.get("rows", [])
 
-        account_number = parsed.get("account_number")
-        account_candidates = parsed.get("account_candidates", [])
-        limit_bucket = parsed.get("limit_bucket")
-        threshold_bucket = parsed.get("threshold_bucket")
-        gmt_value = parsed.get("gmt_value")
-        currency_value = parsed.get("currency_value")
-        limit_usd = parsed.get("limit_usd")
-        threshold_usd = parsed.get("threshold_usd")
+        if not found_rows:
+            tg_send_message(chat_id, "Не удалось распознать ни одной лички на скриншоте.")
+            return
+
+        preview_lines = []
+        state_rows = []
+
+        for item in found_rows[:20]:
+            account_number = item.get("account_number")
+            threshold_raw = item.get("threshold_raw")
+            limit_raw = item.get("limit_raw")
+            currency_value = item.get("currency_value")
+            gmt_value = item.get("gmt_value")
+
+            if not account_number or not threshold_raw or not limit_raw or not currency_value or not gmt_value:
+                continue
+
+            converted_threshold = convert_to_usd(threshold_raw, currency_value)
+            converted_limit = convert_to_usd(limit_raw, currency_value)
+
+            threshold_bucket = normalize_threshold_to_bucket(converted_threshold)
+            limit_bucket = normalize_limit_to_bucket(converted_limit)
+
+            state_rows.append({
+                "account_number": account_number,
+                "threshold_raw": threshold_raw,
+                "limit_raw": limit_raw,
+                "currency_value": currency_value,
+                "gmt_value": gmt_value,
+                "converted_threshold": converted_threshold,
+                "converted_limit": converted_limit,
+                "threshold_bucket": threshold_bucket,
+                "limit_bucket": limit_bucket
+            })
+
+            preview_lines.append(
+                f"{account_number} | {currency_value} | "
+                f"thr {threshold_raw}->{converted_threshold} | "
+                f"lim {limit_raw}->{converted_limit} | GMT {gmt_value}"
+            )
+
+        if not state_rows:
+            tg_send_message(
+                chat_id,
+                "Не удалось собрать корректные строки со скрина.\n\n"
+                f"OCR увидел так:\n{parsed.get('ocr_text', '')[:1500]}"
+            )
+            return
 
         if not account_number:
             tg_send_message(chat_id, "Не удалось найти номер лички на скриншоте.")
@@ -2912,11 +3079,8 @@ def handle_photo_message(msg):
             return
 
         set_state(user_id, {
-            "mode": "awaiting_ocr_confirm",
-            "ocr_account_number": account_number,
-            "ocr_limit_bucket": limit_bucket,
-            "ocr_threshold_bucket": threshold_bucket,
-            "ocr_gmt_value": gmt_value
+            "mode": "awaiting_ocr_confirm_bulk",
+            "ocr_rows": state_rows
         })
 
         keyboard = [
@@ -2927,13 +3091,8 @@ def handle_photo_message(msg):
         tg_send_message(
             chat_id,
             "Нашёл на скриншоте:\n\n"
-            f"Личка: {account_number}\n"
-            f"Найдено ID на скрине: {len(account_candidates)}\n"
-            f"Валюта: {currency_value or 'не найдена'}\n"
-            f"Лимит: {parsed.get('limit_raw')} -> {limit_usd if limit_usd is not None else parsed.get('limit_raw')} USD -> {limit_bucket}\n"
-            f"Трешхолд: {parsed.get('threshold_raw')} -> {threshold_usd if threshold_usd is not None else parsed.get('threshold_raw')} USD -> {threshold_bucket}\n"
-            f"GMT: {parsed.get('gmt_raw')} -> {gmt_value}\n\n"
-            "Подтвердить обновление?",
+            + "\n".join(preview_lines[:15])
+            + "\n\nПодтвердить обновление?",
             keyboard
         )
 
@@ -3114,19 +3273,33 @@ def handle_message(msg):
                 return
 
         if text == BTN_OCR_CONFIRM:
-            if state.get("mode") != "awaiting_ocr_confirm":
+            if state.get("mode") != "awaiting_ocr_confirm_bulk":
                 send_admin_menu(chat_id, "Сначала начни импорт заново.")
                 return
 
-            ok, result_text = update_account_from_ocr(
-                state.get("ocr_account_number"),
-                state.get("ocr_limit_bucket"),
-                state.get("ocr_threshold_bucket"),
-                state.get("ocr_gmt_value")
-            )
+            ocr_rows = state.get("ocr_rows", [])
+            updated = 0
+            not_found = []
+
+            for item in ocr_rows:
+                ok, _ = update_account_from_ocr(
+                    item.get("account_number"),
+                    item.get("limit_bucket"),
+                    item.get("threshold_bucket"),
+                    item.get("gmt_value")
+                )
+                if ok:
+                    updated += 1
+                else:
+                    not_found.append(item.get("account_number"))
 
             clear_state(user_id)
-            tg_send_message(chat_id, result_text)
+
+            msg_text = f"Обновлено личек: {updated}"
+            if not_found:
+                msg_text += "\nНе найдены:\n" + "\n".join(not_found[:20])
+
+            tg_send_message(chat_id, msg_text)
             send_admin_menu(chat_id, "Выбери следующее действие:")
             return
 
