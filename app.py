@@ -1288,22 +1288,18 @@ def parse_smit_ocr_table(result):
 
     for r in records:
         acc = r["account_number"]
-        if acc in seen_acc:
+
+        if not acc:
             continue
 
-        if (
-            r["threshold_raw"] is None and
-            r["limit_raw"] is None and
-            not r["currency"] and
-            not r["gmt_value"]
-        ):
+        if acc in seen_acc:
             continue
 
         seen_acc.add(acc)
         cleaned.append(r)
 
     if not cleaned:
-        raise RuntimeError("Не удалось разобрать строки таблицы на скриншоте")
+        raise RuntimeError("OCR нашёл таблицу, но не смог выделить ID личек")
 
     return cleaned
 
