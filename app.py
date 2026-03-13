@@ -3263,53 +3263,53 @@ def handle_photo_message(msg):
         preview_lines = []
         prepared_rows = []
 
-        for item in parsed_rows:
-            account_number = item.get("account_number")
-            threshold_raw = item.get("threshold_raw")
-            limit_raw = item.get("limit_raw")
-            currency_code = item.get("currency")
-            gmt_value = item.get("gmt_value")
+    for item in parsed_rows:
+        account_number = item.get("account_number")
+        threshold_raw = item.get("threshold_raw")
+        limit_raw = item.get("limit_raw")
+        currency_code = item.get("currency")
+        gmt_value = item.get("gmt_value")
 
-            if not account_number:
-                continue
-            if threshold_raw is None:
-                continue
-            if limit_raw is None:
-                continue
-            if not currency_code:
-                continue
-            if not gmt_value:
-                continue
+        if not account_number:
+            continue
+        if threshold_raw is None:
+            continue
+        if limit_raw is None:
+            continue
+        if not currency_code:
+            continue
+        if not gmt_value:
+            continue
 
-            threshold_usd = convert_to_usd(threshold_raw, currency_code)
-            limit_usd = convert_to_usd(limit_raw, currency_code)
+        threshold_usd = convert_to_usd(threshold_raw, currency_code)
+        limit_usd = convert_to_usd(limit_raw, currency_code)
 
-            if threshold_usd is None or limit_usd is None:
-                continue
+        if threshold_usd is None or limit_usd is None:
+            continue
 
-            threshold_bucket = normalize_threshold_to_bucket(threshold_usd)
-            limit_bucket = normalize_limit_to_bucket(limit_usd)
+        threshold_bucket = normalize_threshold_to_bucket(threshold_usd)
+        limit_bucket = normalize_limit_to_bucket(limit_usd)
 
-            if not threshold_bucket or not limit_bucket:
-                continue
+        if not threshold_bucket or not limit_bucket:
+            continue
 
-            prepared_rows.append({
-                "account_number": account_number,
-                "currency": currency_code,
-                "threshold_raw": threshold_raw,
-                "threshold_usd": threshold_usd,
-                "threshold_bucket": threshold_bucket,
-                "limit_raw": limit_raw,
-                "limit_usd": limit_usd,
-                "limit_bucket": limit_bucket,
-                "gmt_value": gmt_value
-            })
+        prepared_rows.append({
+            "account_number": account_number,
+            "currency": currency_code,
+            "threshold_raw": threshold_raw,
+            "threshold_usd": threshold_usd,
+            "threshold_bucket": threshold_bucket,
+            "limit_raw": limit_raw,
+            "limit_usd": limit_usd,
+            "limit_bucket": limit_bucket,
+            "gmt_value": gmt_value
+        })
 
-            preview_lines.append(
-                f"{account_number} | {currency_code} | "
-                f"thr {threshold_raw}->{threshold_usd} | "
-                f"lim {limit_raw}->{limit_usd} | GMT {gmt_value}"
-            )
+        preview_lines.append(
+            f"{account_number} | {currency_code} | "
+            f"thr {threshold_raw}->{threshold_usd} | "
+            f"lim {limit_raw}->{limit_usd} | GMT {gmt_value}"
+        )
 
         if not prepared_rows:
             tg_send_message(chat_id, "Не удалось корректно разобрать строки таблицы на скриншоте.")
