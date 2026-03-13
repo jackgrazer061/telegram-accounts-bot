@@ -1128,9 +1128,6 @@ def parse_smit_ocr_table(result):
 
     words = []
     for line in lines:
-        line_top = line.get("MinTop", 0)
-        line_height = line.get("MaxHeight", 0)
-
         for w in line.get("Words", []):
             text = str(w.get("WordText", "")).strip()
             if not text:
@@ -1139,148 +1136,143 @@ def parse_smit_ocr_table(result):
             words.append({
                 "text": text,
                 "left": int(w.get("Left", 0)),
-                "top": int(w.get("Top", line_top)),
-                "height": int(w.get("Height", line_height)),
-                "width": int(w.get("Width", 0))
+                "top": int(w.get("Top", 0)),
+                "width": int(w.get("Width", 0)),
+                "height": int(w.get("Height", 0)),
             })
 
     if not words:
         raise RuntimeError("OCR не нашел слов на изображении")
 
-    # ---------- ищем заголовки колонок ----------
+    # =========================
+    # ИЩЕМ X КООРДИНАТЫ ЗАГОЛОВКОВ
+    # =========================
     account_x = None
     threshold_x = None
     limit_x = None
     currency_x = None
     timezone_x = None
 
-    full_lines = []
     for line in lines:
-        line_words = [str(w.get("WordText", "")).strip() for w in line.get("Words", []) if str(w.get("WordText", "")).strip()]
-        if not line_words:
-            continue
+        line_words = line.get("Words", [])
+        joined = " ".join(str(w.get("WordText", "")).strip() for w in line_words).upper()
 
-        line_text = " ".join(line_words)
-        line_left = min(int(w.get("Left", 0)) for w in line.get("Words", []))
-        full_lines.append((line_text, line_left, line))
-
-    for line_text, _, line_obj in full_lines:
-        upper = line_text.upper()
-
-        if "ACCOUNT" in upper and account_x is None:
-            for w in line_obj.get("Words", []):
+        if account_x is None and "ACCOUNT" in joined:
+            for w in line_words:
                 if "ACCOUNT" in str(w.get("WordText", "")).upper():
                     account_x = int(w.get("Left", 0))
                     break
 
-        if "THRESHOLD" in upper and threshold_x is None:
-            for w in line_obj.get("Words", []):
+        if threshold_x is None and "THRESHOLD" in joined:
+            for w in line_words:
                 if "THRESHOLD" in str(w.get("WordText", "")).upper():
                     threshold_x = int(w.get("Left", 0))
                     break
 
-        if "LIMIT" in upper and limit_x is None:
-            for w in line_obj.get("Words", []):
+        if limit_x is None and "LIMIT" in joined:
+            for w in line_words:
                 if "LIMIT" == str(w.get("WordText", "")).upper():
                     limit_x = int(w.get("Left", 0))
                     break
 
-        if "CURRENCY" in upper and currency_x is None:
-            for w in line_obj.get("Words", []):
+        if currency_x is None and "CURRENCY" in joined:
+            for w in line_words:
                 if "CURRENCY" in str(w.get("WordText", "")).upper():
                     currency_x = int(w.get("Left", 0))
                     break
 
-        if "ACCOUNT TIME ZONE" in upper and timezone_x is None:
-            for w in line_obj.get("Words", []):
-                if "ACCOUNT" in str(w.get("WordText", "")).upper():
-                    timezone_x = int(w.get("Left", 0))
-                    break
+        if timezone_x is None and "ACCOUNT TIME ZONE" in joined:
+            timezone_x = min(int(w.get("Left", 0)) for w in line_words)
 
     if None in [account_x, threshold_x, limit_x, currency_x, timezone_x]:
         raise RuntimeError("Не удалось определить колонки таблицы на скриншоте")
 
-    # границы колонок по X
     account_right = threshold_x
     threshold_right = limit_x
     limit_right = currency_x
     currency_right = timezone_x
-    timezone_right = 99999
+    timezone_right = 999999
 
-    # ---------- группировка по строкам ----------
-    row_groups = []
-    sorted_words = sorted(words, key=lambda x: (x["top"], x["left"]))
+    # =========================
+    # ИЩЕМ ID В КОЛОНКЕ ACCOUNT
+    # =========================
+    account_id_words = []
+    for w in words:
+        if account_x <= w["left"] < account_right:
+            digits = extract_digits(w["text"])
+            if re.fullmatch(r"\d{6,20}", digits):
+                account_id_words.append({
+                    "account_number": digits,
+                    "top": w["top"],
+                    "left": w["left"]
+                })
 
-    for w in sorted_words:
-        placed = False
-        for group in row_groups:
-            if abs(group["top"] - w["top"]) <= 14:
-                group["words"].append(w)
-                group["tops"].append(w["top"])
-                placed = True
-                break
+    # убрать дубли по id + близким top
+    account_rows = []
+    seen = set()
+    for item in sorted(account_id_words, key=lambda x: (x["top"], x["left"])):
+        key = (item["account_number"], round(item["top"] / 10))
+        if key in seen:
+            continue
+        seen.add(key)
+        account_rows.append(item)
 
-        if not placed:
-            row_groups.append({
-                "top": w["top"],
-                "tops": [w["top"]],
-                "words": [w]
-            })
+    if not account_rows:
+        raise RuntimeError("Не удалось найти ID личек в колонке Account")
 
-    for group in row_groups:
-        group["top"] = sum(group["tops"]) / len(group["tops"])
-        group["words"] = sorted(group["words"], key=lambda x: x["left"])
-
-    row_groups.sort(key=lambda x: x["top"])
-
+    # =========================
+    # ПО КАЖДОМУ ID СОБИРАЕМ ДАННЫЕ ИЗ ПОЛОСЫ ВОКРУГ НЕГО
+    # =========================
     records = []
 
-    for group in row_groups:
-        row_words = group["words"]
+    for acc in account_rows:
+        row_top = acc["top"]
 
-        account_words = [w["text"] for w in row_words if account_x <= w["left"] < account_right]
-        threshold_words = [w["text"] for w in row_words if threshold_x <= w["left"] < threshold_right]
-        limit_words = [w["text"] for w in row_words if limit_x <= w["left"] < limit_right]
-        currency_words = [w["text"] for w in row_words if currency_x <= w["left"] < currency_right]
-        timezone_words = [w["text"] for w in row_words if timezone_x <= w["left"] < timezone_right]
+        # берем слова в вертикальной полосе вокруг ID
+        band_words = [
+            w for w in words
+            if abs(w["top"] - row_top) <= 28
+        ]
 
-        # account id: берем только чистый цифровой ID
-        account_id = None
-        for token in account_words:
-            digits = extract_digits(token)
-            if len(digits) >= 6:
-                account_id = digits
-                break
-
-        if not account_id:
-            continue
+        threshold_words = [
+            w["text"] for w in band_words
+            if threshold_x <= w["left"] < threshold_right
+        ]
+        limit_words = [
+            w["text"] for w in band_words
+            if limit_x <= w["left"] < limit_right
+        ]
+        currency_words = [
+            w["text"] for w in band_words
+            if currency_x <= w["left"] < currency_right
+        ]
+        timezone_words = [
+            w["text"] for w in band_words
+            if timezone_x <= w["left"] < timezone_right
+        ]
 
         threshold_raw = None
         for token in threshold_words:
             val = _safe_float(token)
-            if val is not None:
+            if val is not None and val <= 500:
                 threshold_raw = val
                 break
 
         limit_raw = None
         for token in limit_words:
             val = _safe_float(token)
-            if val is not None:
+            if val is not None and val > 0:
                 limit_raw = val
                 break
 
-        currency_raw_text = " ".join(currency_words).strip()
-        currency_code = _extract_currency_code(currency_raw_text)
+        currency_text = " ".join(currency_words).strip()
+        currency_code = _extract_currency_code(currency_text)
 
         timezone_text = " ".join(timezone_words).strip()
         gmt_value = _extract_gmt_from_timezone_text(timezone_text)
 
-        # пропускаем явно мусорные/неполные строки
-        if threshold_raw is None and limit_raw is None:
-            continue
-
         records.append({
-            "account_number": account_id,
+            "account_number": acc["account_number"],
             "threshold_raw": threshold_raw,
             "limit_raw": limit_raw,
             "currency": currency_code,
@@ -1288,10 +1280,32 @@ def parse_smit_ocr_table(result):
             "gmt_value": gmt_value
         })
 
-    if not records:
+    # =========================
+    # УБИРАЕМ ПУСТЫЕ / МУСОРНЫЕ СТРОКИ
+    # =========================
+    cleaned = []
+    seen_acc = set()
+
+    for r in records:
+        acc = r["account_number"]
+        if acc in seen_acc:
+            continue
+
+        if (
+            r["threshold_raw"] is None and
+            r["limit_raw"] is None and
+            not r["currency"] and
+            not r["gmt_value"]
+        ):
+            continue
+
+        seen_acc.add(acc)
+        cleaned.append(r)
+
+    if not cleaned:
         raise RuntimeError("Не удалось разобрать строки таблицы на скриншоте")
 
-    return records
+    return cleaned
 
 def is_king_header_line(line):
     line = line.strip()
