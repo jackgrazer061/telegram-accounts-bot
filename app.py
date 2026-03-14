@@ -1113,6 +1113,7 @@ def _extract_gmt_from_timezone_text(text):
         return match.group(1).replace("+", "")
 
     return None
+    
 def parse_smit_ocr_table(result):
     parsed_results = result.get("ParsedResults") or []
     if not parsed_results:
