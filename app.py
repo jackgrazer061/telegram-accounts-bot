@@ -21,8 +21,6 @@ BOT_TOKEN = os.environ.get("BOT_TOKEN", "")
 SPREADSHEET_ID = os.environ.get("SPREADSHEET_ID", "")
 SERVICE_ACCOUNT_JSON = os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON", "")
 BACKUP_SPREADSHEET_ID = os.environ.get("BACKUP_SPREADSHEET_ID", "")
-OCR_SPACE_API_KEY = os.environ.get("OCR_SPACE_API_KEY", "")
-EXCHANGE_API_BASE = os.environ.get("EXCHANGE_API_BASE", "https://api.frankfurter.dev/v1")
 
 if not BOT_TOKEN:
     raise RuntimeError("BOT_TOKEN не задан")
@@ -36,8 +34,6 @@ if not SERVICE_ACCOUNT_JSON:
 if not BACKUP_SPREADSHEET_ID:
     raise RuntimeError("BACKUP_SPREADSHEET_ID не задан")
 
-if not OCR_SPACE_API_KEY:
-    raise RuntimeError("OCR_SPACE_API_KEY не задан")
 # =========================
 # ACCESS CONTROL
 # =========================
@@ -126,11 +122,8 @@ ADMIN_BACKUP = 'Бэкап таблиц'
 ADMIN_ADD_ACCOUNTS = 'Добавить лички'
 ADMIN_ADD_KINGS = 'Добавить кинги'
 ADMIN_ADD_BMS = 'Добавить БМы'
-ADMIN_IMPORT_SCREEN = 'Импорт из скрина'
 BTN_BM_CONFIRM = 'Выдать БМ'
 BTN_BM_NEXT = 'Другой БМ'
-BTN_OCR_CONFIRM = 'Подтвердить обновление'
-BTN_OCR_REJECT = 'Отмена OCR'
 BTN_BACK_FROM_ADMIN = 'Назад из Admin'
 
 BTN_BACK_TO_MENU = 'В меню'
@@ -442,7 +435,6 @@ def send_admin_menu(chat_id, text="Меню Admin:"):
         [{"text": ADMIN_BACKUP}],
         [{"text": ADMIN_ADD_ACCOUNTS}, {"text": ADMIN_ADD_KINGS}],
         [{"text": ADMIN_ADD_BMS}],
-        [{"text": ADMIN_IMPORT_SCREEN}],
         [{"text": BTN_BACK_FROM_ADMIN}]
     ]
     tg_send_message(chat_id, text, keyboard)
@@ -3262,139 +3254,7 @@ def watchdog_loop():
             
 # =========================
 # MESSAGE HANDLER
-# =========================
-def handle_photo_message(msg):
-    try:
-        touch_request_heartbeat()
-
-        chat_id = msg["chat"]["id"]
-        user_id = msg["from"]["id"]
-
-        if not has_access(user_id):
-            tg_send_message(
-                chat_id,
-                f"⛔ У вас нет доступа.\n\nВаш Telegram ID:\n{user_id}"
-            )
-            return
-
-        state = get_state(user_id)
-
-        if state.get("mode") != "awaiting_smit_screenshot":
-            tg_send_message(
-                chat_id,
-                "Я сейчас не жду скриншот. Сначала зайди в Admin → Импорт из скрина."
-            )
-            return
-
-        photo_list = msg.get("photo", [])
-        if not photo_list:
-            tg_send_message(chat_id, "Фото не найдено. Попробуй ещё раз.")
-            return
-
-        image_bytes = tg_download_photo_content(photo_list)
-        if not image_bytes:
-            tg_send_message(chat_id, "Не удалось скачать фото. Попробуй ещё раз.")
-            return
-
-        ocr_result = run_ocr_space(image_bytes)
-        parsed_rows = parse_smit_ocr_table(ocr_result)
-
-        if not parsed_rows:
-            tg_send_message(chat_id, "Не удалось распознать ни одной лички на скриншоте.")
-            return
-
-        preview_lines = []
-        prepared_rows = []
-
-        for item in parsed_rows:
-            account_number = item.get("account_number")
-            threshold_raw = item.get("threshold_raw")
-            limit_raw = item.get("limit_raw")
-            currency_code = item.get("currency")
-            gmt_value = item.get("gmt_value")
-
-            if not account_number:
-                continue
-            if threshold_raw is None:
-                continue
-            if limit_raw is None:
-                continue
-            if not currency_code:
-                continue
-            if not gmt_value:
-                continue
-
-            threshold_usd = convert_amount_to_usd(threshold_raw, currency_code)
-            limit_usd = convert_amount_to_usd(limit_raw, currency_code)
-
-            if threshold_usd is None or limit_usd is None:
-                continue
-
-            threshold_bucket = normalize_threshold_to_bucket(threshold_usd)
-            limit_bucket = normalize_limit_to_bucket(limit_usd)
-
-            if not threshold_bucket or not limit_bucket:
-                continue
-
-            prepared_rows.append({
-                "account_number": account_number,
-                "currency": currency_code,
-                "threshold_raw": threshold_raw,
-                "threshold_usd": threshold_usd,
-                "threshold_bucket": threshold_bucket,
-                "limit_raw": limit_raw,
-                "limit_usd": limit_usd,
-                "limit_bucket": limit_bucket,
-                "gmt_value": gmt_value
-            })
-
-            preview_lines.append(
-                f"{account_number} | {currency_code} | "
-                f"thr {threshold_raw}->{threshold_usd} | "
-                f"lim {limit_raw}->{limit_usd} | GMT {gmt_value}"
-            )
-
-        if not prepared_rows:
-            tg_send_message(
-                chat_id,
-                "Не удалось корректно разобрать строки таблицы на скриншоте.\n\n"
-                f"parse_smit_ocr_table вернул строк: {len(parsed_rows)}\n"
-                + "\n".join(
-                    [
-                        f"{x.get('account_number')} | thr={x.get('threshold_raw')} | "
-                        f"lim={x.get('limit_raw')} | cur={x.get('currency')} | gmt={x.get('gmt_value')}"
-                        for x in parsed_rows[:10]
-                    ]
-                )
-            )
-            return
-
-        set_state(user_id, {
-            "mode": "awaiting_ocr_confirm",
-            "ocr_rows": prepared_rows
-        })
-
-        keyboard = [
-            [{"text": BTN_OCR_CONFIRM}],
-            [{"text": BTN_OCR_REJECT}]
-        ]
-
-        preview_text = "Нашёл на скриншоте:\n\n" + "\n".join(preview_lines[:15])
-
-        if len(prepared_rows) > 15:
-            preview_text += f"\n\n... и ещё {len(prepared_rows) - 15} строк"
-
-        preview_text += "\n\nПодтвердить обновление?"
-
-        tg_send_message(chat_id, preview_text, keyboard)
-
-    except Exception as e:
-        logging.exception("handle_photo_message crashed")
-        try:
-            tg_send_message(msg["chat"]["id"], f"Ошибка OCR: {e}")
-        except Exception:
-            pass
-            
+# =========================            
 def handle_message(msg):
     try:
         cleanup_states()
@@ -3539,67 +3399,6 @@ def handle_message(msg):
 
             set_state(user_id, {"mode": "awaiting_bms_text"})
             send_add_bms_instructions(chat_id)
-            return
-
-        if text == ADMIN_IMPORT_SCREEN:
-            if not is_admin(user_id):
-                tg_send_message(chat_id, "У вас нет доступа.")
-                return
-
-            set_state(user_id, {"mode": "awaiting_smit_screenshot"})
-            tg_send_message(
-                chat_id,
-                "Пришли скриншот из SMIT.\n\n"
-                "На скриншоте должны быть видны:\n"
-                "- номер лички\n"
-                "- Threshold\n"
-                "- Limit\n"
-                "- Account Time Zone / GMT"
-            )
-            return
-
-        if text == BTN_OCR_REJECT:
-            if state.get("mode") == "awaiting_ocr_confirm":
-                clear_state(user_id)
-                send_admin_menu(chat_id, "Импорт из скрина отменён.")
-                return
-
-        if text == BTN_OCR_CONFIRM:
-            if state.get("mode") != "awaiting_ocr_confirm":
-                send_admin_menu(chat_id, "Сначала начни импорт заново.")
-                return
-
-            rows_to_update = state.get("ocr_rows", [])
-            if not rows_to_update:
-                clear_state(user_id)
-                send_admin_menu(chat_id, "Нет данных для обновления. Запусти импорт заново.")
-                return
-
-            updated = 0
-            not_found = []
-
-            for item in rows_to_update:
-                ok, _ = update_account_from_ocr(
-                    item["account_number"],
-                    item["limit_bucket"],
-                    item["threshold_bucket"],
-                    item["gmt_value"]
-                )
-
-                if ok:
-                    updated += 1
-                else:
-                    not_found.append(item["account_number"])
-
-            clear_state(user_id)
-
-            text_result = f"Готово ✅\n\nОбновлено личек: {updated}"
-
-            if not_found:
-                text_result += "\nНе найдены в таблице:\n" + "\n".join(not_found[:20])
-
-            tg_send_message(chat_id, text_result)
-            send_admin_menu(chat_id, "Выбери следующее действие:")
             return
 
         # ========= ЛИЧКИ =========
@@ -4178,9 +3977,6 @@ def webhook():
 
             elif msg.get("document"):
                 handle_document_message(msg)
-
-            elif msg.get("photo"):
-                handle_photo_message(msg)
 
         return jsonify({"ok": True})
 
