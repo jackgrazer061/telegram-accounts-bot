@@ -247,6 +247,9 @@ def sheet_update_and_refresh(sheet_name, cell_range, values):
     sheet.update(cell_range, values)
     refresh_sheet_cache(sheet_name)
 
+def sheet_update_raw(sheet_name, cell_range, values):
+    sheet = get_sheet(sheet_name)
+    sheet.update(cell_range, values)
 
 def sheet_append_row_and_refresh(sheet_name, row, value_input_option="USER_ENTERED"):
     sheet = get_sheet(sheet_name)
@@ -2005,39 +2008,31 @@ def update_account_from_fastadscheck(account_number, limit_bucket, threshold_buc
 
     row_index = found["row_index"]
 
-    # E-G
-    sheet_update_and_refresh(
+    row = found["row"]
+    if len(row) < 14:
+        row = row + [''] * (14 - len(row))
+
+    # Собираем весь кусок E:N одной записью
+    values_en = [[
+        limit_bucket,                        # E
+        threshold_bucket,                   # F
+        str(gmt_value),                     # G
+        row[7] if len(row) > 7 else "",     # H
+        row[8] if len(row) > 8 else "",     # I
+        row[9] if len(row) > 9 else "",     # J
+        row[10] if len(row) > 10 else "",   # K
+        row[11] if len(row) > 11 else "",   # L
+        currency_value or "",               # M
+        account_url or ""                   # N
+    ]]
+
+    sheet_update_raw(
         SHEET_ACCOUNTS,
-        f"E{row_index}:G{row_index}",
-        [[limit_bucket, threshold_bucket, str(gmt_value)]]
+        f"E{row_index}:N{row_index}",
+        values_en
     )
 
-    # M
-    if currency_value:
-        sheet_update_and_refresh(
-            SHEET_ACCOUNTS,
-            f"M{row_index}",
-            [[currency_value]]
-        )
-
-    # N
-    if account_url:
-        sheet_update_and_refresh(
-            SHEET_ACCOUNTS,
-            f"N{row_index}",
-            [[account_url]]
-        )
-
-    invalidate_stats_cache()
-    return True, (
-        f"Обновлено ✅\n\n"
-        f"Личка: {account_number}\n"
-        f"Лимит: {limit_bucket}\n"
-        f"Трешхолд: {threshold_bucket}\n"
-        f"GMT: {gmt_value}\n"
-        f"Валюта: {currency_value}\n"
-        f"Ссылка: {account_url}"
-    )
+    return True, f"Личка {account_number} обновлена"
 
 def find_last_issue_row(account_number):
     rows = get_sheet_rows_cached(SHEET_ISSUES)
@@ -4063,6 +4058,9 @@ def fastadscheck_import():
                 updated += 1
             else:
                 not_found.append(account_number)
+
+        refresh_sheet_cache(SHEET_ACCOUNTS)
+        invalidate_stats_cache()
 
         return jsonify({
             "ok": True,
