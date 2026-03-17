@@ -2158,7 +2158,6 @@ def send_free_accounts(chat_id):
         return
 
     lines = []
-
     for i, row in enumerate(free_rows, start=1):
         acc = str(row[0]).strip()
         limit_val = str(row[4]).strip()
@@ -2171,9 +2170,20 @@ def send_free_accounts(chat_id):
             f"{i}. {acc} | Л {limit_val} | Т {threshold} | GMT {gmt} | {currency} | {warehouses}"
         )
 
-    text = f"Свободные лички: {len(free_rows)}\n\n" + "\n".join(lines)
+    header = f"Свободные лички: {len(free_rows)}\n\n"
 
-    tg_send_message(chat_id, text)
+    # Telegram любит сообщения до ~4000 символов
+    current_text = header
+
+    for line in lines:
+        if len(current_text) + len(line) + 1 > 3500:
+            tg_send_message(chat_id, current_text.strip())
+            current_text = line + "\n"
+        else:
+            current_text += line + "\n"
+
+    if current_text.strip():
+        tg_send_message(chat_id, current_text.strip())
 
 
 # =========================
@@ -3075,28 +3085,17 @@ def build_stats_text():
     accounts_taken = 0
     accounts_ban = 0
 
-    limit_stats = {
-        "-250": 0,
-        "250-500": 0,
-        "500-1200": 0,
-        "1200-1500": 0,
-        "unlim": 0
-    }
-
     for row in accounts_rows[1:]:
         if len(row) < 12:
             row = row + [''] * (12 - len(row))
 
         status = str(row[8]).strip().lower()
         target = str(row[9]).strip().lower()
-        limit_val = str(row[4]).strip()
 
         if target == "ban" or status == "ban":
             accounts_ban += 1
         elif status == "free":
             accounts_free += 1
-            if limit_val in limit_stats:
-                limit_stats[limit_val] += 1
         elif status == "taken":
             accounts_taken += 1
 
@@ -3124,10 +3123,6 @@ def build_stats_text():
     if not geo_lines:
         geo_lines.append("нет свободных GEO")
 
-    limit_lines = []
-    for limit_name in ["-250", "250-500", "500-1200", "1200-1500", "unlim"]:
-        limit_lines.append(f"{limit_name}: {limit_stats[limit_name]}")
-
     text = (
         "Кинги:\n\n"
         f"Свободные: {kings_free}\n"
@@ -3140,9 +3135,6 @@ def build_stats_text():
         f"Свободные: {accounts_free}\n"
         f"Выдано: {accounts_taken}\n"
         f"В бане: {accounts_ban}\n\n"
-        "По лимиту:\n"
-        + "\n".join(limit_lines)
-        + "\n\n"
         "БМы:\n\n"
         f"Свободные: {bms_free}\n"
         f"Выдано: {bms_taken}"
