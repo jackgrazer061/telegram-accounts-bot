@@ -1,3 +1,4 @@
+from flask_cors import CORS
 import os
 import json
 import logging
@@ -12,6 +13,7 @@ from google.oauth2.service_account import Credentials
 import threading
 
 app = Flask(__name__)
+CORS(app)
 logging.basicConfig(level=logging.INFO)
 
 # =========================
