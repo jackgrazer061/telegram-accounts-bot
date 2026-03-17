@@ -1997,29 +1997,7 @@ def find_account_in_base(account_number):
             }
     return None
 
-def update_account_from_ocr(account_number, limit_bucket, threshold_bucket, gmt_value):
-    found = find_account_in_base(account_number)
-
-    if not found:
-        return False, f"Личка {account_number} не найдена в таблице."
-
-    row_index = found["row_index"]
-    sheet_update_and_refresh(
-        SHEET_ACCOUNTS,
-        f"E{row_index}:G{row_index}",
-        [[limit_bucket, threshold_bucket, gmt_value]]
-    )
-
-    invalidate_stats_cache()
-    return True, (
-        f"Обновлено ✅\n\n"
-        f"Личка: {account_number}\n"
-        f"Лимит: {limit_bucket}\n"
-        f"Трешхолд: {threshold_bucket}\n"
-        f"GMT: {gmt_value}"
-    )
-
-def update_account_from_fastadscheck(account_number, limit_bucket, threshold_bucket, gmt_value):
+def update_account_from_fastadscheck(account_number, limit_bucket, threshold_bucket, gmt_value, currency_value, account_url=""):
     found = find_account_in_base(account_number)
 
     if not found:
@@ -2027,19 +2005,38 @@ def update_account_from_fastadscheck(account_number, limit_bucket, threshold_buc
 
     row_index = found["row_index"]
 
+    # E-G
     sheet_update_and_refresh(
         SHEET_ACCOUNTS,
         f"E{row_index}:G{row_index}",
         [[limit_bucket, threshold_bucket, str(gmt_value)]]
     )
 
+    # M
+    if currency_value:
+        sheet_update_and_refresh(
+            SHEET_ACCOUNTS,
+            f"M{row_index}",
+            [[currency_value]]
+        )
+
+    # N
+    if account_url:
+        sheet_update_and_refresh(
+            SHEET_ACCOUNTS,
+            f"N{row_index}",
+            [[account_url]]
+        )
+
     invalidate_stats_cache()
     return True, (
         f"Обновлено ✅\n\n"
         f"Личка: {account_number}\n"
         f"Лимит: {limit_bucket}\n"
         f"Трешхолд: {threshold_bucket}\n"
-        f"GMT: {gmt_value}"
+        f"GMT: {gmt_value}\n"
+        f"Валюта: {currency_value}\n"
+        f"Ссылка: {account_url}"
     )
 
 def find_last_issue_row(account_number):
@@ -4046,6 +4043,8 @@ def fastadscheck_import():
             limit_bucket = item.get("limit_bucket")
             threshold_bucket = item.get("threshold_bucket")
             gmt_value = str(item.get("gmt", "")).strip()
+            currency_value = str(item.get("currency", "")).strip().upper()
+            account_url = str(item.get("account_url", "")).strip()
 
             if not account_number or not limit_bucket or not threshold_bucket or gmt_value == "":
                 skipped.append(account_number or "unknown")
@@ -4055,7 +4054,9 @@ def fastadscheck_import():
                 account_number=account_number,
                 limit_bucket=limit_bucket,
                 threshold_bucket=threshold_bucket,
-                gmt_value=gmt_value
+                gmt_value=gmt_value,
+                currency_value=currency_value,
+                account_url=account_url
             )
 
             if ok:
