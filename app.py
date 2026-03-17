@@ -1991,8 +1991,9 @@ def find_account_in_base(account_number):
     rows = get_sheet_rows_cached(SHEET_ACCOUNTS)
 
     for idx, row in enumerate(rows[1:], start=2):
-        if len(row) < 11:
-            continue
+        if len(row) < 14:
+            row = row + [''] * (14 - len(row))
+
         if str(row[0]).strip() == str(account_number).strip():
             return {
                 "row_index": idx,
@@ -2145,8 +2146,8 @@ def send_free_accounts(chat_id):
 
     free_rows = []
     for row in rows[1:]:
-        if len(row) < 11:
-            continue
+        if len(row) < 13:
+            row = row + [''] * (13 - len(row))
 
         status = str(row[8]).strip().lower()
         if status == "free":
@@ -2157,20 +2158,20 @@ def send_free_accounts(chat_id):
         return
 
     lines = []
-    max_to_show = 20
 
-    for i, row in enumerate(free_rows[:max_to_show], start=1):
-        acc = row[0]
-        limit_val = row[4]
-        threshold = row[5]
-        gmt = row[6]
-        warehouses = row[7]
-        lines.append(f"{i}. {acc} | {limit_val} | {threshold} | {gmt} | {warehouses}")
+    for i, row in enumerate(free_rows, start=1):
+        acc = str(row[0]).strip()
+        limit_val = str(row[4]).strip()
+        threshold = str(row[5]).strip()
+        gmt = str(row[6]).strip()
+        warehouses = str(row[7]).strip()
+        currency = str(row[12]).strip() if len(row) > 12 else ""
+
+        lines.append(
+            f"{i}. {acc} | {limit_val} | {threshold} | {gmt} | {currency} | {warehouses}"
+        )
 
     text = f"Свободные лички: {len(free_rows)}\n\n" + "\n".join(lines)
-
-    if len(free_rows) > max_to_show:
-        text += f"\n\nПоказаны первые {max_to_show}."
 
     tg_send_message(chat_id, text)
 
@@ -2444,6 +2445,7 @@ def confirm_issue(chat_id, user_id, username):
             purchase_date = row[1]
             price = row[2]
             supplier = row[3]
+            account_url = row[13] if len(row) > 13 else ""
             today = datetime.now().strftime("%d/%m/%Y")
 
             who_took_text = f"@{username}" if username else "без username"
@@ -2473,6 +2475,12 @@ def confirm_issue(chat_id, user_id, username):
             f"Кому передали: {state['for_whom']}\n"
             f"Кто взял в боте: {who_took_text}"
         )
+
+        if account_url:
+            tg_send_message(chat_id, f"Ссылка на личку:\n{account_url}")
+        else:
+            tg_send_message(chat_id, "Ссылка на личку не найдена в колонке N.")
+
         send_main_menu(chat_id, "Выбери следующее действие:", user_id=user_id)
 
     except Exception as e:
