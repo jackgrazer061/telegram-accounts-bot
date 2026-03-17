@@ -2017,6 +2017,29 @@ def update_account_from_ocr(account_number, limit_bucket, threshold_bucket, gmt_
         f"GMT: {gmt_value}"
     )
 
+def update_account_from_fastadscheck(account_number, limit_bucket, threshold_bucket, gmt_value):
+    found = find_account_in_base(account_number)
+
+    if not found:
+        return False, f"Личка {account_number} не найдена в таблице."
+
+    row_index = found["row_index"]
+
+    sheet_update_and_refresh(
+        SHEET_ACCOUNTS,
+        f"E{row_index}:G{row_index}",
+        [[limit_bucket, threshold_bucket, str(gmt_value)]]
+    )
+
+    invalidate_stats_cache()
+    return True, (
+        f"Обновлено ✅\n\n"
+        f"Личка: {account_number}\n"
+        f"Лимит: {limit_bucket}\n"
+        f"Трешхолд: {threshold_bucket}\n"
+        f"GMT: {gmt_value}"
+    )
+
 def find_last_issue_row(account_number):
     rows = get_sheet_rows_cached(SHEET_ISSUES)
 
@@ -3983,6 +4006,75 @@ def webhook():
     except Exception as e:
         logging.error(f"webhook error: {e}")
         return jsonify({"ok": True})
+
+@app.route("/fastadscheck-import", methods=["POST"])
+def fastadscheck_import():
+    try:
+        payload = request.get_json(silent=True) or {}
+
+        token = str(payload.get("token", "")).strip()
+        rows = payload.get("rows", [])
+
+        expected_token = os.environ.get("FASTADCHECK_IMPORT_TOKEN", "").strip()
+
+        if not expected_token:
+            return jsonify({
+                "ok": False,
+                "error": "FASTADCHECK_IMPORT_TOKEN не задан на сервере"
+            }), 500
+
+        if token != expected_token:
+            return jsonify({
+                "ok": False,
+                "error": "unauthorized"
+            }), 403
+
+        if not isinstance(rows, list) or not rows:
+            return jsonify({
+                "ok": False,
+                "error": "rows пустой или неверный формат"
+            }), 400
+
+        updated = 0
+        not_found = []
+        skipped = []
+
+        for item in rows:
+            account_number = str(item.get("account_id", "")).strip()
+            limit_bucket = item.get("limit_bucket")
+            threshold_bucket = item.get("threshold_bucket")
+            gmt_value = str(item.get("gmt", "")).strip()
+
+            if not account_number or not limit_bucket or not threshold_bucket or gmt_value == "":
+                skipped.append(account_number or "unknown")
+                continue
+
+            ok, _ = update_account_from_fastadscheck(
+                account_number=account_number,
+                limit_bucket=limit_bucket,
+                threshold_bucket=threshold_bucket,
+                gmt_value=gmt_value
+            )
+
+            if ok:
+                updated += 1
+            else:
+                not_found.append(account_number)
+
+        return jsonify({
+            "ok": True,
+            "updated": updated,
+            "not_found": not_found[:100],
+            "skipped": skipped[:100],
+            "received": len(rows)
+        }), 200
+
+    except Exception as e:
+        logging.exception("fastadscheck_import crashed")
+        return jsonify({
+            "ok": False,
+            "error": str(e)
+        }), 500
 
 if __name__ == "__main__":
     backup_thread = threading.Thread(target=backup_scheduler_loop, daemon=True)
