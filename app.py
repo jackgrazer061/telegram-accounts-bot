@@ -81,13 +81,17 @@ THRESHOLD_OPTIONS = ['0-49', '50-99', '100-199', '200-499', '500+']
 GMT_OPTIONS = ['-10', '-9', '-8', '-7', '-6', '-5', '-4', '-3', '-2', '-1', '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', '10']
 ACCOUNT_CURRENCY_COL = 12  # M колонка в База_личек
 
-MENU_ACCOUNTS = 'Лички'
+MENU_ACCOUNTS = 'Accounts'
+MENU_FARMERS = 'Farmers'
 MENU_KINGS = 'Кинги'
 MENU_BMS = 'БМ'
 MENU_STATS = 'Статистика'
 MENU_MANAGER_STATS = 'Статистика менеджера'
 MENU_ADMIN = 'Admin'
 MENU_CANCEL = 'Отмена'
+
+SUBMENU_ACCOUNTS_MAIN = 'Лички'
+SUBMENU_BACK_MAIN = 'В меню'
 
 DEPT_CRYPTO = 'Крипта'
 DEPT_GAMBLA = 'Гембла'
@@ -392,20 +396,26 @@ def tg_send_message(chat_id, text, keyboard=None):
 def send_main_menu(chat_id, text="Главное меню:", user_id=None):
     if user_id is not None and is_admin(user_id):
         keyboard = [
-            [{"text": MENU_ACCOUNTS}, {"text": MENU_KINGS}],
-            [{"text": MENU_BMS}],
-            [{"text": MENU_STATS}, {"text": MENU_MANAGER_STATS}],
+            [{"text": MENU_ACCOUNTS}, {"text": MENU_FARMERS}],
+            [{"text": MENU_STATS}],
             [{"text": MENU_ADMIN}],
             [{"text": MENU_CANCEL}]
         ]
     else:
         keyboard = [
-            [{"text": MENU_ACCOUNTS}, {"text": MENU_KINGS}],
-            [{"text": MENU_BMS}],
-            [{"text": MENU_STATS}, {"text": MENU_MANAGER_STATS}],
+            [{"text": MENU_ACCOUNTS}, {"text": MENU_FARMERS}],
+            [{"text": MENU_STATS}],
             [{"text": MENU_CANCEL}]
         ]
 
+    tg_send_message(chat_id, text, keyboard)
+
+def send_accounts_main_menu(chat_id, text="Меню Accounts:"):
+    keyboard = [
+        [{"text": SUBMENU_ACCOUNTS_MAIN}, {"text": MENU_KINGS}],
+        [{"text": MENU_BMS}, {"text": MENU_MANAGER_STATS}],
+        [{"text": SUBMENU_BACK_MAIN}]
+    ]
     tg_send_message(chat_id, text, keyboard)
 
 def send_accounts_menu(chat_id, text="Меню личек:"):
@@ -3357,6 +3367,16 @@ def handle_message(msg):
 
         if text == MENU_ACCOUNTS:
             clear_state(user_id)
+            send_accounts_main_menu(chat_id)
+            return
+
+        if text == MENU_FARMERS:
+            clear_state(user_id)
+            send_main_menu(chat_id, "Раздел Farmers пока в разработке.", user_id=user_id)
+            return
+
+        if text == SUBMENU_ACCOUNTS_MAIN:
+            clear_state(user_id)
             send_accounts_menu(chat_id)
             return
 
@@ -3368,6 +3388,11 @@ def handle_message(msg):
         if text == MENU_BMS:
             clear_state(user_id)
             send_bms_menu(chat_id)
+            return
+
+        if text == SUBMENU_BACK_MAIN:
+            clear_state(user_id)
+            send_main_menu(chat_id, user_id=user_id)
             return
 
         if text == BTN_BACK_TO_MENU:
