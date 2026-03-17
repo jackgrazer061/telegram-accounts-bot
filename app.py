@@ -2001,7 +2001,7 @@ def find_account_in_base(account_number):
             }
     return None
 
-def update_account_from_fastadscheck(account_number, limit_bucket, threshold_bucket, gmt_value, currency_value, account_url=""):
+def update_account_from_fastadscheck(account_number, limit_value, threshold_value, gmt_value, currency_value, account_url=""):
     found = find_account_in_base(account_number)
 
     if not found:
@@ -2013,18 +2013,18 @@ def update_account_from_fastadscheck(account_number, limit_bucket, threshold_buc
     if len(row) < 14:
         row = row + [''] * (14 - len(row))
 
-    # Собираем весь кусок E:N одной записью
+    # точные значения в E и F
     values_en = [[
-        limit_bucket,                        # E
-        threshold_bucket,                   # F
-        str(gmt_value),                     # G
-        row[7] if len(row) > 7 else "",     # H
-        row[8] if len(row) > 8 else "",     # I
-        row[9] if len(row) > 9 else "",     # J
-        row[10] if len(row) > 10 else "",   # K
-        row[11] if len(row) > 11 else "",   # L
-        currency_value or "",               # M
-        account_url or ""                   # N
+        normalize_numeric_for_sheet(limit_value),      # E
+        normalize_numeric_for_sheet(threshold_value),  # F
+        str(gmt_value),                                # G
+        row[7] if len(row) > 7 else "",                # H
+        row[8] if len(row) > 8 else "",                # I
+        row[9] if len(row) > 9 else "",                # J
+        row[10] if len(row) > 10 else "",              # K
+        row[11] if len(row) > 11 else "",              # L
+        currency_value or "",                          # M
+        account_url or ""                              # N
     ]]
 
     sheet_update_raw(
@@ -2168,7 +2168,7 @@ def send_free_accounts(chat_id):
         currency = str(row[12]).strip() if len(row) > 12 else ""
 
         lines.append(
-            f"{i}. {acc} | {limit_val} | {threshold} | {gmt} | {currency} | {warehouses}"
+            f"{i}. {acc} | Л {limit_val} | Т {threshold} | GMT {gmt} | {currency} | {warehouses}"
         )
 
     text = f"Свободные лички: {len(free_rows)}\n\n" + "\n".join(lines)
@@ -4043,20 +4043,20 @@ def fastadscheck_import():
 
         for item in rows:
             account_number = str(item.get("account_id", "")).strip()
-            limit_bucket = item.get("limit_bucket")
-            threshold_bucket = item.get("threshold_bucket")
+            limit_value = item.get("limit_usd")
+            threshold_value = item.get("threshold_usd")
             gmt_value = str(item.get("gmt", "")).strip()
             currency_value = str(item.get("currency", "")).strip().upper()
             account_url = str(item.get("account_url", "")).strip()
 
-            if not account_number or not limit_bucket or not threshold_bucket or gmt_value == "":
+            if not account_number or limit_value is None or threshold_value is None or gmt_value == "":
                 skipped.append(account_number or "unknown")
                 continue
 
             ok, _ = update_account_from_fastadscheck(
                 account_number=account_number,
-                limit_bucket=limit_bucket,
-                threshold_bucket=threshold_bucket,
+                limit_value=limit_value,
+                threshold_value=threshold_value,
                 gmt_value=gmt_value,
                 currency_value=currency_value,
                 account_url=account_url
