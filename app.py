@@ -293,8 +293,9 @@ table_cache_lock = threading.Lock()
 
 
 def refresh_sheet_cache(sheet_name):
-    sheet = get_sheet(sheet_name)
-    rows = sheet.get_all_values()
+    with google_lock:
+        sheet = get_sheet(sheet_name)
+        rows = sheet.get_all_values()
 
     with table_cache_lock:
         table_cache[sheet_name]["rows"] = rows
@@ -320,23 +321,30 @@ def get_sheet_rows_cached(sheet_name, force=False):
 
 
 def sheet_update_and_refresh(sheet_name, cell_range, values):
-    sheet = get_sheet(sheet_name)
-    sheet.update(cell_range, values)
+    with google_lock:
+        sheet = get_sheet(sheet_name)
+        sheet.update(cell_range, values)
+
     refresh_sheet_cache(sheet_name)
 
 def sheet_update_raw(sheet_name, cell_range, values):
-    sheet = get_sheet(sheet_name)
-    sheet.update(cell_range, values)
+    with google_lock:
+        sheet = get_sheet(sheet_name)
+        sheet.update(cell_range, values)
 
 def sheet_append_row_and_refresh(sheet_name, row, value_input_option="USER_ENTERED"):
-    sheet = get_sheet(sheet_name)
-    sheet.append_row(row, value_input_option=value_input_option)
+    with google_lock:
+        sheet = get_sheet(sheet_name)
+        sheet.append_row(row, value_input_option=value_input_option)
+
     refresh_sheet_cache(sheet_name)
 
 
 def sheet_append_rows_and_refresh(sheet_name, rows, value_input_option="USER_ENTERED"):
-    sheet = get_sheet(sheet_name)
-    sheet.append_rows(rows, value_input_option=value_input_option)
+    with google_lock:
+        sheet = get_sheet(sheet_name)
+        sheet.append_rows(rows, value_input_option=value_input_option)
+
     refresh_sheet_cache(sheet_name)
 
 def get_next_empty_row_in_issues():
@@ -380,11 +388,12 @@ def get_sheet(sheet_name):
         if sheet_name in sheet_cache:
             return sheet_cache[sheet_name]
 
-        client = get_gspread_client()
-        spreadsheet = client.open_by_key(SPREADSHEET_ID)
+        with google_lock:
+            client = get_gspread_client()
+            spreadsheet = client.open_by_key(SPREADSHEET_ID)
 
-        start_time = time.time()
-        sheet = spreadsheet.worksheet(sheet_name)
+            start_time = time.time()
+            sheet = spreadsheet.worksheet(sheet_name)
 
         if time.time() - start_time > 10:
             logging.warning(f"Google Sheets slow response for '{sheet_name}'")
