@@ -23,6 +23,7 @@ BOT_TOKEN = os.environ.get("BOT_TOKEN", "")
 SPREADSHEET_ID = os.environ.get("SPREADSHEET_ID", "")
 SERVICE_ACCOUNT_JSON = os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON", "")
 BACKUP_SPREADSHEET_ID = os.environ.get("BACKUP_SPREADSHEET_ID", "")
+EXCHANGE_API_BASE = os.environ.get("EXCHANGE_API_BASE", "https://api.exchangerate.host")
 
 if not BOT_TOKEN:
     raise RuntimeError("BOT_TOKEN не задан")
@@ -116,6 +117,12 @@ SUBMENU_QUICK_GET = 'Быстро выдать личку'
 SUBMENU_FREE = 'Свободные лички'
 SUBMENU_RETURN = 'Вернуть личку'
 SUBMENU_SEARCH = 'Поиск лички'
+
+FREE_LIMIT_250 = '250'
+FREE_LIMIT_500 = '500'
+FREE_LIMIT_1200 = '1200'
+FREE_LIMIT_1500 = '1500'
+FREE_LIMIT_UNLIM = 'unlim'
 
 SUBMENU_FREE_KINGS = 'Свободные кинги'
 SUBMENU_GET_KINGS = 'Получить кинг'
@@ -445,6 +452,15 @@ def send_accounts_menu(chat_id, text="Меню личек:"):
         [{"text": SUBMENU_GET}, {"text": SUBMENU_QUICK_GET}],
         [{"text": SUBMENU_FREE}, {"text": SUBMENU_RETURN}],
         [{"text": SUBMENU_SEARCH}, {"text": BTN_BACK_TO_MENU}]
+    ]
+    tg_send_message(chat_id, text, keyboard)
+
+def send_free_accounts_limit_menu(chat_id, text="Выбери лимит:"):
+    keyboard = [
+        [{"text": FREE_LIMIT_250}, {"text": FREE_LIMIT_500}],
+        [{"text": FREE_LIMIT_1200}, {"text": FREE_LIMIT_1500}],
+        [{"text": FREE_LIMIT_UNLIM}],
+        [{"text": MENU_CANCEL}]
     ]
     tg_send_message(chat_id, text, keyboard)
     
@@ -854,534 +870,6 @@ def convert_amount_to_usd(amount_value, currency_code):
 
     rate = get_fx_rate_to_usd(currency_code)
     return round(float(amount_value) * rate, 2)
-
-def parse_smit_ocr_text(parsed_text):
-    lines = [line.strip() for line in parsed_text.splitlines() if line.strip()]
-    full_text = "\n".join(lines)
-
-    account_number = None
-    account_candidates = []
-
-    threshold_raw = None
-    limit_raw = None
-    gmt_raw = None
-    currency_value = extract_currency_from_lines(lines)
-
-    # =========================
-    # ИЩЕМ НОМЕРА ЛИЧЕК
-    # =========================
-    # Логика:
-    # - берем только строки, где почти нет букв
-    # - пропускаем строки с названием аккаунта
-    # - берем только чистые numeric id длиной 6-20
-    for line in lines:
-        clean_line = line.strip()
-        digits = extract_digits(clean_line)
-
-        if not digits:
-            continue
-
-        # если в строке есть буквы, и это похоже на название аккаунта — пропускаем
-        has_letters = bool(re.search(r'[A-Za-zА-Яа-я]', clean_line))
-        if has_letters:
-            # если строка не состоит почти целиком из цифр — это не id
-            non_digit_ratio = len(re.sub(r'[\d\s]', '', clean_line)) / max(len(clean_line), 1)
-            if non_digit_ratio > 0.05:
-                continue
-
-        # берем только чистые id
-        if re.fullmatch(r'\d{6,20}', digits):
-            account_candidates.append(digits)
-
-    # убираем дубли, сохраняя порядок
-    unique_candidates = []
-    seen = set()
-    for acc in account_candidates:
-        if acc not in seen:
-            seen.add(acc)
-            unique_candidates.append(acc)
-
-    if unique_candidates:
-        account_number = unique_candidates[0]
-
-    # =========================
-    # THRESHOLD
-    # =========================
-    threshold_match = re.search(
-        r'Threshold[^0-9]*([0-9]+(?:[.,][0-9]+)?)',
-        full_text,
-        re.IGNORECASE
-    )
-    if threshold_match:
-        threshold_raw = threshold_match.group(1)
-
-    remain_match = re.search(
-        r'Remain Threshold[^0-9]*([0-9]+(?:[.,][0-9]+)?)',
-        full_text,
-        re.IGNORECASE
-    )
-    if remain_match and threshold_raw is None:
-        threshold_raw = remain_match.group(1)
-
-    # =========================
-    # LIMIT
-    # =========================
-    limit_match = re.search(
-        r'Limit[^0-9]*([0-9][0-9,]*(?:[.][0-9]+)?)',
-        full_text,
-        re.IGNORECASE
-    )
-    if limit_match:
-        limit_raw = limit_match.group(1).replace(",", "")
-
-    # =========================
-    # GMT / TIME ZONE
-    # =========================
-    # Ищем только нормальную строку, где есть timezone вида Area/City и смещение
-    for line in lines:
-        if re.search(r'[A-Za-z_]+/[A-Za-z_]+', line) and re.search(r'[+-]\d{1,2}', line):
-            gmt_raw = line
-            break
-
-    if not gmt_raw:
-        gmt_match = re.search(
-            r'(?:Account Time Zone|Time Zone|GMT|UTC)[^\n]*',
-            full_text,
-            re.IGNORECASE
-        )
-        if gmt_match:
-            gmt_raw = gmt_match.group(0)
-
-    limit_bucket = normalize_limit_to_bucket(limit_raw) if limit_raw else None
-    threshold_bucket = normalize_threshold_to_bucket(threshold_raw) if threshold_raw else None
-    gmt_value = normalize_gmt_value(gmt_raw) if gmt_raw else None
-
-    if not gmt_value:
-        for line in lines:
-            test_gmt = normalize_gmt_value(line)
-            if test_gmt in GMT_OPTIONS:
-                gmt_raw = line
-                gmt_value = test_gmt
-                break
-
-    threshold_usd = None
-    limit_usd = None
-
-    try:
-        if currency_value and threshold_raw:
-            threshold_usd = convert_amount_to_usd(
-                float(str(threshold_raw).replace(",", ".")),
-                currency_value
-            )
-
-        if currency_value and limit_raw:
-            limit_usd = convert_amount_to_usd(
-                float(str(limit_raw).replace(",", ".")),
-                currency_value
-            )
-    except Exception as e:
-        logging.warning(f"Currency conversion failed: {e}")
-
-    currency_value = extract_currency_from_lines(lines)
-        
-    return {
-        "account_number": account_number,
-        "account_candidates": unique_candidates,
-        "limit_raw": limit_raw,
-        "limit_usd": limit_usd,
-        "limit_bucket": normalize_limit_to_bucket(limit_usd if limit_usd is not None else limit_raw) if (limit_usd is not None or limit_raw) else None,
-        "threshold_raw": threshold_raw,
-        "threshold_usd": threshold_usd,
-        "threshold_bucket": normalize_threshold_to_bucket(threshold_usd if threshold_usd is not None else threshold_raw) if (threshold_usd is not None or threshold_raw) else None,
-        "currency_value": currency_value,
-        "gmt_raw": gmt_raw,
-        "gmt_value": gmt_value,
-        "ocr_text": full_text
-    }
-
-def parse_smit_ocr_rows(parsed_text):
-    lines = [line.strip() for line in parsed_text.splitlines() if line.strip()]
-
-    account_ids = extract_account_ids_from_lines(lines)
-    currency_value = extract_currency_from_lines(lines)
-
-    gmt_raw = None
-    gmt_value = None
-    for line in lines:
-        test_gmt = normalize_gmt_value(line)
-        if test_gmt in GMT_OPTIONS:
-            gmt_raw = line
-            gmt_value = test_gmt
-            break
-
-    numeric_values = extract_numeric_values_from_lines(lines)
-
-    # убираем account ids из списка чисел, чтобы они не попадали в limit/threshold
-    account_id_set = set(account_ids)
-    filtered_numbers = []
-
-    for item in numeric_values:
-        digits_only = extract_digits(item["raw"])
-        if digits_only in account_id_set:
-            continue
-        filtered_numbers.append(item)
-
-    # кандидаты для threshold: обычно небольшие числа
-    threshold_candidates = [
-        x for x in filtered_numbers
-        if 0 <= x["value"] <= 500
-    ]
-
-    # кандидаты для limit: обычно больше threshold
-    limit_candidates = [
-        x for x in filtered_numbers
-        if x["value"] > 50
-    ]
-
-    results = []
-
-    # очень грубая, но рабочая логика:
-    # на каждую найденную личку берем следующий threshold и следующий limit
-    t_idx = 0
-    l_idx = 0
-
-    for acc in account_ids:
-        threshold_raw = None
-        limit_raw = None
-
-        if t_idx < len(threshold_candidates):
-            threshold_raw = threshold_candidates[t_idx]["raw"]
-            t_idx += 1
-
-        if l_idx < len(limit_candidates):
-            limit_raw = limit_candidates[l_idx]["raw"]
-            l_idx += 1
-
-        # защита: если limit совпал с threshold, пробуем следующий
-        if threshold_raw and limit_raw:
-            try:
-                t_val = float(threshold_raw.replace(",", ""))
-                l_val = float(limit_raw.replace(",", ""))
-                if l_val == t_val and l_idx < len(limit_candidates):
-                    limit_raw = limit_candidates[l_idx]["raw"]
-                    l_idx += 1
-            except Exception:
-                pass
-
-        results.append({
-            "account_number": acc,
-            "threshold_raw": threshold_raw,
-            "limit_raw": limit_raw,
-            "currency_value": currency_value,
-            "gmt_raw": gmt_raw,
-            "gmt_value": gmt_value
-        })
-
-    return {
-        "rows": results,
-        "ocr_text": "\n".join(lines)
-    }
-
-def run_ocr_space(image_bytes):
-    url = "https://api.ocr.space/parse/image"
-
-    files = {
-        "filename": ("smit.png", image_bytes)
-    }
-
-    data = {
-        "apikey": OCR_SPACE_API_KEY,
-        "language": "eng",
-        "isOverlayRequired": "true",
-        "OCREngine": "2",
-        "scale": "true"
-    }
-
-    resp = requests.post(url, files=files, data=data, timeout=60)
-    resp.raise_for_status()
-
-    result = resp.json()
-
-    if result.get("IsErroredOnProcessing"):
-        errors = result.get("ErrorMessage") or result.get("ErrorDetails") or ["OCR error"]
-        raise RuntimeError(f"OCR ошибка: {'; '.join(map(str, errors))}")
-
-    parsed_results = result.get("ParsedResults") or []
-    if not parsed_results:
-        raise RuntimeError("OCR не вернул текст")
-
-    return result
-
-def _safe_float(text):
-    if text is None:
-        return None
-
-    s = str(text).strip().replace(" ", "")
-    s = s.replace(",", "")
-
-    try:
-        return float(s)
-    except Exception:
-        return None
-
-
-def _extract_currency_code(text):
-    if not text:
-        return None
-
-    text = str(text).upper().strip()
-
-    match = re.search(r'\b([A-Z]{3})[-_ ]?TS\b', text)
-    if match:
-        return match.group(1)
-
-    match = re.search(r'\b([A-Z]{3})\b', text)
-    if match:
-        return match.group(1)
-
-    return None
-
-
-def _extract_gmt_from_timezone_text(text):
-    if not text:
-        return None
-
-    text = str(text).strip()
-
-    match = re.search(r'([+-]\d{1,2})', text)
-    if match:
-        return match.group(1).replace("+", "")
-
-    return None
-    
-def parse_smit_ocr_table(result):
-    parsed_results = result.get("ParsedResults") or []
-    if not parsed_results:
-        raise RuntimeError("OCR не вернул ParsedResults")
-
-    overlay = parsed_results[0].get("TextOverlay") or {}
-    lines = overlay.get("Lines") or []
-
-    if not lines:
-        raise RuntimeError("OCR не вернул координаты текста")
-
-    words = []
-    for line in lines:
-        for w in line.get("Words", []):
-            text = str(w.get("WordText", "")).strip()
-            if not text:
-                continue
-
-            words.append({
-                "text": text,
-                "left": int(w.get("Left", 0)),
-                "top": int(w.get("Top", 0)),
-                "width": int(w.get("Width", 0)),
-                "height": int(w.get("Height", 0)),
-            })
-
-    if not words:
-        raise RuntimeError("OCR не нашел слов на изображении")
-
-    # =========================
-    # 1. ИЩЕМ ЗАГОЛОВКИ КОЛОНОК
-    # =========================
-    account_x = None
-    threshold_x = None
-    limit_x = None
-    currency_x = None
-    timezone_x = None
-
-    for w in words:
-        t = w["text"].upper()
-
-        if t == "ACCOUNT" and account_x is None:
-            account_x = w["left"]
-            continue
-
-        if t == "THRESHOLD" and threshold_x is None:
-            threshold_x = w["left"]
-            continue
-
-        if t == "LIMIT" and limit_x is None:
-            limit_x = w["left"]
-            continue
-
-        if t == "CURRENCY" and currency_x is None:
-            currency_x = w["left"]
-            continue
-
-        # второе слово ACCOUNT справа = Account Time Zone
-        if t == "ACCOUNT" and w["left"] > 900 and timezone_x is None:
-            timezone_x = w["left"]
-
-    if None in [account_x, threshold_x, limit_x, currency_x, timezone_x]:
-        raise RuntimeError(
-            f"Не удалось определить колонки: "
-            f"account_x={account_x}, threshold_x={threshold_x}, "
-            f"limit_x={limit_x}, currency_x={currency_x}, timezone_x={timezone_x}"
-        )
-
-    # =========================
-    # 2. ГРАНИЦЫ КОЛОНОК
-    # =========================
-    account_left = account_x - 25
-    account_right = threshold_x - 15
-
-    threshold_left = threshold_x - 15
-    threshold_right = limit_x - 15
-
-    limit_left = limit_x - 15
-    limit_right = currency_x - 15
-
-    currency_left = currency_x - 15
-    currency_right = timezone_x - 15
-
-    timezone_left = timezone_x - 15
-    timezone_right = 99999
-
-    # =========================
-    # 3. ИЩЕМ ID ТОЛЬКО В ACCOUNT КОЛОНКЕ
-    # =========================
-    id_candidates = []
-    for w in words:
-        if not (account_left <= w["left"] < account_right):
-            continue
-
-        token = w["text"].strip()
-        digits = extract_digits(token)
-
-        # берем только реальные id, а не названия личек
-        if re.fullmatch(r"\d{6,20}", token) or re.fullmatch(r"\d{6,20}", digits):
-            id_candidates.append({
-                "account_number": digits if digits else token,
-                "top": w["top"],
-                "left": w["left"],
-            })
-
-    if not id_candidates:
-        raise RuntimeError("Не удалось найти ID в колонке Account")
-
-    id_candidates.sort(key=lambda x: x["top"])
-
-    # убираем дубли по высоте
-    account_rows = []
-    for item in id_candidates:
-        if not account_rows:
-            account_rows.append(item)
-            continue
-
-        prev = account_rows[-1]
-        same_id = item["account_number"] == prev["account_number"]
-        close_top = abs(item["top"] - prev["top"]) <= 14
-
-        if same_id and close_top:
-            continue
-
-        account_rows.append(item)
-
-    if not account_rows:
-        raise RuntimeError("После фильтрации не осталось account rows")
-
-    # =========================
-    # 4. РАЗБИРАЕМ КАЖДУЮ СТРОКУ
-    # ВАЖНО: берем область ВЫШЕ маленького id,
-    # потому что threshold/limit/currency/gmt стоят на верхней строке карточки
-    # =========================
-    records = []
-
-    for i, acc in enumerate(account_rows):
-        # это ключевой фикс
-        row_top = acc["top"] - 42
-
-        if i < len(account_rows) - 1:
-            next_top = account_rows[i + 1]["top"]
-            row_bottom = next_top - 8
-        else:
-            row_bottom = acc["top"] + 35
-
-        row_words = [
-            w for w in words
-            if row_top <= w["top"] < row_bottom
-        ]
-
-        threshold_tokens = []
-        limit_tokens = []
-        currency_tokens = []
-        timezone_tokens = []
-
-        for w in row_words:
-            left = w["left"]
-
-            if threshold_left <= left < threshold_right:
-                threshold_tokens.append(w)
-
-            elif limit_left <= left < limit_right:
-                limit_tokens.append(w)
-
-            elif currency_left <= left < currency_right:
-                currency_tokens.append(w)
-
-            elif timezone_left <= left < timezone_right:
-                timezone_tokens.append(w)
-
-        threshold_tokens.sort(key=lambda x: (x["top"], x["left"]))
-        limit_tokens.sort(key=lambda x: (x["top"], x["left"]))
-        currency_tokens.sort(key=lambda x: (x["top"], x["left"]))
-        timezone_tokens.sort(key=lambda x: (x["top"], x["left"]))
-
-        threshold_raw = None
-        for token in threshold_tokens:
-            val = _safe_float(token["text"])
-            if val is not None:
-                threshold_raw = val
-                break
-
-        limit_raw = None
-        for token in limit_tokens:
-            val = _safe_float(token["text"])
-            if val is not None:
-                limit_raw = val
-                break
-
-        currency_text = " ".join(x["text"] for x in currency_tokens).strip()
-        currency_code = _extract_currency_code(currency_text)
-        if not currency_code:
-            currency_code = normalize_currency_value(currency_text)
-
-        timezone_text = " ".join(x["text"] for x in timezone_tokens).strip()
-        gmt_value = _extract_gmt_from_timezone_text(timezone_text)
-
-        # fallback: если gmt не достали из строки целиком, ищем по словам
-        if not gmt_value:
-            for token in timezone_tokens:
-                g = _extract_gmt_from_timezone_text(token["text"])
-                if g is not None:
-                    gmt_value = g
-                    break
-
-        if threshold_raw is None:
-            continue
-        if limit_raw is None:
-            continue
-        if not currency_code:
-            continue
-        if gmt_value is None:
-            continue
-
-        records.append({
-            "account_number": acc["account_number"],
-            "threshold_raw": threshold_raw,
-            "limit_raw": limit_raw,
-            "currency": currency_code,
-            "gmt_raw": timezone_text,
-            "gmt_value": str(gmt_value),
-        })
-
-    if not records:
-        raise RuntimeError("Не удалось корректно разобрать строки таблицы на скриншоте")
-
-    return records
 
 def is_king_header_line(line):
     line = line.strip()
@@ -2049,7 +1537,7 @@ def confirm_fp_issue(chat_id, user_id, username):
             f"Кто взял в боте: {who_took_text}"
         )
 
-        tg_send_message(chat_id, fp_link)
+        tg_send_message(chat_id, f"Ссылка:\n{fp_link}")
         send_fps_menu(chat_id, "Выбери следующее действие:")
 
     except Exception as e:
@@ -2084,6 +1572,49 @@ def parse_price(value):
         return float(s)
     except ValueError:
         return None
+
+def parse_limit_number(value):
+    if value is None:
+        return None
+
+    text = str(value).strip().lower()
+
+    if not text:
+        return None
+
+    if text in ["no limit", "unlim", "unlimited"]:
+        return "unlim"
+
+    try:
+        num = float(text.replace(",", "").replace(" ", ""))
+        return num
+    except Exception:
+        return None
+
+def limit_matches_filter(limit_value, selected_filter):
+    parsed = parse_limit_number(limit_value)
+
+    if parsed is None:
+        return False
+
+    if selected_filter == FREE_LIMIT_250:
+        return parsed != "unlim" and 0 <= parsed <= 300
+
+    if selected_filter == FREE_LIMIT_500:
+        return parsed != "unlim" and 301 <= parsed <= 800
+
+    if selected_filter == FREE_LIMIT_1200:
+        return parsed != "unlim" and 801 <= parsed <= 1200
+
+    if selected_filter == FREE_LIMIT_1500:
+        return parsed != "unlim" and 1201 <= parsed <= 1500
+
+    if selected_filter == FREE_LIMIT_UNLIM:
+        if parsed == "unlim":
+            return True
+        return parsed != "unlim" and parsed >= 1501
+
+    return False
 
 def normalize_numeric_for_sheet(value):
     num = parse_price(value)
@@ -2428,7 +1959,7 @@ def build_account_search_text(account_number):
 # =========================
 # FREE ACCOUNTS
 # =========================
-def send_free_accounts(chat_id):
+def send_free_accounts(chat_id, selected_filter):
     rows = get_sheet_rows_cached(SHEET_ACCOUNTS)
 
     if len(rows) < 2:
@@ -2441,11 +1972,17 @@ def send_free_accounts(chat_id):
             row = row + [''] * (13 - len(row))
 
         status = str(row[8]).strip().lower()
-        if status == "free":
-            free_rows.append(row)
+        if status != "free":
+            continue
+
+        limit_val = str(row[4]).strip()
+        if not limit_matches_filter(limit_val, selected_filter):
+            continue
+
+        free_rows.append(row)
 
     if not free_rows:
-        tg_send_message(chat_id, "Свободных личек сейчас нет.")
+        tg_send_message(chat_id, "Свободных личек с таким лимитом сейчас нет.")
         return
 
     lines = []
@@ -2458,12 +1995,11 @@ def send_free_accounts(chat_id):
         currency = str(row[12]).strip() if len(row) > 12 else ""
 
         lines.append(
-            f"{i}. {acc} | Л {limit_val} | Т {threshold} | GMT {gmt} | {currency} | {warehouses}"
+            f"{i}. {acc}\n"
+            f"Л {limit_val} | Т {threshold} | GMT {gmt} | {currency} | {warehouses}\n"
         )
 
-    header = f"Свободные лички: {len(free_rows)}\n\n"
-
-    # Telegram любит сообщения до ~4000 символов
+    header = f"Свободные лички ({selected_filter}): {len(free_rows)}\n\n"
     current_text = header
 
     for line in lines:
@@ -2475,7 +2011,6 @@ def send_free_accounts(chat_id):
 
     if current_text.strip():
         tg_send_message(chat_id, current_text.strip())
-
 
 # =========================
 # ADD ACCOUNTS
@@ -3725,6 +3260,10 @@ def handle_message(msg):
                 tg_send_message(chat_id, "У вас нет доступа.")
                 return
 
+            set_state(user_id, {"mode": "awaiting_bms_text"})
+            send_add_bms_instructions(chat_id)
+            return
+
         if text == ADMIN_ADD_FPS:
             if not is_admin(user_id):
                 tg_send_message(chat_id, "У вас нет доступа.")
@@ -3734,15 +3273,10 @@ def handle_message(msg):
             send_add_fps_instructions(chat_id)
             return
 
-            set_state(user_id, {"mode": "awaiting_bms_text"})
-            send_add_bms_instructions(chat_id)
-            return
-
         # ========= ЛИЧКИ =========
         if text == SUBMENU_FREE:
-            clear_state(user_id)
-            send_free_accounts(chat_id)
-            send_accounts_menu(chat_id, "Выбери следующее действие:")
+            set_state(user_id, {"mode": "awaiting_free_accounts_limit"})
+            send_free_accounts_limit_menu(chat_id, "Выбери лимит для показа свободных личек:")
             return
 
         if text == SUBMENU_SEARCH:
@@ -3972,6 +3506,22 @@ def handle_message(msg):
                 send_admin_menu(chat_id, "Выбери следующее действие:")
             else:
                 send_main_menu(chat_id, "Готово. Выбери следующее действие:", user_id=user_id)
+            return
+
+        if state.get("mode") == "awaiting_free_accounts_limit":
+            if text not in [
+                FREE_LIMIT_250,
+                FREE_LIMIT_500,
+                FREE_LIMIT_1200,
+                FREE_LIMIT_1500,
+                FREE_LIMIT_UNLIM
+            ]:
+                send_free_accounts_limit_menu(chat_id, "Нужно выбрать лимит кнопкой:")
+                return
+
+            clear_state(user_id)
+            send_free_accounts(chat_id, text)
+            send_accounts_menu(chat_id, "Выбери следующее действие:")
             return
 
         # ========= СОСТОЯНИЯ: ПОИСК / ВОЗВРАТ ЛИЧЕК =========
@@ -4315,23 +3865,7 @@ def handle_message(msg):
             send_bms_menu(chat_id, "Выбери следующее действие:")
             return
 
-        send_main_menu(chat_id, "Не понял команду. Выбери кнопку из меню:", user_id=user_id)
-
-    except Exception as e:
-        logging.exception("handle_message crashed")
-        try:
-            error_text = str(e)
-
-            if "Google Sheets временно перегружен" in error_text:
-                tg_send_message(chat_id, error_text)
-            else:
-                tg_send_message(chat_id, "Произошла ошибка. Попробуй ещё раз.")
-
-            send_main_menu(chat_id, "Главное меню:", user_id=user_id)
-        except Exception:
-            pass
-
-        # ========= СОСТОЯНИЯ: фп =========
+                # ========= СОСТОЯНИЯ: фп =========
         if state.get("mode") == "awaiting_search_fp":
             fp_link = text.strip()
 
@@ -4386,6 +3920,23 @@ def handle_message(msg):
 
             show_found_fp(chat_id, user_id, found)
             return
+
+        send_main_menu(chat_id, "Не понял команду. Выбери кнопку из меню:", user_id=user_id)
+
+    except Exception as e:
+        logging.exception("handle_message crashed")
+        try:
+            error_text = str(e)
+
+            if "Google Sheets временно перегружен" in error_text:
+                tg_send_message(chat_id, error_text)
+            else:
+                tg_send_message(chat_id, "Произошла ошибка. Попробуй ещё раз.")
+
+            send_main_menu(chat_id, "Главное меню:", user_id=user_id)
+        except Exception:
+            pass
+
 
 # =========================
 # FLASK
