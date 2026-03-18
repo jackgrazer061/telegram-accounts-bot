@@ -179,6 +179,7 @@ BTN_BACK_TO_MENU = 'В меню'
 # кнопки выдачи личек
 BTN_ISSUE_CONFIRM = 'Выдать личку'
 BTN_ISSUE_NEXT = 'Другая личка'
+BTN_ISSUE_MORE = 'Выдать еще'
 BTN_RETURN_CONFIRM = 'Подтвердить бан'
 
 # кнопки выдачи кингов
@@ -2901,94 +2902,242 @@ def append_issue_row(account_number, purchase_date, price, transfer_date, suppli
         ]]
     )
 
+def issue_accounts_bulk(account_numbers, for_whom, username):
+    today = datetime.now().strftime("%d/%m/%Y")
+    who_took_text = f"@{username}" if username else "без username"
+
+    unique_numbers = []
+    seen = set()
+    for x in account_numbers:
+        acc = str(x).strip()
+        if acc and acc not in seen:
+            seen.add(acc)
+            unique_numbers.append(acc)
+
+    issued = []
+    not_found = []
+    not_available = []
+
+    with issue_lock:
+        rows = get_sheet_rows_cached(SHEET_ACCOUNTS, force=True)
+
+        indexed = {}
+        for idx, row in enumerate(rows[1:], start=2):
+            if len(row) < 14:
+                row = row + [''] * (14 - len(row))
+                rows[idx - 1] = row
+
+            acc = str(row[0]).strip()
+            if acc:
+                indexed[acc] = (idx, row)
+
+        issue_rows = []
+
+        for account_number in unique_numbers:
+            item = indexed.get(account_number)
+            if not item:
+                not_found.append(account_number)
+                continue
+
+            row_index, row = item
+            status = str(row[8]).strip().lower()
+
+            if status != "free":
+                not_available.append(account_number)
+                continue
+
+            sheet_update_raw(
+                SHEET_ACCOUNTS,
+                f"I{row_index}:L{row_index}",
+                [["taken", for_whom, today, who_took_text]]
+            )
+
+            row[8] = "taken"
+            row[9] = for_whom
+            row[10] = today
+            row[11] = who_took_text
+
+            issue_rows.append([
+                account_number,
+                "РК",
+                row[1],
+                normalize_numeric_for_sheet(row[2]),
+                today,
+                row[3],
+                for_whom
+            ])
+
+            issued.append({
+                "account_number": account_number,
+                "warehouses": row[7],
+                "purchase_date": row[1],
+                "price": row[2],
+                "supplier": row[3],
+                "currency": row[12] if len(row) > 12 else "",
+                "account_url": row[13] if len(row) > 13 else ""
+            })
+
+        with table_cache_lock:
+            table_cache[SHEET_ACCOUNTS]["rows"] = rows
+            table_cache[SHEET_ACCOUNTS]["updated_at"] = time.time()
+
+        if issue_rows:
+            sheet_append_rows_and_refresh(
+                SHEET_ISSUES,
+                issue_rows,
+                value_input_option="USER_ENTERED"
+            )
+
+        invalidate_stats_cache()
+
+    return {
+        "issued": issued,
+        "not_found": not_found,
+        "not_available": not_available,
+        "who_took_text": who_took_text,
+        "for_whom": for_whom
+    }
+
+
+def issue_next_quick_account_for_person(for_whom, username):
+    today = datetime.now().strftime("%d/%m/%Y")
+    who_took_text = f"@{username}" if username else "без username"
+
+    with issue_lock:
+        rows = get_sheet_rows_cached(SHEET_ACCOUNTS, force=True)
+
+        candidates = []
+        for idx, row in enumerate(rows[1:], start=2):
+            if len(row) < 14:
+                row = row + [''] * (14 - len(row))
+                rows[idx - 1] = row
+
+            if str(row[8]).strip().lower() != "free":
+                continue
+
+            purchase_date_obj = parse_date(row[1]) or datetime.max
+            candidates.append((idx, purchase_date_obj, row))
+
+        if not candidates:
+            return None
+
+        candidates.sort(key=lambda x: x[1])
+        row_index, _, row = candidates[0]
+
+        sheet_update_raw(
+            SHEET_ACCOUNTS,
+            f"I{row_index}:L{row_index}",
+            [["taken", for_whom, today, who_took_text]]
+        )
+
+        row[8] = "taken"
+        row[9] = for_whom
+        row[10] = today
+        row[11] = who_took_text
+
+        with table_cache_lock:
+            table_cache[SHEET_ACCOUNTS]["rows"] = rows
+            table_cache[SHEET_ACCOUNTS]["updated_at"] = time.time()
+
+        append_issue_row(
+            row[0],
+            row[1],
+            row[2],
+            today,
+            row[3],
+            for_whom
+        )
+
+        invalidate_stats_cache()
+
+    return {
+        "account_number": row[0],
+        "purchase_date": row[1],
+        "price": row[2],
+        "supplier": row[3],
+        "warehouses": row[7],
+        "currency": row[12] if len(row) > 12 else "",
+        "account_url": row[13] if len(row) > 13 else "",
+        "who_took_text": who_took_text,
+        "for_whom": for_whom
+    }
 
 def confirm_issue(chat_id, user_id, username):
     try:
-        with issue_lock:
-            state = get_state(user_id)
-            
-            if state.get("mode") not in ["account_found", "quick_account_found"]:
-                send_main_menu(chat_id, "Сначала найди личку.", user_id=user_id)
-                return
+        state = get_state(user_id)
 
-            row_index = state.get("found_row")
-            if not row_index:
-                send_main_menu(chat_id, "Не нашёл выбранную личку. Начни заново.", user_id=user_id)
-                return
+        current_mode = state.get("mode")
+        if current_mode not in ["account_found", "quick_account_found"]:
+            send_main_menu(chat_id, "Сначала найди личку.", user_id=user_id)
+            return
 
-            rows = get_sheet_rows_cached(SHEET_ACCOUNTS)
-
-            if row_index - 1 >= len(rows):
-                clear_state(user_id)
-                send_main_menu(chat_id, "Личка не найдена в таблице. Начни заново.", user_id=user_id)
-                return
-
-            row = rows[row_index - 1]
-
-            if len(row) < 12:
-                row = row + [''] * (12 - len(row))
-
-            status = str(row[8]).strip().lower()
-
-            if status == "taken":
-                clear_state(user_id)
-                send_main_menu(chat_id, "Эта личка уже занята.", user_id=user_id)
-                return
-
-            if status == "ban":
-                clear_state(user_id)
-                send_main_menu(chat_id, "Эта личка уже в ban.", user_id=user_id)
-                return
-
-            if status != "free":
-                clear_state(user_id)
-                send_main_menu(chat_id, "Эта личка недоступна.", user_id=user_id)
-                return
-
-            account_number = row[0]
-            purchase_date = row[1]
-            price = row[2]
-            supplier = row[3]
-            account_url = row[13] if len(row) > 13 else ""
-            today = datetime.now().strftime("%d/%m/%Y")
-
-            who_took_text = f"@{username}" if username else "без username"
-
-            sheet_update_and_refresh(
-                SHEET_ACCOUNTS,
-                f"I{row_index}:L{row_index}",
-                [["taken", state["for_whom"], today, who_took_text]]
-            )
-
-            append_issue_row(
-                account_number,
-                purchase_date,
-                price,
-                today,
-                supplier,
-                state["for_whom"]
-            )
-            invalidate_stats_cache()
-
+        account_number = state.get("found_account")
+        if not account_number:
             clear_state(user_id)
+            send_main_menu(chat_id, "Не нашёл выбранную личку. Начни заново.", user_id=user_id)
+            return
+
+        result = issue_accounts_bulk(
+            account_numbers=[account_number],
+            for_whom=state["for_whom"],
+            username=username
+        )
+
+        if not result["issued"]:
+            clear_state(user_id)
+            send_main_menu(chat_id, "Эта личка уже недоступна. Начни заново.", user_id=user_id)
+            return
+
+        item = result["issued"][0]
+        who_took_text = result["who_took_text"]
+
+        # быстрая выдача: после подтверждения даем кнопку "Выдать еще"
+        if current_mode == "quick_account_found":
+            set_state(user_id, {
+                "mode": "quick_issue_continue",
+                "for_whom": state["for_whom"]
+            })
+
+            tg_send_message(
+                chat_id,
+                f"Готово ✅\n\n"
+                f"Выдана личка: {item['account_number']}\n"
+                f"Кому передали: {state['for_whom']}\n"
+                f"Кто взял в боте: {who_took_text}"
+            )
+
+            if item["account_url"]:
+                tg_send_message(chat_id, f"Ссылка на личку:\n{item['account_url']}")
+            else:
+                tg_send_message(chat_id, "Ссылка на личку не найдена в колонке N.")
+
+            keyboard = [
+                [{"text": BTN_ISSUE_MORE}],
+                [{"text": BTN_BACK_TO_MENU}]
+            ]
+            tg_send_message(chat_id, "Выдать еще личку?", keyboard)
+            return
+
+        # обычная выдача
+        clear_state(user_id)
 
         tg_send_message(
             chat_id,
             f"Готово ✅\n\n"
-            f"Выдана личка: {account_number}\n"
+            f"Выдана личка: {item['account_number']}\n"
             f"Кому передали: {state['for_whom']}\n"
             f"Кто взял в боте: {who_took_text}"
         )
 
-        if account_url:
-            tg_send_message(chat_id, f"Ссылка на личку:\n{account_url}")
+        if item["account_url"]:
+            tg_send_message(chat_id, f"Ссылка на личку:\n{item['account_url']}")
         else:
             tg_send_message(chat_id, "Ссылка на личку не найдена в колонке N.")
 
         send_main_menu(chat_id, "Выбери следующее действие:", user_id=user_id)
 
     except Exception as e:
-        logging.error(f"confirm_issue error: {e}")
+        logging.exception("confirm_issue crashed")
         tg_send_message(chat_id, "Ошибка выдачи лички. Попробуй ещё раз.")
         send_main_menu(chat_id, "Главное меню:", user_id=user_id)
 
@@ -4042,6 +4191,41 @@ def handle_message(msg):
             confirm_issue(chat_id, user_id, username)
             return
 
+        if text == BTN_ISSUE_MORE:
+            if state.get("mode") != "quick_issue_continue":
+                send_accounts_menu(chat_id, "Сначала начни быструю выдачу заново.")
+                return
+
+            result = issue_next_quick_account_for_person(
+                for_whom=state["for_whom"],
+                username=username
+            )
+
+            if not result:
+                clear_state(user_id)
+                send_accounts_menu(chat_id, "Свободных личек больше нет.")
+                return
+
+            tg_send_message(
+                chat_id,
+                f"Готово ✅\n\n"
+                f"Выдана личка: {result['account_number']}\n"
+                f"Кому передали: {result['for_whom']}\n"
+                f"Кто взял в боте: {result['who_took_text']}"
+            )
+
+            if result["account_url"]:
+                tg_send_message(chat_id, f"Ссылка на личку:\n{result['account_url']}")
+            else:
+                tg_send_message(chat_id, "Ссылка на личку не найдена в колонке N.")
+
+            keyboard = [
+                [{"text": BTN_ISSUE_MORE}],
+                [{"text": BTN_BACK_TO_MENU}]
+            ]
+            tg_send_message(chat_id, "Выдать еще личку?", keyboard)
+            return
+
         if text == BTN_ISSUE_NEXT:
             if not state:
                 send_main_menu(chat_id, "Начни заново.", user_id=user_id)
@@ -4405,52 +4589,126 @@ def handle_message(msg):
                 "issue_department": state.get("issue_department")
             })
 
-            tg_send_message(chat_id, "Теперь напиши номер лички, которую хочешь выдать.")
+            tg_send_message(chat_id, "Теперь напиши номер лички или несколько номеров, каждый с новой строки.")
             return
 
         if state.get("mode") == "awaiting_issue_account_number":
-            account_number = text.strip()
+            account_numbers = [x.strip() for x in text.splitlines() if x.strip()]
 
-            if not account_number:
+            if not account_numbers:
                 tg_send_message(chat_id, "Впиши номер лички.")
                 return
 
-            found = find_account_in_base(account_number)
+            # если одна личка — оставляем старую логику с подтверждением
+            if len(account_numbers) == 1:
+                account_number = account_numbers[0]
 
-            if not found:
-                tg_send_message(chat_id, "Личка не найдена. Впиши номер ещё раз.")
+                found = find_account_in_base(account_number)
+
+                if not found:
+                    tg_send_message(chat_id, "Личка не найдена. Впиши номер ещё раз.")
+                    return
+
+                row = found["row"]
+
+                if len(row) < 12:
+                    row = row + [''] * (12 - len(row))
+
+                status = str(row[8]).strip().lower()
+
+                if status == "taken":
+                    tg_send_message(chat_id, "Эта личка уже занята. Впиши другую.")
+                    return
+
+                if status == "ban":
+                    tg_send_message(chat_id, "Эта личка в ban. Впиши другую.")
+                    return
+
+                if status != "free":
+                    tg_send_message(chat_id, "Эта личка недоступна. Впиши другую.")
+                    return
+
+                found_data = {
+                    "row_index": found["row_index"],
+                    "account_number": row[0],
+                    "purchase_date": row[1],
+                    "price": row[2],
+                    "supplier": row[3],
+                    "warehouses": row[7],
+                    "currency": row[12] if len(row) > 12 else ""
+                }
+
+                show_found_account(chat_id, user_id, found_data)
                 return
 
-            row = found["row"]
+            # если несколько личек — выдаем сразу все
+            result = issue_accounts_bulk(
+                account_numbers=account_numbers,
+                for_whom=state["for_whom"],
+                username=username
+            )
 
-            if len(row) < 12:
-                row = row + [''] * (12 - len(row))
+            clear_state(user_id)
 
-            status = str(row[8]).strip().lower()
+            issued = result["issued"]
+            not_found = result["not_found"]
+            not_available = result["not_available"]
+            who_took_text = result["who_took_text"]
 
-            if status == "taken":
-                tg_send_message(chat_id, "Эта личка уже занята. Впиши другую.")
+            if not issued:
+                text_result = "Не удалось выдать ни одной лички."
+
+                if not_found:
+                    text_result += "\n\nНе найдены:\n" + "\n".join(not_found[:50])
+
+                if not_available:
+                    text_result += "\n\nНе свободны:\n" + "\n".join(not_available[:50])
+
+                send_accounts_menu(chat_id, text_result)
                 return
 
-            if status == "ban":
-                tg_send_message(chat_id, "Эта личка в ban. Впиши другую.")
-                return
+            tg_send_message(
+                chat_id,
+                f"Готово ✅\n\n"
+                f"Выдано личек: {len(issued)}\n"
+                f"Кому передали: {state['for_whom']}\n"
+                f"Кто взял в боте: {who_took_text}"
+            )
 
-            if status != "free":
-                tg_send_message(chat_id, "Эта личка недоступна. Впиши другую.")
-                return
+            blocks = []
+            for i, item in enumerate(issued, start=1):
+                block = (
+                    f"{i}. {item['account_number']}\n"
+                    f"Склады: {item['warehouses']}\n"
+                    f"Дата покупки: {item['purchase_date']}\n"
+                    f"Цена: {item['price']}\n"
+                    f"Валюта: {item['currency']}"
+                )
 
-            found_data = {
-                "row_index": found["row_index"],
-                "account_number": row[0],
-                "purchase_date": row[1],
-                "price": row[2],
-                "supplier": row[3],
-                "warehouses": row[7],
-                "currency": ""
-            }
+                if item["account_url"]:
+                    block += f"\nСсылка: {item['account_url']}"
 
-            show_found_account(chat_id, user_id, found_data)
+                blocks.append(block)
+
+            current_text = ""
+            for block in blocks:
+                chunk = block + "\n\n"
+                if len(current_text) + len(chunk) > 3500:
+                    tg_send_message(chat_id, current_text.strip())
+                    current_text = chunk
+                else:
+                    current_text += chunk
+
+            if current_text.strip():
+                tg_send_message(chat_id, current_text.strip())
+
+            if not_found:
+                tg_send_message(chat_id, "Не найдены:\n" + "\n".join(not_found[:50]))
+
+            if not_available:
+                tg_send_message(chat_id, "Не свободны:\n" + "\n".join(not_available[:50]))
+
+            send_accounts_menu(chat_id, "Выбери следующее действие:")
             return
 
         if state.get("mode") == "awaiting_quick_issue_department":
