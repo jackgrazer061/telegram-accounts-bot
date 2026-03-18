@@ -75,6 +75,7 @@ SHEET_ACCOUNTS = "База_личек"
 SHEET_ISSUES = "Простые лички 26"
 SHEET_KINGS = "База_кингов"
 SHEET_BMS = "База_БМ"
+SHEET_FPS = "База_ФП"
 
 LIMIT_OPTIONS = ['-250', '250-500', '500-1200', '1200-1500', 'unlim']
 THRESHOLD_OPTIONS = ['0-49', '50-99', '100-199', '200-499', '500+']
@@ -85,6 +86,7 @@ MENU_ACCOUNTS = 'Accounts'
 MENU_FARMERS = 'Farmers'
 MENU_KINGS = 'Кинги'
 MENU_BMS = 'БМ'
+MENU_FPS = 'ФП'
 MENU_STATS = 'Статистика'
 MENU_MANAGER_STATS = 'Статистика менеджера'
 MENU_ADMIN = 'Admin'
@@ -124,10 +126,14 @@ SUBMENU_GET_BM = 'Получить БМ'
 SUBMENU_FREE_BMS = 'Свободные БМы'
 SUBMENU_SEARCH_BM = 'Поиск БМа'
 
+SUBMENU_GET_FP = 'Выдать ФП'
+SUBMENU_SEARCH_FP = 'Поиск ФП'
+
 ADMIN_BACKUP = 'Бэкап таблиц'
 ADMIN_ADD_ACCOUNTS = 'Добавить лички'
 ADMIN_ADD_KINGS = 'Добавить кинги'
 ADMIN_ADD_BMS = 'Добавить БМы'
+ADMIN_ADD_FPS = 'Добавить ФП'
 BTN_BM_CONFIRM = 'Выдать БМ'
 BTN_BM_NEXT = 'Другой БМ'
 BTN_BACK_FROM_ADMIN = 'Назад из Admin'
@@ -143,6 +149,10 @@ BTN_RETURN_CONFIRM = 'Подтвердить бан'
 BTN_KING_CONFIRM = 'Выдать кинг'
 BTN_KING_NEXT = 'Другой кинг'
 BTN_KING_BAN_CONFIRM = 'Подтвердить ban'
+
+# кнопки выдачи фп
+BTN_FP_CONFIRM = 'Выдать ФП'
+BTN_FP_NEXT = 'Другое ФП'
 
 # Память состояний пользователей (для старта хватит)
 user_states = {}
@@ -179,6 +189,7 @@ def reset_google_cache():
             SHEET_ISSUES: {"rows": None, "updated_at": 0},
             SHEET_KINGS: {"rows": None, "updated_at": 0},
             SHEET_BMS: {"rows": None, "updated_at": 0},
+            SHEET_FPS: {"rows": None, "updated_at": 0},
         }
 
 def reset_table_cache():
@@ -189,6 +200,7 @@ def reset_table_cache():
             SHEET_ISSUES: {"rows": None, "updated_at": 0},
             SHEET_KINGS: {"rows": None, "updated_at": 0},
             SHEET_BMS: {"rows": None, "updated_at": 0},
+            SHEET_FPS: {"rows": None, "updated_at": 0},
         }
 
 def check_google_available():
@@ -214,6 +226,7 @@ table_cache = {
     SHEET_ISSUES: {"rows": None, "updated_at": 0},
     SHEET_KINGS: {"rows": None, "updated_at": 0},
     SHEET_BMS: {"rows": None, "updated_at": 0},
+    SHEET_FPS: {"rows": None, "updated_at": 0},
 }
 
 table_cache_lock = threading.Lock()
@@ -413,8 +426,17 @@ def send_main_menu(chat_id, text="Главное меню:", user_id=None):
 def send_accounts_main_menu(chat_id, text="Меню Accounts:"):
     keyboard = [
         [{"text": SUBMENU_ACCOUNTS_MAIN}, {"text": MENU_KINGS}],
-        [{"text": MENU_BMS}, {"text": MENU_MANAGER_STATS}],
+        [{"text": MENU_BMS}, {"text": MENU_FPS}],
+        [{"text": MENU_MANAGER_STATS}],
         [{"text": SUBMENU_BACK_MAIN}]
+    ]
+    tg_send_message(chat_id, text, keyboard)
+
+def send_fps_menu(chat_id, text="Меню ФП:"):
+    keyboard = [
+        [{"text": SUBMENU_GET_FP}],
+        [{"text": SUBMENU_SEARCH_FP}],
+        [{"text": BTN_BACK_TO_MENU}]
     ]
     tg_send_message(chat_id, text, keyboard)
 
@@ -449,7 +471,7 @@ def send_admin_menu(chat_id, text="Меню Admin:"):
     keyboard = [
         [{"text": ADMIN_BACKUP}],
         [{"text": ADMIN_ADD_ACCOUNTS}, {"text": ADMIN_ADD_KINGS}],
-        [{"text": ADMIN_ADD_BMS}],
+        [{"text": ADMIN_ADD_BMS}, {"text": ADMIN_ADD_FPS}],
         [{"text": BTN_BACK_FROM_ADMIN}]
     ]
     tg_send_message(chat_id, text, keyboard)
@@ -487,6 +509,17 @@ def send_add_bms_instructions(chat_id):
         "https://business.facebook.com/invitation/?token=......\n\n"
         "2) 987654321; 18/02/2026; 500; TT\n"
         "https://business.facebook.com/invitation/?token=......"
+    )
+    tg_send_message(chat_id, text)
+
+def send_add_fps_instructions(chat_id):
+    text = (
+        "Пришли ФП сообщением, каждая с новой строки.\n\n"
+        "Формат:\n"
+        "ссылка; дата покупки; цена; у кого купили; склад\n\n"
+        "Пример:\n"
+        "https://facebook.com/profile.php?id=123; 15/02/2026; 300; WD; sklad1\n"
+        "https://facebook.com/profile.php?id=456; 16/02/2026; 500; TT; sklad2"
     )
     tg_send_message(chat_id, text)
 
@@ -1775,6 +1808,254 @@ def send_person_menu(chat_id, department):
     keyboard.append([{"text": MENU_CANCEL}])
 
     tg_send_message(chat_id, title, keyboard)
+
+def add_fps_from_text(text):
+    existing_rows = get_sheet_rows_cached(SHEET_FPS)
+    existing_links = set()
+
+    for row in existing_rows[1:]:
+        if row and row[0].strip():
+            existing_links.add(row[0].strip())
+
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    to_append = []
+    errors = []
+    duplicates = 0
+
+    for i, line in enumerate(lines, start=1):
+        fields = [x.strip() for x in line.split(";")]
+        if len(fields) != 5:
+            errors.append(f"Строка {i}: должно быть 5 полей через ';'")
+            continue
+
+        fp_link, purchase_date_raw, price_raw, supplier, warehouse = fields
+
+        if not fp_link:
+            errors.append(f"Строка {i}: пустая ссылка ФП")
+            continue
+
+        if fp_link in existing_links:
+            duplicates += 1
+            continue
+
+        purchase_date = parse_date(purchase_date_raw)
+        if not purchase_date:
+            errors.append(f"Строка {i}: неверная дата покупки '{purchase_date_raw}'")
+            continue
+
+        price = parse_price(price_raw)
+        if price is None:
+            errors.append(f"Строка {i}: неверная цена '{price_raw}'")
+            continue
+
+        to_append.append([
+            fp_link,
+            purchase_date.strftime("%d/%m/%Y"),
+            price,
+            supplier,
+            warehouse,
+            "free",
+            "",
+            "",
+            ""
+        ])
+
+        existing_links.add(fp_link)
+
+    if to_append:
+        sheet_append_rows_and_refresh(SHEET_FPS, to_append)
+        invalidate_stats_cache()
+
+    message = (
+        f"Готово ✅\n"
+        f"Добавлено ФП: {len(to_append)}\n"
+        f"Дубликатов пропущено: {duplicates}\n"
+        f"Ошибок: {len(errors)}"
+    )
+
+    if errors:
+        message += "\n\nОшибки:\n" + "\n".join(errors[:10])
+        if len(errors) > 10:
+            message += f"\n... и ещё {len(errors) - 10}"
+
+    return message
+
+
+def find_fp_in_base(fp_link):
+    rows = get_sheet_rows_cached(SHEET_FPS)
+
+    for idx, row in enumerate(rows[1:], start=2):
+        if len(row) < 9:
+            row = row + [''] * (9 - len(row))
+
+        if str(row[0]).strip() == str(fp_link).strip():
+            return {
+                "row_index": idx,
+                "row": row
+            }
+
+    return None
+
+
+def build_fp_search_text(fp_link):
+    fp_info = find_fp_in_base(fp_link)
+
+    if not fp_info:
+        return None
+
+    row = fp_info["row"]
+
+    if len(row) < 9:
+        row = row + [''] * (9 - len(row))
+
+    text = (
+        f"Ссылка ФП: {row[0]}\n"
+        f"Дата покупки: {row[1] or 'не указана'}\n"
+        f"Цена: {row[2] or 'не указана'}\n"
+        f"У кого купили: {row[3] or 'не указан'}\n"
+        f"Склад: {row[4] or 'не указан'}\n"
+        f"Статус: {row[5] or 'не указан'}\n"
+        f"Для кого: {row[6] or 'не указано'}\n"
+        f"Кто взял: {row[7] or 'не указано'}\n"
+        f"Дата выдачи: {row[8] or 'не указана'}"
+    )
+
+    return text
+
+
+def find_free_fp(exclude_link=None):
+    rows = get_sheet_rows_cached(SHEET_FPS)
+
+    candidates = []
+
+    for idx, row in enumerate(rows[1:], start=2):
+        if len(row) < 9:
+            row = row + [''] * (9 - len(row))
+
+        fp_link = str(row[0]).strip()
+        purchase_date_raw = str(row[1]).strip()
+        status = str(row[5]).strip().lower()
+
+        if status != "free":
+            continue
+
+        if exclude_link and fp_link == exclude_link:
+            continue
+
+        purchase_date = parse_date(purchase_date_raw) or datetime.max
+
+        candidates.append({
+            "row_index": idx,
+            "fp_link": fp_link,
+            "purchase_date_obj": purchase_date,
+            "purchase_date": purchase_date_raw,
+            "price": row[2],
+            "supplier": row[3],
+            "warehouse": row[4]
+        })
+
+    if not candidates:
+        return None
+
+    candidates.sort(key=lambda x: x["purchase_date_obj"])
+    return candidates[0]
+
+
+def show_found_fp(chat_id, user_id, found):
+    state = get_state(user_id)
+    state["mode"] = "fp_found"
+    state["fp_row"] = found["row_index"]
+    state["found_fp_link"] = found["fp_link"]
+    set_state(user_id, state)
+
+    text = (
+        "Найдено ФП:\n\n"
+        f"Ссылка: {found['fp_link']}\n"
+        f"Дата покупки: {found['purchase_date']}\n"
+        f"Цена: {found['price']}\n"
+        f"Склад: {found['warehouse']}\n"
+        f"Для кого: {state['fp_for_whom']}"
+    )
+
+    keyboard = [
+        [{"text": BTN_FP_CONFIRM}, {"text": BTN_FP_NEXT}],
+        [{"text": BTN_BACK_TO_MENU}]
+    ]
+
+    tg_send_message(chat_id, text, keyboard)
+
+
+def confirm_fp_issue(chat_id, user_id, username):
+    try:
+        with issue_lock:
+            state = get_state(user_id)
+
+            if state.get("mode") != "fp_found":
+                send_fps_menu(chat_id, "Сначала выбери ФП заново.")
+                return
+
+            row_index = state.get("fp_row")
+            if not row_index:
+                send_fps_menu(chat_id, "Не найдено выбранное ФП. Начни заново.")
+                return
+
+            rows = get_sheet_rows_cached(SHEET_FPS)
+
+            if row_index - 1 >= len(rows):
+                clear_state(user_id)
+                send_fps_menu(chat_id, "ФП не найдено в таблице. Начни заново.")
+                return
+
+            row = rows[row_index - 1]
+
+            if len(row) < 9:
+                row = row + [''] * (9 - len(row))
+
+            status = str(row[5]).strip().lower()
+
+            if status == "taken":
+                clear_state(user_id)
+                send_fps_menu(chat_id, "Это ФП уже занято.")
+                return
+
+            if status != "free":
+                clear_state(user_id)
+                send_fps_menu(chat_id, "Это ФП недоступно.")
+                return
+
+            fp_link = row[0]
+            today = datetime.now().strftime("%d/%m/%Y")
+            who_took_text = f"@{username}" if username else "без username"
+
+            sheet_update_and_refresh(
+                SHEET_FPS,
+                f"F{row_index}:I{row_index}",
+                [[
+                    "taken",
+                    state["fp_for_whom"],
+                    who_took_text,
+                    today
+                ]]
+            )
+
+            clear_state(user_id)
+
+        tg_send_message(
+            chat_id,
+            f"Готово ✅\n\n"
+            f"ФП выдано.\n"
+            f"Ссылка: {fp_link}\n"
+            f"Для кого: {state['fp_for_whom']}\n"
+            f"Кто взял в боте: {who_took_text}"
+        )
+
+        tg_send_message(chat_id, fp_link)
+        send_fps_menu(chat_id, "Выбери следующее действие:")
+
+    except Exception as e:
+        logging.exception("confirm_fp_issue crashed")
+        tg_send_message(chat_id, "Ошибка выдачи ФП. Попробуй ещё раз.")
+        send_fps_menu(chat_id, "Меню ФП:")
 
 # =========================
 # HELPERS
@@ -3390,6 +3671,11 @@ def handle_message(msg):
             send_bms_menu(chat_id)
             return
 
+        if text == MENU_FPS:
+            clear_state(user_id)
+            send_fps_menu(chat_id)
+            return
+
         if text == SUBMENU_BACK_MAIN:
             clear_state(user_id)
             send_main_menu(chat_id, user_id=user_id)
@@ -3438,6 +3724,15 @@ def handle_message(msg):
             if not is_admin(user_id):
                 tg_send_message(chat_id, "У вас нет доступа.")
                 return
+
+        if text == ADMIN_ADD_FPS:
+            if not is_admin(user_id):
+                tg_send_message(chat_id, "У вас нет доступа.")
+                return
+
+            set_state(user_id, {"mode": "awaiting_fps_add"})
+            send_add_fps_instructions(chat_id)
+            return
 
             set_state(user_id, {"mode": "awaiting_bms_text"})
             send_add_bms_instructions(chat_id)
@@ -3614,6 +3909,37 @@ def handle_message(msg):
             show_found_bm(chat_id, user_id, found)
             return
 
+        # ========= фп =========
+        if text == SUBMENU_SEARCH_FP:
+            set_state(user_id, {"mode": "awaiting_search_fp"})
+            tg_send_message(chat_id, "Впиши ссылку ФП для поиска.")
+            return
+
+        if text == SUBMENU_GET_FP:
+            clear_state(user_id)
+            set_state(user_id, {"mode": "awaiting_fp_department"})
+            send_department_menu(chat_id, "Выбери для кого ФП:")
+            return
+
+        if text == BTN_FP_CONFIRM:
+            confirm_fp_issue(chat_id, user_id, username)
+            return
+
+        if text == BTN_FP_NEXT:
+            if not state:
+                send_fps_menu(chat_id, "Начни заново.")
+                return
+
+            found = find_free_fp(exclude_link=state.get("found_fp_link"))
+
+            if not found:
+                clear_state(user_id)
+                send_fps_menu(chat_id, "Свободных ФП больше нет.")
+                return
+
+            show_found_fp(chat_id, user_id, found)
+            return
+
         # ========= СОСТОЯНИЯ: ДОБАВЛЕНИЕ =========
         if state.get("mode") == "awaiting_bulk_add":
             result = add_accounts_from_text(text)
@@ -3628,6 +3954,17 @@ def handle_message(msg):
 
         if state.get("mode") == "awaiting_bms_text":
             result = add_bms_from_txt_content(text)
+            clear_state(user_id)
+            tg_send_message(chat_id, result)
+
+            if is_admin(user_id):
+                send_admin_menu(chat_id, "Выбери следующее действие:")
+            else:
+                send_main_menu(chat_id, "Готово. Выбери следующее действие:", user_id=user_id)
+            return
+
+        if state.get("mode") == "awaiting_fps_add":
+            result = add_fps_from_text(text)
             clear_state(user_id)
             tg_send_message(chat_id, result)
 
@@ -3994,6 +4331,62 @@ def handle_message(msg):
         except Exception:
             pass
 
+        # ========= СОСТОЯНИЯ: фп =========
+        if state.get("mode") == "awaiting_search_fp":
+            fp_link = text.strip()
+
+            if not fp_link:
+                tg_send_message(chat_id, "Впиши ссылку ФП.")
+                return
+
+            result = build_fp_search_text(fp_link)
+            clear_state(user_id)
+
+            if not result:
+                send_fps_menu(chat_id, "ФП не найдено.")
+                return
+
+            tg_send_message(chat_id, result)
+            send_fps_menu(chat_id, "Выбери следующее действие:")
+            return
+
+        if state.get("mode") == "awaiting_fp_department":
+            if text not in [DEPT_CRYPTO, DEPT_GAMBLA]:
+                send_department_menu(chat_id, "Нужно выбрать отдел кнопкой:")
+                return
+
+            state["mode"] = "awaiting_fp_for_whom"
+            state["fp_department"] = text
+            set_state(user_id, state)
+
+            send_person_menu(chat_id, text)
+            return
+
+        if state.get("mode") == "awaiting_fp_for_whom":
+            allowed_names = []
+
+            if state.get("fp_department") == DEPT_CRYPTO:
+                allowed_names = CRYPTO_NAMES
+            elif state.get("fp_department") == DEPT_GAMBLA:
+                allowed_names = GAMBLA_NAMES
+
+            if text not in allowed_names:
+                send_person_menu(chat_id, state.get("fp_department"))
+                return
+
+            state["fp_for_whom"] = text
+            set_state(user_id, state)
+
+            found = find_free_fp()
+
+            if not found:
+                clear_state(user_id)
+                send_fps_menu(chat_id, "Свободных ФП сейчас нет.")
+                return
+
+            show_found_fp(chat_id, user_id, found)
+            return
+
 # =========================
 # FLASK
 # =========================
@@ -4097,6 +4490,103 @@ def fastadscheck_import():
 
     except Exception as e:
         logging.exception("fastadscheck_import crashed")
+        return jsonify({
+            "ok": False,
+            "error": str(e)
+        }), 500
+
+@app.route("/fastadscheck-add", methods=["POST"])
+def fastadscheck_add():
+    try:
+        payload = request.get_json(silent=True) or {}
+
+        token = str(payload.get("token", "")).strip()
+        rows = payload.get("rows", [])
+
+        expected_token = os.environ.get("FASTADCHECK_IMPORT_TOKEN", "").strip()
+
+        if not expected_token:
+            return jsonify({
+                "ok": False,
+                "error": "FASTADCHECK_IMPORT_TOKEN не задан на сервере"
+            }), 500
+
+        if token != expected_token:
+            return jsonify({
+                "ok": False,
+                "error": "unauthorized"
+            }), 403
+
+        if not isinstance(rows, list) or not rows:
+            return jsonify({
+                "ok": False,
+                "error": "rows пустой или неверный формат"
+            }), 400
+
+        existing_rows = get_sheet_rows_cached(SHEET_ACCOUNTS)
+        existing_accounts = set()
+
+        for row in existing_rows[1:]:
+            if row and len(row) > 0 and str(row[0]).strip():
+                existing_accounts.add(str(row[0]).strip())
+
+        to_append = []
+        duplicates = 0
+        skipped = []
+
+        for item in rows:
+            account_id = str(item.get("account_id", "")).strip()
+            gmt_value = str(item.get("gmt", "")).strip()
+            currency_value = str(item.get("currency", "")).strip().upper()
+            account_url = str(item.get("account_url", "")).strip()
+            limit_value = item.get("limit_usd")
+            threshold_value = item.get("threshold_usd")
+
+            if not account_id:
+                skipped.append("empty_account_id")
+                continue
+
+            if account_id in existing_accounts:
+                duplicates += 1
+                continue
+
+            to_append.append([
+                account_id,                                               # A номер
+                "",                                                       # B дата покупки
+                "",                                                       # C цена
+                "",                                                       # D поставщик
+                normalize_numeric_for_sheet(limit_value) if limit_value is not None else "",         # E лимит
+                normalize_numeric_for_sheet(threshold_value) if threshold_value is not None else "", # F трешхолд
+                gmt_value,                                                # G GMT
+                "",                                                       # H склады
+                "free",                                                   # I статус
+                "",                                                       # J кому выдали
+                "",                                                       # K дата взятия
+                "",                                                       # L кто взял
+                currency_value,                                           # M валюта
+                account_url                                               # N ссылка
+            ])
+
+            existing_accounts.add(account_id)
+
+        if to_append:
+            sheet_append_rows_and_refresh(
+                SHEET_ACCOUNTS,
+                to_append,
+                value_input_option="USER_ENTERED"
+            )
+            invalidate_stats_cache()
+
+        return jsonify({
+            "ok": True,
+            "added": len(to_append),
+            "duplicates": duplicates,
+            "skipped": skipped[:100],
+            "received": len(rows)
+        }), 200
+
+    except Exception as e:
+        logging.exception("fastadscheck_add crashed")
         return jsonify({
             "ok": False,
             "error": str(e)
