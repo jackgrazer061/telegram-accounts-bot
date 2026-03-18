@@ -5768,8 +5768,8 @@ def fastadscheck_add():
         }), 500
 
 if __name__ == "__main__":
-    cache_thread = threading.Thread(target=cache_warmer_loop, daemon=True)
-    cache_thread.start()
+    # cache_thread = threading.Thread(target=cache_warmer_loop, daemon=True)
+    # cache_thread.start()
     backup_thread = threading.Thread(target=backup_scheduler_loop, daemon=True)
     backup_thread.start()
 
