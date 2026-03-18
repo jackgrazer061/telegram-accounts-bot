@@ -121,6 +121,7 @@ MENU_BMS = 'БМ'
 MENU_FPS = 'ФП'
 MENU_STATS = 'Статистика'
 MENU_MANAGER_STATS = 'Статистика менеджера'
+MENU_FARMER_STATS = 'Статистика фармера'
 MENU_ADMIN = 'Admin'
 MENU_CANCEL = 'Отмена'
 
@@ -512,6 +513,7 @@ def send_farmers_menu(chat_id, text="Меню Farmers:"):
     keyboard = [
         [{"text": FARM_MENU_KING}, {"text": FARM_MENU_BM}],
         [{"text": FARM_MENU_FP}],
+        [{"text": MENU_FARMER_STATS}],
         [{"text": BTN_BACK_TO_MENU}]
     ]
     tg_send_message(chat_id, text, keyboard)
@@ -2044,31 +2046,31 @@ def build_farm_bm_search_text(bm_id):
 
 
 def issue_farm_bm(chat_id, user_id, username):
-    found = find_free_farm_bm()
-
-    if not found:
-        send_farm_bms_menu(chat_id, "Свободных фарм BMов сейчас нет.")
-        return
-
-    row_index = found["row_index"]
-    rows = get_sheet_rows_cached(SHEET_FARM_BMS, force=True)
-
-    if row_index - 1 >= len(rows):
-        send_farm_bms_menu(chat_id, "BM не найден в таблице.")
-        return
-
-    row = rows[row_index - 1]
-    if len(row) < 9:
-        row = row + [''] * (9 - len(row))
-
-    if str(row[4]).strip().lower() != "free":
-        send_farm_bms_menu(chat_id, "Этот BM уже занят.")
-        return
-
     today = datetime.now().strftime("%d/%m/%Y")
     who_took_text = f"@{username}" if username else "без username"
 
     with issue_lock:
+        found = find_free_farm_bm()
+
+        if not found:
+            send_farm_bms_menu(chat_id, "Свободных фарм BMов сейчас нет.")
+            return
+
+        row_index = found["row_index"]
+        rows = get_sheet_rows_cached(SHEET_FARM_BMS, force=True)
+
+        if row_index - 1 >= len(rows):
+            send_farm_bms_menu(chat_id, "BM не найден в таблице.")
+            return
+
+        row = rows[row_index - 1]
+        if len(row) < 9:
+            row = row + [''] * (9 - len(row))
+
+        if str(row[4]).strip().lower() != "free":
+            send_farm_bms_menu(chat_id, "Этот BM уже занят.")
+            return
+
         sheet_update_and_refresh(
             SHEET_FARM_BMS,
             f"E{row_index}:H{row_index}",
@@ -2486,6 +2488,124 @@ def build_manager_stats_text(username):
 
     return "\n".join(text_parts)
 
+def build_farmer_stats_text(username):
+    if not username:
+        return "У тебя не установлен username в Telegram, поэтому я не могу собрать личную статистику."
+
+    username = username.strip().lstrip("@").lower()
+    target_username = f"@{username}"
+
+    start_date, end_date = get_manager_stats_period()
+
+    # ---------- FARM KINGS ----------
+    farm_kings_rows = get_sheet_rows_cached(SHEET_FARM_KINGS)
+
+    farm_kings_lines = []
+    for row in farm_kings_rows[1:]:
+        if len(row) < 10:
+            row = row + [''] * (10 - len(row))
+
+        king_name = str(row[0]).strip()
+        transfer_date_raw = str(row[6]).strip()
+        for_whom = str(row[5]).strip()
+        who_took = str(row[8]).strip().lower()
+
+        if who_took != target_username:
+            continue
+
+        transfer_date = parse_sheet_date(transfer_date_raw)
+        if not transfer_date:
+            continue
+
+        if not (start_date <= transfer_date < end_date):
+            continue
+
+        farm_kings_lines.append(
+            f"{king_name} | {transfer_date.strftime('%d/%m/%Y')} | {for_whom}"
+        )
+
+    # ---------- FARM BM ----------
+    farm_bms_rows = get_sheet_rows_cached(SHEET_FARM_BMS)
+
+    farm_bms_lines = []
+    for row in farm_bms_rows[1:]:
+        if len(row) < 9:
+            row = row + [''] * (9 - len(row))
+
+        bm_id = str(row[0]).strip()
+        transfer_date_raw = str(row[7]).strip()
+        for_whom = str(row[5]).strip()
+        who_took = str(row[6]).strip().lower()
+
+        if who_took != target_username:
+            continue
+
+        transfer_date = parse_sheet_date(transfer_date_raw)
+        if not transfer_date:
+            continue
+
+        if not (start_date <= transfer_date < end_date):
+            continue
+
+        farm_bms_lines.append(
+            f"{bm_id} | {transfer_date.strftime('%d/%m/%Y')} | {for_whom}"
+        )
+
+    # ---------- FARM FP ----------
+    farm_fps_rows = get_sheet_rows_cached(SHEET_FARM_FPS)
+
+    farm_fps_lines = []
+    for row in farm_fps_rows[1:]:
+        if len(row) < 9:
+            row = row + [''] * (9 - len(row))
+
+        fp_link = str(row[0]).strip()
+        transfer_date_raw = str(row[8]).strip()
+        for_whom = str(row[6]).strip()
+        who_took = str(row[7]).strip().lower()
+
+        if who_took != target_username:
+            continue
+
+        transfer_date = parse_sheet_date(transfer_date_raw)
+        if not transfer_date:
+            continue
+
+        if not (start_date <= transfer_date < end_date):
+            continue
+
+        farm_fps_lines.append(
+            f"{fp_link} | {transfer_date.strftime('%d/%m/%Y')} | {for_whom}"
+        )
+
+    period_text = (
+        f"Период: {start_date.strftime('%d/%m/%Y')} - "
+        f"{end_date.strftime('%d/%m/%Y')}"
+    )
+
+    text_parts = [f"Статистика фармера {target_username}", period_text, ""]
+
+    text_parts.append(f"Farm kings: {len(farm_kings_lines)}")
+    if farm_kings_lines:
+        text_parts.extend(farm_kings_lines)
+    else:
+        text_parts.append("нет выдач")
+
+    text_parts.append("")
+    text_parts.append(f"Farm BM: {len(farm_bms_lines)}")
+    if farm_bms_lines:
+        text_parts.extend(farm_bms_lines)
+    else:
+        text_parts.append("нет выдач")
+
+    text_parts.append("")
+    text_parts.append(f"Farm FP: {len(farm_fps_lines)}")
+    if farm_fps_lines:
+        text_parts.extend(farm_fps_lines)
+    else:
+        text_parts.append("нет выдач")
+
+    return "\n".join(text_parts)
 
 def get_state(user_id):
     state = user_states.get(str(user_id))
@@ -3802,12 +3922,94 @@ def build_stats_text():
         elif status == "taken":
             bms_taken += 1
 
+    # ---------- ФП ----------
+    fps_rows = get_sheet_rows_cached(SHEET_FPS)
+
+    fps_free = 0
+    fps_taken = 0
+
+    for row in fps_rows[1:]:
+        if len(row) < 9:
+            row = row + [''] * (9 - len(row))
+
+        status = str(row[5]).strip().lower()
+
+        if status == "free":
+            fps_free += 1
+        elif status == "taken":
+            fps_taken += 1
+
+    # ---------- FARM KINGS ----------
+    farm_kings_rows = get_sheet_rows_cached(SHEET_FARM_KINGS)
+
+    farm_kings_free = 0
+    farm_kings_taken = 0
+    farm_kings_ban = 0
+    farm_kings_geo_stats = {}
+
+    for row in farm_kings_rows[1:]:
+        if len(row) < 10:
+            row = row + [''] * (10 - len(row))
+
+        status = str(row[4]).strip().lower()
+        geo = str(row[7]).strip()
+
+        if status == "free":
+            farm_kings_free += 1
+            if geo:
+                farm_kings_geo_stats[geo] = farm_kings_geo_stats.get(geo, 0) + 1
+        elif status == "taken":
+            farm_kings_taken += 1
+        elif status == "ban":
+            farm_kings_ban += 1
+
+    # ---------- FARM BM ----------
+    farm_bms_rows = get_sheet_rows_cached(SHEET_FARM_BMS)
+
+    farm_bms_free = 0
+    farm_bms_taken = 0
+
+    for row in farm_bms_rows[1:]:
+        if len(row) < 9:
+            row = row + [''] * (9 - len(row))
+
+        status = str(row[4]).strip().lower()
+
+        if status == "free":
+            farm_bms_free += 1
+        elif status == "taken":
+            farm_bms_taken += 1
+
+    # ---------- FARM FP ----------
+    farm_fps_rows = get_sheet_rows_cached(SHEET_FARM_FPS)
+
+    farm_fps_free = 0
+    farm_fps_taken = 0
+
+    for row in farm_fps_rows[1:]:
+        if len(row) < 9:
+            row = row + [''] * (9 - len(row))
+
+        status = str(row[5]).strip().lower()
+
+        if status == "free":
+            farm_fps_free += 1
+        elif status == "taken":
+            farm_fps_taken += 1
+
     geo_lines = []
     for geo, count in sorted(kings_geo_stats.items()):
         geo_lines.append(f"{geo}: {count}")
 
     if not geo_lines:
         geo_lines.append("нет свободных GEO")
+
+    farm_geo_lines = []
+    for geo, count in sorted(farm_kings_geo_stats.items()):
+        farm_geo_lines.append(f"{geo}: {count}")
+
+    if not farm_geo_lines:
+        farm_geo_lines.append("нет свободных GEO")
 
     text = (
         "Кинги:\n\n"
@@ -3823,7 +4025,23 @@ def build_stats_text():
         f"В бане: {accounts_ban}\n\n"
         "БМы:\n\n"
         f"Свободные: {bms_free}\n"
-        f"Выдано: {bms_taken}"
+        f"Выдано: {bms_taken}\n\n"
+        "ФП:\n\n"
+        f"Свободные: {fps_free}\n"
+        f"Выдано: {fps_taken}\n\n"
+        "Farm kings:\n\n"
+        f"Свободные: {farm_kings_free}\n"
+        f"Выдано: {farm_kings_taken}\n"
+        f"В бане: {farm_kings_ban}\n\n"
+        "По GEO:\n\n"
+        + "\n".join(farm_geo_lines)
+        + "\n\n"
+        "Farm BM:\n\n"
+        f"Свободные: {farm_bms_free}\n"
+        f"Выдано: {farm_bms_taken}\n\n"
+        "Farm FP:\n\n"
+        f"Свободные: {farm_fps_free}\n"
+        f"Выдано: {farm_fps_taken}"
     )
 
     return text
@@ -3876,11 +4094,19 @@ def backup_tables():
             kings = main_spreadsheet.worksheet(SHEET_KINGS)
             issues = main_spreadsheet.worksheet(SHEET_ISSUES)
             bms = main_spreadsheet.worksheet(SHEET_BMS)
+            fps = main_spreadsheet.worksheet(SHEET_FPS)
+            farm_kings = main_spreadsheet.worksheet(SHEET_FARM_KINGS)
+            farm_bms = main_spreadsheet.worksheet(SHEET_FARM_BMS)
+            farm_fps = main_spreadsheet.worksheet(SHEET_FARM_FPS)
 
             backup_accounts = backup_spreadsheet.worksheet("backup_accounts")
             backup_kings = backup_spreadsheet.worksheet("backup_kings")
             backup_issues = backup_spreadsheet.worksheet("backup_issues")
             backup_bms = backup_spreadsheet.worksheet("backup_bms")
+            backup_fps = backup_spreadsheet.worksheet("backup_fps")
+            backup_farm_kings = backup_spreadsheet.worksheet("backup_farm_kings")
+            backup_farm_bms = backup_spreadsheet.worksheet("backup_farm_bms")
+            backup_farm_fps = backup_spreadsheet.worksheet("backup_farm_fps")
 
             accounts_data = accounts.get_all_values()
             kings_data = kings.get_all_values()
@@ -4044,6 +4270,16 @@ def handle_message(msg):
             send_main_menu(chat_id, "Главное меню:", user_id=user_id)
             return
 
+        if text == MENU_FARMER_STATS:
+            if not (is_admin(user_id) or is_farmers_user(user_id)):
+                tg_send_message(chat_id, "У вас нет доступа к этой статистике.")
+                return
+
+            farmer_stats_text = build_farmer_stats_text(username)
+            tg_send_message(chat_id, farmer_stats_text)
+            send_farmers_menu(chat_id, "Меню Farmers:")
+            return
+
         if text == MENU_ADMIN:
             if not is_admin(user_id):
                 tg_send_message(chat_id, "У вас нет доступа к меню Admin.")
@@ -4151,6 +4387,10 @@ def handle_message(msg):
             return
 
         if text == BTN_BACK_TO_FARMERS:
+            if not (is_admin(user_id) or is_farmers_user(user_id)):
+                tg_send_message(chat_id, "У вас нет доступа к разделу Farmers.")
+                return
+
             clear_state(user_id)
             send_farmers_menu(chat_id)
             return
