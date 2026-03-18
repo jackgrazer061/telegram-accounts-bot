@@ -11,6 +11,7 @@ import requests
 import gspread
 from google.oauth2.service_account import Credentials
 import threading
+import queue
 
 app = Flask(__name__)
 CORS(app)
@@ -175,7 +176,6 @@ ADMIN_ADD_ACCOUNTS = 'Добавить лички'
 ADMIN_ADD_KINGS = 'Добавить кинги'
 ADMIN_ADD_BMS = 'Добавить БМы'
 ADMIN_ADD_FPS = 'Добавить ФП'
-ADMIN_FARMERS = 'Фармеры'
 ADMIN_ADD_FARM_KINGS = 'Добавить king'
 ADMIN_ADD_FARM_BMS = 'Добавить bm'
 ADMIN_ADD_FARM_FPS = 'Добавить fp'
@@ -205,6 +205,7 @@ BTN_FP_NEXT = 'Другое ФП'
 # Память состояний пользователей (для старта хватит)
 user_states = {}
 issue_lock = threading.Lock()
+update_queue = queue.Queue(maxsize=10000)
 
 backup_lock = threading.Lock()
 last_backup_date = None
@@ -580,10 +581,8 @@ def send_bms_menu(chat_id, text="Меню БМов:"):
 
 def send_admin_menu(chat_id, text="Меню Admin:"):
     keyboard = [
-        [{"text": ADMIN_BACKUP}],
-        [{"text": ADMIN_ADD_ACCOUNTS}, {"text": ADMIN_ADD_KINGS}],
-        [{"text": ADMIN_ADD_BMS}, {"text": ADMIN_ADD_FPS}],
-        [{"text": ADMIN_FARMERS}],
+        [{"text": ADMIN_BACKUP}, {"text": ADMIN_UPDATE_5M}],
+        [{"text": ADMIN_ACCOUNTANTS}, {"text": ADMIN_FARMERS}],
         [{"text": BTN_BACK_FROM_ADMIN}]
     ]
     tg_send_message(chat_id, text, keyboard)
@@ -1311,7 +1310,10 @@ def handle_document_message(msg):
         tg_send_message(chat_id, result_message)
 
         if is_admin(user_id):
-            send_admin_menu(chat_id, "Выбери следующее действие:")
+            if mode in ["awaiting_farm_kings_txt", "awaiting_farm_bms_text"]:
+                send_admin_farmers_menu(chat_id, "Выбери следующее действие:")
+            else:
+                send_admin_menu(chat_id, "Выбери следующее действие:")
         else:
             send_main_menu(chat_id, "Выбери следующее действие:", user_id=user_id)
 
@@ -1419,11 +1421,11 @@ def send_person_menu(chat_id, department):
     tg_send_message(chat_id, title, keyboard)
 
 def notify_all_users_about_update():
-    recipients = sorted(ADMINS | OPERATORS)
+    recipients = sorted(ADMINS | ACCOUNTS_USERS | FARMERS_USERS)
 
+    text = "Внимание: через 5 минут бот будет перезапущен из-за обновления."
     sent = 0
     failed = 0
-    text = "Внимание: через 5 минут бот будет перезапущен из-за обновления."
 
     for uid in recipients:
         try:
@@ -2240,6 +2242,8 @@ def issue_farm_fps(chat_id, user_id, username, count_needed):
             )
 
         invalidate_stats_cache()
+
+    clear_state(user_id)
 
     tg_send_message(chat_id, f"Готово ✅\n\nВыдано FP: {len(messages)}")
     for msg_text in messages:
@@ -3960,6 +3964,9 @@ def cache_warmer_loop():
             refresh_sheet_cache(SHEET_KINGS)
             refresh_sheet_cache(SHEET_BMS)
             refresh_sheet_cache(SHEET_FPS)
+            refresh_sheet_cache(SHEET_FARM_KINGS)
+            refresh_sheet_cache(SHEET_FARM_BMS)
+            refresh_sheet_cache(SHEET_FARM_FPS)
             time.sleep(3)
         except Exception:
             logging.exception("cache_warmer_loop error")
@@ -4073,15 +4080,6 @@ def handle_message(msg):
             send_admin_accountants_menu(chat_id)
             return
 
-        if text == ADMIN_FARMERS:
-            if not is_admin(user_id):
-                tg_send_message(chat_id, "У вас нет доступа.")
-                return
-
-            clear_state(user_id)
-            send_admin_menu(chat_id, "Раздел Фармеры пока в разработке.")
-            return
-
         if text == ADMIN_UPDATE_5M:
             if not is_admin(user_id):
                 tg_send_message(chat_id, "У вас нет доступа.")
@@ -4119,7 +4117,7 @@ def handle_message(msg):
                 return
 
             clear_state(user_id)
-            tg_send_message(chat_id, "Раздел Farmers открывается отдельно. Дальше добавим его меню.")
+            send_farmers_menu(chat_id)
             return
 
         if text == SUBMENU_ACCOUNTS_MAIN:
@@ -5507,6 +5505,6 @@ if __name__ == "__main__":
     watchdog_thread.start()
 
     port = int(os.environ.get("PORT", 10000))
-    message_worker = threading.Thread(target=message_worker_loop, daemon=True)
-    message_worker.start()
+    for _ in range(8):
+        threading.Thread(target=message_worker_loop, daemon=True).start()
     app.run(host="0.0.0.0", port=port)
