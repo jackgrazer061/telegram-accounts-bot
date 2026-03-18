@@ -97,6 +97,9 @@ FARM_SUBMENU_FREE_KINGS = 'Свободные кинги'
 FARM_SUBMENU_RETURN_KING = 'Вернуть кинг'
 FARM_SUBMENU_SEARCH_KING = 'Поиск кинга'
 
+BTN_FARM_KINGS_PARTIAL_CONFIRM = 'Выдать'
+BTN_FARM_KINGS_PARTIAL_CANCEL = 'Отмена'
+
 FARM_SUBMENU_GET_BM = 'Получить BM'
 FARM_SUBMENU_FREE_BMS = 'Свободные BMы'
 FARM_SUBMENU_SEARCH_BM = 'Поиск BMа'
@@ -1639,6 +1642,41 @@ def confirm_fp_issue(chat_id, user_id, username):
         tg_send_message(chat_id, "Ошибка выдачи ФП. Попробуй ещё раз.")
         send_fps_menu(chat_id, "Меню ФП:")
 
+def get_free_farm_king_geos():
+    rows = get_sheet_rows_cached(SHEET_FARM_KINGS)
+
+    geos = []
+    seen = set()
+
+    for row in rows[1:]:
+        if len(row) < 10:
+            row = row + [''] * (10 - len(row))
+
+        status = str(row[4]).strip().lower()
+        geo = str(row[7]).strip()
+
+        if status == "free" and geo and geo not in seen:
+            geos.append(geo)
+            seen.add(geo)
+
+    return geos
+
+
+def send_farm_king_geo_options(chat_id):
+    geos = get_free_farm_king_geos()
+
+    if not geos:
+        send_farm_kings_menu(chat_id, "Нет свободных фарм кингов ни по одному GEO.")
+        return
+
+    keyboard = []
+    for geo in geos:
+        keyboard.append([{"text": geo}])
+
+    keyboard.append([{"text": MENU_CANCEL}])
+
+    tg_send_message(chat_id, "Какое GEO нужно?", keyboard)
+
 def send_free_farm_kings(chat_id):
     rows = get_sheet_rows_cached(SHEET_FARM_KINGS)
 
@@ -1674,8 +1712,7 @@ def send_free_farm_kings(chat_id):
     if current_text.strip():
         tg_send_message(chat_id, current_text.strip())
 
-
-def find_free_farm_kings(count_needed):
+def find_free_farm_kings(count_needed, geo=None):
     rows = get_sheet_rows_cached(SHEET_FARM_KINGS)
 
     candidates = []
@@ -1684,6 +1721,10 @@ def find_free_farm_kings(count_needed):
             row = row + [''] * (10 - len(row))
 
         if str(row[4]).strip().lower() != "free":
+            continue
+
+        row_geo = str(row[7]).strip()
+        if geo is not None and row_geo != geo:
             continue
 
         purchase_date = parse_date(row[1]) or datetime.max
@@ -1695,7 +1736,6 @@ def find_free_farm_kings(count_needed):
 
     candidates.sort(key=lambda x: x["purchase_date_obj"])
     return candidates[:count_needed]
-
 
 def farm_king_name_exists(king_name):
     rows = get_sheet_rows_cached(SHEET_FARM_KINGS)
@@ -4167,8 +4207,8 @@ def handle_message(msg):
             return
 
         if text == FARM_SUBMENU_GET_KINGS:
-            set_state(user_id, {"mode": "awaiting_farm_kings_count"})
-            tg_send_message(chat_id, "Сколько кингов нужно?")
+            set_state(user_id, {"mode": "awaiting_farm_king_geo"})
+            send_farm_king_geo_options(chat_id)
             return
 
         if text == FARM_SUBMENU_RETURN_KING:
@@ -4204,6 +4244,25 @@ def handle_message(msg):
         if text == FARM_SUBMENU_SEARCH_FP:
             set_state(user_id, {"mode": "awaiting_farm_search_fp"})
             tg_send_message(chat_id, "Впиши ссылку FP.")
+            return
+
+        if text == BTN_FARM_KINGS_PARTIAL_CONFIRM:
+            if state.get("mode") != "awaiting_farm_kings_partial_confirm":
+                send_farm_kings_menu(chat_id, "Начни заново.")
+                return
+
+            state["mode"] = "awaiting_farm_king_names"
+            set_state(user_id, state)
+
+            tg_send_message(
+                chat_id,
+                f"Пришли {state['farm_kings_count']} названий для кингов.\nКаждое название с новой строки."
+            )
+            return
+
+        if text == BTN_FARM_KINGS_PARTIAL_CANCEL:
+            clear_state(user_id)
+            send_farm_kings_menu(chat_id, "Выдача отменена.")
             return
             
         # ========= СОСТОЯНИЯ: ДОБАВЛЕНИЕ =========
@@ -4654,6 +4713,21 @@ def handle_message(msg):
             return
 
         # ========= СОСТОЯНИЯ: FARM KING =========
+        if state.get("mode") == "awaiting_farm_king_geo":
+            geos = get_free_farm_king_geos()
+
+            if text not in geos:
+                send_farm_king_geo_options(chat_id)
+                return
+
+            set_state(user_id, {
+                "mode": "awaiting_farm_kings_count",
+                "farm_king_geo": text
+            })
+
+            tg_send_message(chat_id, f"Сколько кингов нужно для GEO {text}?")
+            return
+
         if state.get("mode") == "awaiting_farm_kings_count":
             try:
                 count_needed = int(text.strip())
@@ -4665,22 +4739,46 @@ def handle_message(msg):
                 tg_send_message(chat_id, "Количество должно быть больше нуля.")
                 return
 
-            found = find_free_farm_kings(count_needed)
+            selected_geo = state.get("farm_king_geo")
+            found = find_free_farm_kings(count_needed, geo=selected_geo)
 
-            if len(found) < count_needed:
+            all_for_geo = find_free_farm_kings(999999, geo=selected_geo)
+            available_count = len(all_for_geo)
+
+            if available_count == 0:
                 clear_state(user_id)
-                send_farm_kings_menu(chat_id, f"Недостаточно свободных кингов. Доступно: {len(found)}")
+                send_farm_kings_menu(chat_id, f"Свободных кингов с GEO {selected_geo} нет.")
+                return
+
+            if available_count < count_needed:
+                set_state(user_id, {
+                    "mode": "awaiting_farm_kings_partial_confirm",
+                    "farm_king_geo": selected_geo,
+                    "farm_kings_count": available_count,
+                    "farm_king_rows": all_for_geo
+                })
+
+                keyboard = [
+                    [{"text": BTN_FARM_KINGS_PARTIAL_CONFIRM}, {"text": BTN_FARM_KINGS_PARTIAL_CANCEL}]
+                ]
+
+                tg_send_message(
+                    chat_id,
+                    f"Есть только {available_count} кингов с GEO {selected_geo}.\nВыдаю?",
+                    keyboard
+                )
                 return
 
             set_state(user_id, {
                 "mode": "awaiting_farm_king_names",
+                "farm_king_geo": selected_geo,
                 "farm_kings_count": count_needed,
                 "farm_king_rows": found
             })
 
             tg_send_message(
                 chat_id,
-                f"Пришли {count_needed} названий для кингов.\nКаждое название с новой строки."
+                f"Пришли {count_needed} названий для кингов GEO {selected_geo}.\nКаждое название с новой строки."
             )
             return
 
