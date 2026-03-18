@@ -209,6 +209,7 @@ issue_lock = threading.Lock()
 update_queue = queue.Queue(maxsize=10000)
 
 backup_lock = threading.Lock()
+google_lock = threading.RLock()
 last_backup_date = None
 MOSCOW_TZ = ZoneInfo("Europe/Moscow")
 
