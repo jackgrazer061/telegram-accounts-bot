@@ -46,21 +46,28 @@ ADMINS = {
     7681133609,  # cilian
 }
 
-OPERATORS = {
+ACCOUNTS_USERS = {
     7953116439,   # willem
     8334712952,   # ariana
     7851493919,   # cate
-    
+}
+
+FARMERS_USERS = {
+    # сюда добавь id фармеров
+    # 123456789,
 }
 
 def is_admin(user_id):
     return user_id in ADMINS
 
-def is_operator(user_id):
-    return user_id in OPERATORS
+def is_accounts_user(user_id):
+    return user_id in ACCOUNTS_USERS
+
+def is_farmers_user(user_id):
+    return user_id in FARMERS_USERS
 
 def has_access(user_id):
-    return is_admin(user_id) or is_operator(user_id)
+    return is_admin(user_id) or is_accounts_user(user_id) or is_farmers_user(user_id)
 
 def touch_request_heartbeat():
     global last_request_time
@@ -168,7 +175,11 @@ ADMIN_ADD_ACCOUNTS = 'Добавить лички'
 ADMIN_ADD_KINGS = 'Добавить кинги'
 ADMIN_ADD_BMS = 'Добавить БМы'
 ADMIN_ADD_FPS = 'Добавить ФП'
-
+ADMIN_FARMERS = 'Фармеры'
+ADMIN_ADD_FARM_KINGS = 'Добавить king'
+ADMIN_ADD_FARM_BMS = 'Добавить bm'
+ADMIN_ADD_FARM_FPS = 'Добавить fp'
+BTN_BACK_FROM_ADMIN_FARMERS = 'Назад в Admin'
 BTN_BM_CONFIRM = 'Выдать БМ'
 BTN_BM_NEXT = 'Другой БМ'
 BTN_BACK_FROM_ADMIN = 'Назад из Admin'
@@ -460,10 +471,20 @@ def send_main_menu(chat_id, text="Главное меню:", user_id=None):
             [{"text": MENU_ADMIN}],
             [{"text": MENU_CANCEL}]
         ]
+    elif user_id is not None and is_accounts_user(user_id):
+        keyboard = [
+            [{"text": MENU_ACCOUNTS}],
+            [{"text": MENU_STATS}],
+            [{"text": MENU_CANCEL}]
+        ]
+    elif user_id is not None and is_farmers_user(user_id):
+        keyboard = [
+            [{"text": MENU_FARMERS}],
+            [{"text": MENU_STATS}],
+            [{"text": MENU_CANCEL}]
+        ]
     else:
         keyboard = [
-            [{"text": MENU_ACCOUNTS}, {"text": MENU_FARMERS}],
-            [{"text": MENU_STATS}],
             [{"text": MENU_CANCEL}]
         ]
 
@@ -559,9 +580,19 @@ def send_bms_menu(chat_id, text="Меню БМов:"):
 
 def send_admin_menu(chat_id, text="Меню Admin:"):
     keyboard = [
-        [{"text": ADMIN_ACCOUNTANTS}, {"text": ADMIN_FARMERS}],
-        [{"text": ADMIN_BACKUP}, {"text": ADMIN_UPDATE_5M}],
+        [{"text": ADMIN_BACKUP}],
+        [{"text": ADMIN_ADD_ACCOUNTS}, {"text": ADMIN_ADD_KINGS}],
+        [{"text": ADMIN_ADD_BMS}, {"text": ADMIN_ADD_FPS}],
+        [{"text": ADMIN_FARMERS}],
         [{"text": BTN_BACK_FROM_ADMIN}]
+    ]
+    tg_send_message(chat_id, text, keyboard)
+
+def send_admin_farmers_menu(chat_id, text="Admin / Фармеры:"):
+    keyboard = [
+        [{"text": ADMIN_ADD_FARM_KINGS}, {"text": ADMIN_ADD_FARM_BMS}],
+        [{"text": ADMIN_ADD_FARM_FPS}],
+        [{"text": BTN_BACK_FROM_ADMIN_FARMERS}]
     ]
     tg_send_message(chat_id, text, keyboard)
 
@@ -1108,7 +1139,7 @@ def parse_bms_txt(text):
 
     return parsed, errors
 
-def add_kings_from_txt_content(file_text):
+def add_kings_from_txt_content(file_text, target_sheet=SHEET_KINGS):
     rows, errors = parse_kings_txt(file_text)
 
     if not rows:
@@ -1131,12 +1162,12 @@ def add_kings_from_txt_content(file_text):
             item["data_text"]       # J данные
         ])
 
-    sheet_append_rows_and_refresh(SHEET_KINGS, to_append)
+    sheet_append_rows_and_refresh(target_sheet, to_append)
     invalidate_stats_cache()
 
     message = (
         f"Готово ✅\n"
-        f"Добавлено кингов: {len(to_append)}\n"
+        f"Добавлено king: {len(to_append)}\n"
         f"Ошибок: {len(errors)}"
     )
 
@@ -1147,7 +1178,7 @@ def add_kings_from_txt_content(file_text):
 
     return message
 
-def add_bms_from_txt_content(file_text):
+def add_bms_from_txt_content(file_text, target_sheet=SHEET_BMS):
     parsed_rows, errors = parse_bms_txt(file_text)
 
     if not parsed_rows:
@@ -1155,7 +1186,7 @@ def add_bms_from_txt_content(file_text):
             return "Ничего не добавил.\n\nОшибки:\n" + "\n".join(errors[:10])
         return "Ничего не добавил. Не удалось разобрать текст."
 
-    existing_rows = get_sheet_rows_cached(SHEET_BMS)
+    existing_rows = get_sheet_rows_cached(target_sheet)
     existing_ids = set()
 
     for row in existing_rows[1:]:
@@ -1186,12 +1217,12 @@ def add_bms_from_txt_content(file_text):
         existing_ids.add(bm_id)
 
     if to_append:
-        sheet_append_rows_and_refresh(SHEET_BMS, to_append)
+        sheet_append_rows_and_refresh(target_sheet, to_append)
         invalidate_stats_cache()
 
     message = (
         f"Готово ✅\n"
-        f"Добавлено БМов: {len(to_append)}\n"
+        f"Добавлено BM: {len(to_append)}\n"
         f"Дубликатов пропущено: {duplicates}\n"
         f"Ошибок: {len(errors)}"
     )
@@ -1220,10 +1251,15 @@ def handle_document_message(msg):
         state = get_state(user_id)
         mode = state.get("mode")
 
-        if mode not in ["awaiting_kings_txt", "awaiting_bms_text"]:
+        if mode not in [
+            "awaiting_kings_txt",
+            "awaiting_bms_text",
+            "awaiting_farm_kings_txt",
+            "awaiting_farm_bms_text"
+        ]:
             tg_send_message(
                 chat_id,
-                "Я сейчас не жду файл. Сначала открой Admin → Добавить кинги или Admin → Добавить БМы."
+                "Я сейчас не жду файл. Сначала открой нужный раздел в Admin и выбери добавление king или BM."
             )
             return
 
@@ -1260,9 +1296,13 @@ def handle_document_message(msg):
                     return
 
         if mode == "awaiting_kings_txt":
-            result_message = add_kings_from_txt_content(file_text)
+            result_message = add_kings_from_txt_content(file_text, target_sheet=SHEET_KINGS)
         elif mode == "awaiting_bms_text":
-            result_message = add_bms_from_txt_content(file_text)
+            result_message = add_bms_from_txt_content(file_text, target_sheet=SHEET_BMS)
+        elif mode == "awaiting_farm_kings_txt":
+            result_message = add_kings_from_txt_content(file_text, target_sheet=SHEET_FARM_KINGS)
+        elif mode == "awaiting_farm_bms_text":
+            result_message = add_bms_from_txt_content(file_text, target_sheet=SHEET_FARM_BMS)
         else:
             tg_send_message(chat_id, "Неизвестный режим загрузки файла.")
             return
@@ -1395,8 +1435,8 @@ def notify_all_users_about_update():
 
     return sent, failed
 
-def add_fps_from_text(text):
-    existing_rows = get_sheet_rows_cached(SHEET_FPS)
+def add_fps_from_text(text, target_sheet=SHEET_FPS):
+    existing_rows = get_sheet_rows_cached(target_sheet)
     existing_links = set()
 
     for row in existing_rows[1:]:
@@ -1449,12 +1489,12 @@ def add_fps_from_text(text):
         existing_links.add(fp_link)
 
     if to_append:
-        sheet_append_rows_and_refresh(SHEET_FPS, to_append)
+        sheet_append_rows_and_refresh(target_sheet, to_append)
         invalidate_stats_cache()
 
     message = (
         f"Готово ✅\n"
-        f"Добавлено ФП: {len(to_append)}\n"
+        f"Добавлено FP: {len(to_append)}\n"
         f"Дубликатов пропущено: {duplicates}\n"
         f"Ошибок: {len(errors)}"
     )
@@ -1465,7 +1505,6 @@ def add_fps_from_text(text):
             message += f"\n... и ещё {len(errors) - 10}"
 
     return message
-
 
 def find_fp_in_base(fp_link):
     rows = get_sheet_rows_cached(SHEET_FPS)
@@ -4007,6 +4046,24 @@ def handle_message(msg):
             send_admin_menu(chat_id)
             return
 
+        if text == ADMIN_FARMERS:
+            if not is_admin(user_id):
+                tg_send_message(chat_id, "У вас нет доступа.")
+                return
+
+            clear_state(user_id)
+            send_admin_farmers_menu(chat_id)
+            return
+
+        if text == BTN_BACK_FROM_ADMIN_FARMERS:
+            if not is_admin(user_id):
+                tg_send_message(chat_id, "У вас нет доступа.")
+                return
+
+            clear_state(user_id)
+            send_admin_menu(chat_id)
+            return
+
         if text == ADMIN_ACCOUNTANTS:
             if not is_admin(user_id):
                 tg_send_message(chat_id, "У вас нет доступа.")
@@ -4048,13 +4105,21 @@ def handle_message(msg):
             return
 
         if text == MENU_ACCOUNTS:
+            if not (is_admin(user_id) or is_accounts_user(user_id)):
+                tg_send_message(chat_id, "У вас нет доступа к разделу Accounts.")
+                return
+
             clear_state(user_id)
             send_accounts_main_menu(chat_id)
             return
 
         if text == MENU_FARMERS:
+            if not (is_admin(user_id) or is_farmers_user(user_id)):
+                tg_send_message(chat_id, "У вас нет доступа к разделу Farmers.")
+                return
+
             clear_state(user_id)
-            send_farmers_menu(chat_id)
+            tg_send_message(chat_id, "Раздел Farmers открывается отдельно. Дальше добавим его меню.")
             return
 
         if text == SUBMENU_ACCOUNTS_MAIN:
@@ -4156,6 +4221,33 @@ def handle_message(msg):
                 return
 
             set_state(user_id, {"mode": "awaiting_fps_add"})
+            send_add_fps_instructions(chat_id)
+            return
+
+        if text == ADMIN_ADD_FARM_KINGS:
+            if not is_admin(user_id):
+                tg_send_message(chat_id, "У вас нет доступа.")
+                return
+
+            set_state(user_id, {"mode": "awaiting_farm_kings_txt"})
+            send_add_kings_instructions(chat_id)
+            return
+
+        if text == ADMIN_ADD_FARM_BMS:
+            if not is_admin(user_id):
+                tg_send_message(chat_id, "У вас нет доступа.")
+                return
+
+            set_state(user_id, {"mode": "awaiting_farm_bms_text"})
+            send_add_bms_instructions(chat_id)
+            return
+
+        if text == ADMIN_ADD_FARM_FPS:
+            if not is_admin(user_id):
+                tg_send_message(chat_id, "У вас нет доступа.")
+                return
+
+            set_state(user_id, {"mode": "awaiting_farm_fps_add"})
             send_add_fps_instructions(chat_id)
             return
 
@@ -4490,6 +4582,17 @@ def handle_message(msg):
 
             if is_admin(user_id):
                 send_admin_menu(chat_id, "Выбери следующее действие:")
+            else:
+                send_main_menu(chat_id, "Готово. Выбери следующее действие:", user_id=user_id)
+            return
+
+        if state.get("mode") == "awaiting_farm_fps_add":
+            result = add_fps_from_text(text, target_sheet=SHEET_FARM_FPS)
+            clear_state(user_id)
+            tg_send_message(chat_id, result)
+
+            if is_admin(user_id):
+                send_admin_farmers_menu(chat_id, "Выбери следующее действие:")
             else:
                 send_main_menu(chat_id, "Готово. Выбери следующее действие:", user_id=user_id)
             return
