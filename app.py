@@ -1585,9 +1585,19 @@ def parse_limit_number(value):
     if text in ["no limit", "unlim", "unlimited"]:
         return "unlim"
 
+    # убираем пробелы
+    text = text.replace(" ", "")
+
+    # если формат вида 1,234.56 -> убираем запятые как разделители тысяч
+    if "," in text and "." in text:
+        text = text.replace(",", "")
+    # если только запятая, считаем её десятичным разделителем
+    elif "," in text:
+        text = text.replace(",", ".")
+
     try:
-        num = float(text.replace(",", "").replace(" ", ""))
-        return num
+        num = float(text)
+        return int(num)  # копейки отбрасываем
     except Exception:
         return None
 
