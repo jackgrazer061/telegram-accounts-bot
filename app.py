@@ -442,7 +442,7 @@ def tg_send_message(chat_id, text, keyboard=None):
         resp = requests.post(
             f"{BASE_URL}/sendMessage",
             json=payload,
-            timeout=10
+            timeout=20
         )
 
         if resp.status_code != 200:
@@ -2239,26 +2239,23 @@ def parse_limit_number(value):
         return None
 
     text = str(value).strip().lower()
-
     if not text:
         return None
 
     if text in ["no limit", "unlim", "unlimited"]:
         return "unlim"
 
-    # убираем пробелы
     text = text.replace(" ", "")
 
-    # если формат вида 1,234.56 -> убираем запятые как разделители тысяч
-    if "," in text and "." in text:
-        text = text.replace(",", "")
-    # если только запятая, считаем её десятичным разделителем
-    elif "," in text:
-        text = text.replace(",", ".")
+    if "," in text:
+        integer_part = text.split(",")[0]
+    elif "." in text:
+        integer_part = text.split(".")[0]
+    else:
+        integer_part = text
 
     try:
-        num = float(text)
-        return int(num)  # копейки отбрасываем
+        return int(integer_part)
     except Exception:
         return None
 
@@ -3765,6 +3762,20 @@ def watchdog_loop():
         except Exception as e:
             logging.error(f"watchdog_loop error: {e}")
             time.sleep(30)
+
+def cache_warmer_loop():
+    while True:
+        try:
+            touch_background_heartbeat()
+            refresh_sheet_cache(SHEET_ACCOUNTS)
+            refresh_sheet_cache(SHEET_ISSUES)
+            refresh_sheet_cache(SHEET_KINGS)
+            refresh_sheet_cache(SHEET_BMS)
+            refresh_sheet_cache(SHEET_FPS)
+            time.sleep(3)
+        except Exception:
+            logging.exception("cache_warmer_loop error")
+            time.sleep(5)
             
 # =========================
 # MESSAGE HANDLER
@@ -4902,7 +4913,25 @@ def handle_message(msg):
         except Exception:
             pass
 
+def process_incoming_message(msg):
+    if msg.get("text"):
+        handle_message(msg)
+    elif msg.get("document"):
+        handle_document_message(msg)
 
+def message_worker_loop():
+    while True:
+        try:
+            msg = update_queue.get()
+            try:
+                process_incoming_message(msg)
+            except Exception:
+                logging.exception("message_worker_loop crashed")
+            finally:
+                update_queue.task_done()
+        except Exception:
+            logging.exception("message_worker outer loop crashed")
+            time.sleep(1)
 # =========================
 # FLASK
 # =========================
@@ -4923,11 +4952,10 @@ def webhook():
         msg = update.get("message") or update.get("edited_message")
 
         if msg:
-            if msg.get("text"):
-                handle_message(msg)
-
-            elif msg.get("document"):
-                handle_document_message(msg)
+            try:
+                update_queue.put_nowait(msg)
+            except Exception:
+                logging.warning("update_queue overflow")
 
         return jsonify({"ok": True})
 
@@ -5109,6 +5137,8 @@ def fastadscheck_add():
         }), 500
 
 if __name__ == "__main__":
+    cache_thread = threading.Thread(target=cache_warmer_loop, daemon=True)
+    cache_thread.start()
     backup_thread = threading.Thread(target=backup_scheduler_loop, daemon=True)
     backup_thread.start()
 
@@ -5116,4 +5146,6 @@ if __name__ == "__main__":
     watchdog_thread.start()
 
     port = int(os.environ.get("PORT", 10000))
+    message_worker = threading.Thread(target=message_worker_loop, daemon=True)
+    message_worker.start()
     app.run(host="0.0.0.0", port=port)
