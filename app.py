@@ -5777,6 +5777,6 @@ if __name__ == "__main__":
     watchdog_thread.start()
 
     port = int(os.environ.get("PORT", 10000))
-    for _ in range(8):
+    for _ in range(2):
         threading.Thread(target=message_worker_loop, daemon=True).start()
     app.run(host="0.0.0.0", port=port)
