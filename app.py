@@ -77,6 +77,9 @@ SHEET_ISSUES = "Простые лички 26"
 SHEET_KINGS = "База_кингов"
 SHEET_BMS = "База_БМ"
 SHEET_FPS = "База_ФП"
+SHEET_FARM_KINGS = "База фарм кинги"
+SHEET_FARM_BMS = "База фарм бм"
+SHEET_FARM_FPS = "База фарм фп"
 
 LIMIT_OPTIONS = ['-250', '250-500', '500-1200', '1200-1500', 'unlim']
 THRESHOLD_OPTIONS = ['0-49', '50-99', '100-199', '200-499', '500+']
@@ -85,6 +88,23 @@ ACCOUNT_CURRENCY_COL = 12  # M колонка в База_личек
 
 MENU_ACCOUNTS = 'Accounts'
 MENU_FARMERS = 'Farmers'
+FARM_MENU_KING = 'King'
+FARM_MENU_BM = 'BM'
+FARM_MENU_FP = 'FP'
+
+FARM_SUBMENU_GET_KINGS = 'Взять кинги'
+FARM_SUBMENU_FREE_KINGS = 'Свободные кинги'
+FARM_SUBMENU_RETURN_KING = 'Вернуть кинг'
+FARM_SUBMENU_SEARCH_KING = 'Поиск кинга'
+
+FARM_SUBMENU_GET_BM = 'Получить BM'
+FARM_SUBMENU_FREE_BMS = 'Свободные BMы'
+FARM_SUBMENU_SEARCH_BM = 'Поиск BMа'
+
+FARM_SUBMENU_GET_FP = 'Выдать FP'
+FARM_SUBMENU_SEARCH_FP = 'Поиск FP'
+
+BTN_BACK_TO_FARMERS = 'Назад в Farmers'
 MENU_KINGS = 'Кинги'
 MENU_BMS = 'БМ'
 MENU_FPS = 'ФП'
@@ -137,13 +157,19 @@ SUBMENU_GET_FP = 'Выдать ФП'
 SUBMENU_SEARCH_FP = 'Поиск ФП'
 
 ADMIN_BACKUP = 'Бэкап таблиц'
+ADMIN_ACCOUNTANTS = 'Акаунтеры'
+ADMIN_FARMERS = 'Фармеры'
+ADMIN_UPDATE_5M = 'Обновление 5м'
+
 ADMIN_ADD_ACCOUNTS = 'Добавить лички'
 ADMIN_ADD_KINGS = 'Добавить кинги'
 ADMIN_ADD_BMS = 'Добавить БМы'
 ADMIN_ADD_FPS = 'Добавить ФП'
+
 BTN_BM_CONFIRM = 'Выдать БМ'
 BTN_BM_NEXT = 'Другой БМ'
 BTN_BACK_FROM_ADMIN = 'Назад из Admin'
+BTN_BACK_FROM_ACCOUNTANTS = 'Назад из Акаунтеры'
 
 BTN_BACK_TO_MENU = 'В меню'
 
@@ -197,6 +223,9 @@ def reset_google_cache():
             SHEET_KINGS: {"rows": None, "updated_at": 0},
             SHEET_BMS: {"rows": None, "updated_at": 0},
             SHEET_FPS: {"rows": None, "updated_at": 0},
+            SHEET_FARM_KINGS: {"rows": None, "updated_at": 0},
+            SHEET_FARM_BMS: {"rows": None, "updated_at": 0},
+            SHEET_FARM_FPS: {"rows": None, "updated_at": 0},
         }
 
 def reset_table_cache():
@@ -208,6 +237,9 @@ def reset_table_cache():
             SHEET_KINGS: {"rows": None, "updated_at": 0},
             SHEET_BMS: {"rows": None, "updated_at": 0},
             SHEET_FPS: {"rows": None, "updated_at": 0},
+            SHEET_FARM_KINGS: {"rows": None, "updated_at": 0},
+            SHEET_FARM_BMS: {"rows": None, "updated_at": 0},
+            SHEET_FARM_FPS: {"rows": None, "updated_at": 0},
         }
 
 def check_google_available():
@@ -234,6 +266,9 @@ table_cache = {
     SHEET_KINGS: {"rows": None, "updated_at": 0},
     SHEET_BMS: {"rows": None, "updated_at": 0},
     SHEET_FPS: {"rows": None, "updated_at": 0},
+    SHEET_FARM_KINGS: {"rows": None, "updated_at": 0},
+    SHEET_FARM_BMS: {"rows": None, "updated_at": 0},
+    SHEET_FARM_FPS: {"rows": None, "updated_at": 0},
 }
 
 table_cache_lock = threading.Lock()
@@ -447,6 +482,41 @@ def send_fps_menu(chat_id, text="Меню ФП:"):
     ]
     tg_send_message(chat_id, text, keyboard)
 
+def send_farmers_menu(chat_id, text="Меню Farmers:"):
+    keyboard = [
+        [{"text": FARM_MENU_KING}, {"text": FARM_MENU_BM}],
+        [{"text": FARM_MENU_FP}],
+        [{"text": BTN_BACK_TO_MENU}]
+    ]
+    tg_send_message(chat_id, text, keyboard)
+
+def send_farm_kings_menu(chat_id, text="Меню Farm King:"):
+    keyboard = [
+        [{"text": FARM_SUBMENU_GET_KINGS}],
+        [{"text": FARM_SUBMENU_FREE_KINGS}],
+        [{"text": FARM_SUBMENU_RETURN_KING}],
+        [{"text": FARM_SUBMENU_SEARCH_KING}],
+        [{"text": BTN_BACK_TO_FARMERS}]
+    ]
+    tg_send_message(chat_id, text, keyboard)
+
+def send_farm_bms_menu(chat_id, text="Меню Farm BM:"):
+    keyboard = [
+        [{"text": FARM_SUBMENU_GET_BM}],
+        [{"text": FARM_SUBMENU_FREE_BMS}],
+        [{"text": FARM_SUBMENU_SEARCH_BM}],
+        [{"text": BTN_BACK_TO_FARMERS}]
+    ]
+    tg_send_message(chat_id, text, keyboard)
+
+def send_farm_fps_menu(chat_id, text="Меню Farm FP:"):
+    keyboard = [
+        [{"text": FARM_SUBMENU_GET_FP}],
+        [{"text": FARM_SUBMENU_SEARCH_FP}],
+        [{"text": BTN_BACK_TO_FARMERS}]
+    ]
+    tg_send_message(chat_id, text, keyboard)
+
 def send_accounts_menu(chat_id, text="Меню личек:"):
     keyboard = [
         [{"text": SUBMENU_GET}, {"text": SUBMENU_QUICK_GET}],
@@ -485,10 +555,17 @@ def send_bms_menu(chat_id, text="Меню БМов:"):
 
 def send_admin_menu(chat_id, text="Меню Admin:"):
     keyboard = [
-        [{"text": ADMIN_BACKUP}],
+        [{"text": ADMIN_ACCOUNTANTS}, {"text": ADMIN_FARMERS}],
+        [{"text": ADMIN_BACKUP}, {"text": ADMIN_UPDATE_5M}],
+        [{"text": BTN_BACK_FROM_ADMIN}]
+    ]
+    tg_send_message(chat_id, text, keyboard)
+
+def send_admin_accountants_menu(chat_id, text="Меню Акаунтеры:"):
+    keyboard = [
         [{"text": ADMIN_ADD_ACCOUNTS}, {"text": ADMIN_ADD_KINGS}],
         [{"text": ADMIN_ADD_BMS}, {"text": ADMIN_ADD_FPS}],
-        [{"text": BTN_BACK_FROM_ADMIN}]
+        [{"text": BTN_BACK_FROM_ACCOUNTANTS}]
     ]
     tg_send_message(chat_id, text, keyboard)
 
@@ -1297,6 +1374,23 @@ def send_person_menu(chat_id, department):
 
     tg_send_message(chat_id, title, keyboard)
 
+def notify_all_users_about_update():
+    recipients = sorted(ADMINS | OPERATORS)
+
+    sent = 0
+    failed = 0
+    text = "Внимание: через 5 минут бот будет перезапущен из-за обновления."
+
+    for uid in recipients:
+        try:
+            tg_send_message(uid, text)
+            sent += 1
+        except Exception as e:
+            logging.error(f"notify_all_users_about_update error for {uid}: {e}")
+            failed += 1
+
+    return sent, failed
+
 def add_fps_from_text(text):
     existing_rows = get_sheet_rows_cached(SHEET_FPS)
     existing_links = set()
@@ -1545,6 +1639,533 @@ def confirm_fp_issue(chat_id, user_id, username):
         tg_send_message(chat_id, "Ошибка выдачи ФП. Попробуй ещё раз.")
         send_fps_menu(chat_id, "Меню ФП:")
 
+def send_free_farm_kings(chat_id):
+    rows = get_sheet_rows_cached(SHEET_FARM_KINGS)
+
+    free_rows = []
+    for row in rows[1:]:
+        if len(row) < 10:
+            row = row + [''] * (10 - len(row))
+
+        if str(row[4]).strip().lower() == "free":
+            free_rows.append(row)
+
+    if not free_rows:
+        tg_send_message(chat_id, "Свободных фарм кингов сейчас нет.")
+        return
+
+    lines = []
+    for i, row in enumerate(free_rows, start=1):
+        lines.append(
+            f"{i}. {row[0] or '(без названия)'}\n"
+            f"Цена: {row[2]} | GEO: {row[7]}\n"
+        )
+
+    header = f"Свободные фарм кинги: {len(free_rows)}\n\n"
+    current_text = header
+
+    for line in lines:
+        if len(current_text) + len(line) > 3500:
+            tg_send_message(chat_id, current_text.strip())
+            current_text = line + "\n"
+        else:
+            current_text += line + "\n"
+
+    if current_text.strip():
+        tg_send_message(chat_id, current_text.strip())
+
+
+def find_free_farm_kings(count_needed):
+    rows = get_sheet_rows_cached(SHEET_FARM_KINGS)
+
+    candidates = []
+    for idx, row in enumerate(rows[1:], start=2):
+        if len(row) < 10:
+            row = row + [''] * (10 - len(row))
+
+        if str(row[4]).strip().lower() != "free":
+            continue
+
+        purchase_date = parse_date(row[1]) or datetime.max
+        candidates.append({
+            "row_index": idx,
+            "row": row,
+            "purchase_date_obj": purchase_date
+        })
+
+    candidates.sort(key=lambda x: x["purchase_date_obj"])
+    return candidates[:count_needed]
+
+
+def farm_king_name_exists(king_name):
+    rows = get_sheet_rows_cached(SHEET_FARM_KINGS)
+    target = str(king_name).strip().lower()
+
+    if not target:
+        return False
+
+    for row in rows[1:]:
+        existing_name = str(row[0]).strip().lower() if len(row) > 0 else ""
+        if existing_name == target:
+            return True
+
+    return False
+
+
+def find_farm_king_in_base_by_name(king_name):
+    rows = get_sheet_rows_cached(SHEET_FARM_KINGS)
+    target = str(king_name).strip().lower()
+
+    for idx, row in enumerate(rows[1:], start=2):
+        if len(row) < 10:
+            row = row + [''] * (10 - len(row))
+
+        if str(row[0]).strip().lower() == target:
+            return {
+                "row_index": idx,
+                "row": row
+            }
+
+    return None
+
+
+def build_farm_king_search_text(king_name):
+    found = find_farm_king_in_base_by_name(king_name)
+    if not found:
+        return None
+
+    row = found["row"]
+    if len(row) < 10:
+        row = row + [''] * (10 - len(row))
+
+    return (
+        f"Название: {row[0]}\n"
+        f"Статус: {row[4] or 'не указан'}\n"
+        f"Цена: {row[2] or 'не указана'}\n"
+        f"Дата взятия: {row[6] or 'не указана'}\n"
+        f"Кто взял: {row[8] or 'не указано'}\n"
+        f"Для кого: {row[5] or 'не указано'}\n\n"
+        f"Данные:\n{row[9] or 'нет данных'}"
+    )
+
+
+def return_farm_king_to_ban(king_name):
+    found = find_farm_king_in_base_by_name(king_name)
+    if not found:
+        return False, "Кинг не найден в База фарм кинги."
+
+    row = found["row"]
+    if len(row) < 10:
+        row = row + [''] * (10 - len(row))
+
+    if str(row[4]).strip().lower() == "ban":
+        return False, "Этот кинг уже в ban."
+
+    sheet_update_and_refresh(
+        SHEET_FARM_KINGS,
+        f"E{found['row_index']}:F{found['row_index']}",
+        [["ban", "ban"]]
+    )
+
+    issue_info = find_last_king_issue_row(king_name)
+    if issue_info:
+        sheet_update_and_refresh(
+            SHEET_ISSUES,
+            f"G{issue_info['row_index']}",
+            [["ban"]]
+        )
+
+    invalidate_stats_cache()
+    return True, f"Кинг '{king_name}' переведён в ban."
+
+
+def issue_farm_kings(chat_id, user_id, username, king_names):
+    state = get_state(user_id)
+    selected_rows = state.get("farm_king_rows", [])
+
+    if not selected_rows or len(selected_rows) != len(king_names):
+        clear_state(user_id)
+        send_farm_kings_menu(chat_id, "Ошибка выдачи фарм кингов. Начни заново.")
+        return
+
+    today = datetime.now().strftime("%d/%m/%Y")
+    who_took_text = f"@{username}" if username else "без username"
+
+    issue_rows = []
+    messages = []
+
+    with issue_lock:
+        current_rows = get_sheet_rows_cached(SHEET_FARM_KINGS, force=True)
+
+        for item, king_name in zip(selected_rows, king_names):
+            row_index = item["row_index"]
+
+            if row_index - 1 >= len(current_rows):
+                clear_state(user_id)
+                send_farm_kings_menu(chat_id, "Ошибка: один из кингов пропал из таблицы.")
+                return
+
+            row = current_rows[row_index - 1]
+            if len(row) < 10:
+                row = row + [''] * (10 - len(row))
+
+            if str(row[4]).strip().lower() != "free":
+                clear_state(user_id)
+                send_farm_kings_menu(chat_id, f"Кинг '{row[0] or king_name}' уже не свободен.")
+                return
+
+        for item, king_name in zip(selected_rows, king_names):
+            row_index = item["row_index"]
+            row = current_rows[row_index - 1]
+            if len(row) < 10:
+                row = row + [''] * (10 - len(row))
+
+            sheet_update_raw(
+                SHEET_FARM_KINGS,
+                f"A{row_index}:I{row_index}",
+                [[
+                    king_name,
+                    row[1],
+                    row[2],
+                    row[3],
+                    "taken",
+                    "farm",
+                    today,
+                    row[7],
+                    who_took_text
+                ]]
+            )
+
+            issue_rows.append([
+                king_name,
+                "KING",
+                row[1],
+                normalize_numeric_for_sheet(row[2]),
+                today,
+                row[3],
+                "farm"
+            ])
+
+            messages.append(
+                f"{king_name}\n\n{row[9] if len(row) > 9 and row[9] else 'нет данных'}"
+            )
+
+        refresh_sheet_cache(SHEET_FARM_KINGS)
+
+        if issue_rows:
+            sheet_append_rows_and_refresh(
+                SHEET_ISSUES,
+                issue_rows,
+                value_input_option="USER_ENTERED"
+            )
+
+        invalidate_stats_cache()
+
+    clear_state(user_id)
+
+    tg_send_message(chat_id, f"Готово ✅\n\nВыдано кингов: {len(king_names)}")
+    for msg_text in messages:
+        tg_send_message(chat_id, msg_text)
+
+    send_farm_kings_menu(chat_id, "Выбери следующее действие:")
+
+
+def count_free_farm_bms():
+    rows = get_sheet_rows_cached(SHEET_FARM_BMS)
+
+    count = 0
+    for row in rows[1:]:
+        if len(row) < 5:
+            row = row + [''] * (5 - len(row))
+
+        if str(row[4]).strip().lower() == "free":
+            count += 1
+
+    return count
+
+
+def find_free_farm_bm(exclude_bm_id=None):
+    rows = get_sheet_rows_cached(SHEET_FARM_BMS)
+
+    candidates = []
+
+    for idx, row in enumerate(rows[1:], start=2):
+        if len(row) < 9:
+            row = row + [''] * (9 - len(row))
+
+        bm_id = str(row[0]).strip()
+        if exclude_bm_id and bm_id == exclude_bm_id:
+            continue
+
+        if str(row[4]).strip().lower() != "free":
+            continue
+
+        purchase_date = parse_date(row[1]) or datetime.max
+        candidates.append({
+            "row_index": idx,
+            "row": row,
+            "purchase_date_obj": purchase_date
+        })
+
+    if not candidates:
+        return None
+
+    candidates.sort(key=lambda x: x["purchase_date_obj"])
+    item = candidates[0]
+    row = item["row"]
+
+    return {
+        "row_index": item["row_index"],
+        "bm_id": row[0],
+        "purchase_date": row[1],
+        "price": row[2],
+        "supplier": row[3],
+        "data_text": row[8]
+    }
+
+
+def find_farm_bm_in_base(bm_id):
+    rows = get_sheet_rows_cached(SHEET_FARM_BMS)
+
+    for idx, row in enumerate(rows[1:], start=2):
+        if len(row) < 9:
+            row = row + [''] * (9 - len(row))
+
+        if str(row[0]).strip() == str(bm_id).strip():
+            return {
+                "row_index": idx,
+                "row": row
+            }
+
+    return None
+
+
+def build_farm_bm_search_text(bm_id):
+    found = find_farm_bm_in_base(bm_id)
+    if not found:
+        return None
+
+    row = found["row"]
+    if len(row) < 9:
+        row = row + [''] * (9 - len(row))
+
+    return (
+        f"ID BM: {row[0]}\n"
+        f"Дата покупки: {row[1] or 'не указана'}\n"
+        f"Цена: {row[2] or 'не указана'}\n"
+        f"Статус: {row[4] or 'не указан'}\n"
+        f"Для кого: {row[5] or 'не указано'}\n"
+        f"Кто взял: {row[6] or 'не указано'}\n"
+        f"Дата выдачи: {row[7] or 'не указана'}\n\n"
+        f"Данные:\n{row[8] or 'нет данных'}"
+    )
+
+
+def issue_farm_bm(chat_id, user_id, username):
+    found = find_free_farm_bm()
+
+    if not found:
+        send_farm_bms_menu(chat_id, "Свободных фарм BMов сейчас нет.")
+        return
+
+    row_index = found["row_index"]
+    rows = get_sheet_rows_cached(SHEET_FARM_BMS, force=True)
+
+    if row_index - 1 >= len(rows):
+        send_farm_bms_menu(chat_id, "BM не найден в таблице.")
+        return
+
+    row = rows[row_index - 1]
+    if len(row) < 9:
+        row = row + [''] * (9 - len(row))
+
+    if str(row[4]).strip().lower() != "free":
+        send_farm_bms_menu(chat_id, "Этот BM уже занят.")
+        return
+
+    today = datetime.now().strftime("%d/%m/%Y")
+    who_took_text = f"@{username}" if username else "без username"
+
+    with issue_lock:
+        sheet_update_and_refresh(
+            SHEET_FARM_BMS,
+            f"E{row_index}:H{row_index}",
+            [[
+                "taken",
+                "farm",
+                who_took_text,
+                today
+            ]]
+        )
+
+        next_row = get_next_empty_row_in_issues()
+        sheet_update_and_refresh(
+            SHEET_ISSUES,
+            f"A{next_row}:G{next_row}",
+            [[
+                row[0],
+                "БМ",
+                row[1],
+                normalize_numeric_for_sheet(row[2]),
+                today,
+                row[3],
+                "farm"
+            ]]
+        )
+
+        invalidate_stats_cache()
+
+    tg_send_message(
+        chat_id,
+        f"Готово ✅\n\nBM выдан.\nID BM: {row[0]}\nКому передали: farm"
+    )
+
+    if len(row) > 8 and row[8]:
+        tg_send_message(chat_id, row[8])
+    else:
+        tg_send_message(chat_id, "Данные BM не найдены.")
+
+    send_farm_bms_menu(chat_id, "Выбери следующее действие:")
+
+
+def find_free_farm_fps(count_needed):
+    rows = get_sheet_rows_cached(SHEET_FARM_FPS)
+
+    candidates = []
+    for idx, row in enumerate(rows[1:], start=2):
+        if len(row) < 9:
+            row = row + [''] * (9 - len(row))
+
+        if str(row[5]).strip().lower() != "free":
+            continue
+
+        purchase_date = parse_date(row[1]) or datetime.max
+        candidates.append({
+            "row_index": idx,
+            "row": row,
+            "purchase_date_obj": purchase_date
+        })
+
+    candidates.sort(key=lambda x: x["purchase_date_obj"])
+    return candidates[:count_needed]
+
+
+def find_farm_fp_in_base(fp_link):
+    rows = get_sheet_rows_cached(SHEET_FARM_FPS)
+
+    for idx, row in enumerate(rows[1:], start=2):
+        if len(row) < 9:
+            row = row + [''] * (9 - len(row))
+
+        if str(row[0]).strip() == str(fp_link).strip():
+            return {
+                "row_index": idx,
+                "row": row
+            }
+
+    return None
+
+
+def build_farm_fp_search_text(fp_link):
+    found = find_farm_fp_in_base(fp_link)
+    if not found:
+        return None
+
+    row = found["row"]
+    if len(row) < 9:
+        row = row + [''] * (9 - len(row))
+
+    return (
+        f"Ссылка FP: {row[0]}\n"
+        f"Дата покупки: {row[1] or 'не указана'}\n"
+        f"Цена: {row[2] or 'не указана'}\n"
+        f"У кого купили: {row[3] or 'не указан'}\n"
+        f"Склад: {row[4] or 'не указан'}\n"
+        f"Статус: {row[5] or 'не указан'}\n"
+        f"Для кого: {row[6] or 'не указано'}\n"
+        f"Кто взял: {row[7] or 'не указано'}\n"
+        f"Дата выдачи: {row[8] or 'не указана'}"
+    )
+
+
+def issue_farm_fps(chat_id, user_id, username, count_needed):
+    found = find_free_farm_fps(count_needed)
+
+    if len(found) < count_needed:
+        send_farm_fps_menu(chat_id, f"Недостаточно свободных FP. Доступно: {len(found)}")
+        return
+
+    today = datetime.now().strftime("%d/%m/%Y")
+    who_took_text = f"@{username}" if username else "без username"
+
+    issue_rows = []
+    messages = []
+
+    with issue_lock:
+        current_rows = get_sheet_rows_cached(SHEET_FARM_FPS, force=True)
+
+        for item in found:
+            row_index = item["row_index"]
+
+            if row_index - 1 >= len(current_rows):
+                send_farm_fps_menu(chat_id, "Ошибка: одна из FP пропала из таблицы.")
+                return
+
+            row = current_rows[row_index - 1]
+            if len(row) < 9:
+                row = row + [''] * (9 - len(row))
+
+            if str(row[5]).strip().lower() != "free":
+                send_farm_fps_menu(chat_id, "Одна из FP уже не свободна.")
+                return
+
+        for item in found:
+            row_index = item["row_index"]
+            row = current_rows[row_index - 1]
+            if len(row) < 9:
+                row = row + [''] * (9 - len(row))
+
+            sheet_update_raw(
+                SHEET_FARM_FPS,
+                f"F{row_index}:I{row_index}",
+                [[
+                    "taken",
+                    "farm",
+                    who_took_text,
+                    today
+                ]]
+            )
+
+            issue_rows.append([
+                row[0],
+                "FP",
+                row[1],
+                normalize_numeric_for_sheet(row[2]),
+                today,
+                row[3],
+                "farm"
+            ])
+
+            messages.append(
+                f"Ссылка: {row[0]}\nСклад: {row[4]}"
+            )
+
+        refresh_sheet_cache(SHEET_FARM_FPS)
+
+        if issue_rows:
+            sheet_append_rows_and_refresh(
+                SHEET_ISSUES,
+                issue_rows,
+                value_input_option="USER_ENTERED"
+            )
+
+        invalidate_stats_cache()
+
+    tg_send_message(chat_id, f"Готово ✅\n\nВыдано FP: {len(messages)}")
+    for msg_text in messages:
+        tg_send_message(chat_id, msg_text)
+
+    send_farm_fps_menu(chat_id, "Выбери следующее действие:")
 # =========================
 # HELPERS
 # =========================
@@ -3186,9 +3807,44 @@ def handle_message(msg):
             send_admin_menu(chat_id)
             return
 
+        if text == ADMIN_ACCOUNTANTS:
+            if not is_admin(user_id):
+                tg_send_message(chat_id, "У вас нет доступа.")
+                return
+
+            clear_state(user_id)
+            send_admin_accountants_menu(chat_id)
+            return
+
+        if text == ADMIN_FARMERS:
+            if not is_admin(user_id):
+                tg_send_message(chat_id, "У вас нет доступа.")
+                return
+
+            clear_state(user_id)
+            send_admin_menu(chat_id, "Раздел Фармеры пока в разработке.")
+            return
+
+        if text == ADMIN_UPDATE_5M:
+            if not is_admin(user_id):
+                tg_send_message(chat_id, "У вас нет доступа.")
+                return
+
+            sent, failed = notify_all_users_about_update()
+            send_admin_menu(
+                chat_id,
+                f"Уведомление отправлено.\n\nУспешно: {sent}\nОшибок: {failed}"
+            )
+            return
+
         if text == BTN_BACK_FROM_ADMIN:
             clear_state(user_id)
             send_main_menu(chat_id, user_id=user_id)
+            return
+
+        if text == BTN_BACK_FROM_ACCOUNTANTS:
+            clear_state(user_id)
+            send_admin_menu(chat_id)
             return
 
         if text == MENU_ACCOUNTS:
@@ -3198,7 +3854,7 @@ def handle_message(msg):
 
         if text == MENU_FARMERS:
             clear_state(user_id)
-            send_main_menu(chat_id, "Раздел Farmers пока в разработке.", user_id=user_id)
+            send_farmers_menu(chat_id)
             return
 
         if text == SUBMENU_ACCOUNTS_MAIN:
@@ -3229,6 +3885,26 @@ def handle_message(msg):
         if text == BTN_BACK_TO_MENU:
             clear_state(user_id)
             send_main_menu(chat_id, user_id=user_id)
+            return
+
+        if text == BTN_BACK_TO_FARMERS:
+            clear_state(user_id)
+            send_farmers_menu(chat_id)
+            return
+
+        if text == FARM_MENU_KING:
+            clear_state(user_id)
+            send_farm_kings_menu(chat_id)
+            return
+
+        if text == FARM_MENU_BM:
+            clear_state(user_id)
+            send_farm_bms_menu(chat_id)
+            return
+
+        if text == FARM_MENU_FP:
+            clear_state(user_id)
+            send_farm_fps_menu(chat_id)
             return
 
         # ========= ADMIN =========
@@ -3484,6 +4160,52 @@ def handle_message(msg):
             show_found_fp(chat_id, user_id, found)
             return
 
+        # ========= FARMERS =========
+        if text == FARM_SUBMENU_FREE_KINGS:
+            send_free_farm_kings(chat_id)
+            send_farm_kings_menu(chat_id, "Выбери следующее действие:")
+            return
+
+        if text == FARM_SUBMENU_GET_KINGS:
+            set_state(user_id, {"mode": "awaiting_farm_kings_count"})
+            tg_send_message(chat_id, "Сколько кингов нужно?")
+            return
+
+        if text == FARM_SUBMENU_RETURN_KING:
+            set_state(user_id, {"mode": "awaiting_farm_return_king_name"})
+            tg_send_message(chat_id, "Впиши название кинга.")
+            return
+
+        if text == FARM_SUBMENU_SEARCH_KING:
+            set_state(user_id, {"mode": "awaiting_farm_search_king_name"})
+            tg_send_message(chat_id, "Впиши название кинга.")
+            return
+
+        if text == FARM_SUBMENU_FREE_BMS:
+            free_count = count_free_farm_bms()
+            tg_send_message(chat_id, f"Свободных фарм BMов: {free_count}")
+            send_farm_bms_menu(chat_id, "Выбери следующее действие:")
+            return
+
+        if text == FARM_SUBMENU_GET_BM:
+            issue_farm_bm(chat_id, user_id, username)
+            return
+
+        if text == FARM_SUBMENU_SEARCH_BM:
+            set_state(user_id, {"mode": "awaiting_farm_search_bm"})
+            tg_send_message(chat_id, "Впиши ID BM.")
+            return
+
+        if text == FARM_SUBMENU_GET_FP:
+            set_state(user_id, {"mode": "awaiting_farm_fp_count"})
+            tg_send_message(chat_id, "Сколько FP нужно?")
+            return
+
+        if text == FARM_SUBMENU_SEARCH_FP:
+            set_state(user_id, {"mode": "awaiting_farm_search_fp"})
+            tg_send_message(chat_id, "Впиши ссылку FP.")
+            return
+            
         # ========= СОСТОЯНИЯ: ДОБАВЛЕНИЕ =========
         if state.get("mode") == "awaiting_bulk_add":
             result = add_accounts_from_text(text)
@@ -3929,6 +4651,141 @@ def handle_message(msg):
                 return
 
             show_found_fp(chat_id, user_id, found)
+            return
+
+        # ========= СОСТОЯНИЯ: FARM KING =========
+        if state.get("mode") == "awaiting_farm_kings_count":
+            try:
+                count_needed = int(text.strip())
+            except Exception:
+                tg_send_message(chat_id, "Впиши число.")
+                return
+
+            if count_needed <= 0:
+                tg_send_message(chat_id, "Количество должно быть больше нуля.")
+                return
+
+            found = find_free_farm_kings(count_needed)
+
+            if len(found) < count_needed:
+                clear_state(user_id)
+                send_farm_kings_menu(chat_id, f"Недостаточно свободных кингов. Доступно: {len(found)}")
+                return
+
+            set_state(user_id, {
+                "mode": "awaiting_farm_king_names",
+                "farm_kings_count": count_needed,
+                "farm_king_rows": found
+            })
+
+            tg_send_message(
+                chat_id,
+                f"Пришли {count_needed} названий для кингов.\nКаждое название с новой строки."
+            )
+            return
+
+        if state.get("mode") == "awaiting_farm_king_names":
+            names = [x.strip() for x in text.splitlines() if x.strip()]
+            count_needed = state.get("farm_kings_count", 0)
+
+            if len(names) != count_needed:
+                tg_send_message(chat_id, f"Нужно прислать ровно {count_needed} названий, каждое с новой строки.")
+                return
+
+            lower_names = [x.lower() for x in names]
+            if len(lower_names) != len(set(lower_names)):
+                tg_send_message(chat_id, "Названия не должны повторяться.")
+                return
+
+            for name in names:
+                if farm_king_name_exists(name):
+                    tg_send_message(chat_id, f"Название '{name}' уже существует в фарм базе.")
+                    return
+
+            issue_farm_kings(chat_id, user_id, username, names)
+            return
+
+        if state.get("mode") == "awaiting_farm_search_king_name":
+            king_name = text.strip()
+
+            if not king_name:
+                tg_send_message(chat_id, "Впиши название кинга.")
+                return
+
+            result = build_farm_king_search_text(king_name)
+            clear_state(user_id)
+
+            if not result:
+                send_farm_kings_menu(chat_id, "Кинг не найден.")
+                return
+
+            tg_send_message(chat_id, result)
+            send_farm_kings_menu(chat_id, "Выбери следующее действие:")
+            return
+
+        if state.get("mode") == "awaiting_farm_return_king_name":
+            king_name = text.strip()
+
+            if not king_name:
+                tg_send_message(chat_id, "Впиши название кинга.")
+                return
+
+            ok, message = return_farm_king_to_ban(king_name)
+            clear_state(user_id)
+            send_farm_kings_menu(chat_id, message)
+            return
+
+        # ========= СОСТОЯНИЯ: FARM BM =========
+        if state.get("mode") == "awaiting_farm_search_bm":
+            bm_id = text.strip()
+
+            if not bm_id:
+                tg_send_message(chat_id, "Впиши ID BM.")
+                return
+
+            result = build_farm_bm_search_text(bm_id)
+            clear_state(user_id)
+
+            if not result:
+                send_farm_bms_menu(chat_id, "BM не найден.")
+                return
+
+            tg_send_message(chat_id, result)
+            send_farm_bms_menu(chat_id, "Выбери следующее действие:")
+            return
+
+        # ========= СОСТОЯНИЯ: FARM FP =========
+        if state.get("mode") == "awaiting_farm_fp_count":
+            try:
+                count_needed = int(text.strip())
+            except Exception:
+                tg_send_message(chat_id, "Впиши число.")
+                return
+
+            if count_needed <= 0:
+                tg_send_message(chat_id, "Количество должно быть больше нуля.")
+                return
+
+            clear_state(user_id)
+            issue_farm_fps(chat_id, user_id, username, count_needed)
+            return
+
+        if state.get("mode") == "awaiting_farm_search_fp":
+            fp_link = text.strip()
+
+            if not fp_link:
+                tg_send_message(chat_id, "Впиши ссылку FP.")
+                return
+
+            result = build_farm_fp_search_text(fp_link)
+            clear_state(user_id)
+
+            if not result:
+                send_farm_fps_menu(chat_id, "FP не найдено.")
+                return
+
+            tg_send_message(chat_id, result)
+            send_farm_fps_menu(chat_id, "Выбери следующее действие:")
             return
 
         send_main_menu(chat_id, "Не понял команду. Выбери кнопку из меню:", user_id=user_id)
