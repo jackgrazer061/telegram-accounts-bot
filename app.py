@@ -4112,11 +4112,19 @@ def backup_tables():
             kings_data = kings.get_all_values()
             issues_data = issues.get_all_values()
             bms_data = bms.get_all_values()
+            fps_data = fps.get_all_values()
+            farm_kings_data = farm_kings.get_all_values()
+            farm_bms_data = farm_bms.get_all_values()
+            farm_fps_data = farm_fps.get_all_values()
 
             backup_accounts.clear()
             backup_kings.clear()
             backup_issues.clear()
             backup_bms.clear()
+            backup_fps.clear()
+            backup_farm_kings.clear()
+            backup_farm_bms.clear()
+            backup_farm_fps.clear()
 
             if accounts_data:
                 backup_accounts.append_rows(accounts_data)
@@ -4129,6 +4137,18 @@ def backup_tables():
 
             if bms_data:
                 backup_bms.append_rows(bms_data)
+
+            if fps_data:
+                backup_fps.append_rows(fps_data)
+
+            if farm_kings_data:
+                backup_farm_kings.append_rows(farm_kings_data)
+
+            if farm_bms_data:
+                backup_farm_bms.append_rows(farm_bms_data)
+
+            if farm_fps_data:
+                backup_farm_fps.append_rows(farm_fps_data)
 
             last_backup_date = datetime.now(MOSCOW_TZ).date()
 
@@ -4396,16 +4416,28 @@ def handle_message(msg):
             return
 
         if text == FARM_MENU_KING:
+            if not (is_admin(user_id) or is_farmers_user(user_id)):
+                tg_send_message(chat_id, "У вас нет доступа к разделу Farmers.")
+                return
+
             clear_state(user_id)
             send_farm_kings_menu(chat_id)
             return
 
         if text == FARM_MENU_BM:
+            if not (is_admin(user_id) or is_farmers_user(user_id)):
+                tg_send_message(chat_id, "У вас нет доступа к разделу Farmers.")
+                return
+
             clear_state(user_id)
             send_farm_bms_menu(chat_id)
             return
 
         if text == FARM_MENU_FP:
+            if not (is_admin(user_id) or is_farmers_user(user_id)):
+                tg_send_message(chat_id, "У вас нет доступа к разделу Farmers.")
+                return
+
             clear_state(user_id)
             send_farm_fps_menu(chat_id)
             return
