@@ -4233,6 +4233,7 @@ def cache_warmer_loop():
 # =========================            
 def handle_message(msg):
     try:
+        logging.info(f"HANDLE_MESSAGE START text={msg.get('text')} user_id={msg['from']['id']}")
         cleanup_states()
         touch_request_heartbeat()
 
@@ -5564,8 +5565,10 @@ def message_worker_loop():
     while True:
         try:
             msg = update_queue.get()
+            logging.info(f"WORKER GOT MESSAGE chat_id={msg['chat']['id']} text={msg.get('text')}")
             try:
                 process_incoming_message(msg)
+                logging.info("WORKER DONE")
             except Exception:
                 logging.exception("message_worker_loop crashed")
             finally:
@@ -5589,15 +5592,21 @@ def health():
 def webhook():
     try:
         update = request.get_json(silent=True) or {}
+        logging.info(f"WEBHOOK UPDATE: {json.dumps(update, ensure_ascii=False)[:2000]}")
 
         msg = update.get("message") or update.get("edited_message")
 
         if msg:
             try:
                 update_queue.put_nowait(msg)
-            except Exception:
-                logging.warning("update_queue overflow")
+                logging.info(f"PUT TO QUEUE chat_id={msg['chat']['id']} text={msg.get('text')}")
+            except Exception as e:
+                logging.exception(f"update_queue overflow/error: {e}")
 
+        return jsonify({"ok": True})
+
+    except Exception as e:
+        logging.exception(f"webhook error: {e}")
         return jsonify({"ok": True})
 
     except Exception as e:
