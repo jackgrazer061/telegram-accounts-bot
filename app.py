@@ -4442,7 +4442,7 @@ def build_all_users_stats_text():
 
     parts.append("=== ACCOUNTS ===")
     if ACCOUNTS_USERS:
-        for user_id, tg_username in ACCOUNTS_USERS.items():
+        for user_id, username in ACCOUNTS_USERS.items():
             parts.append(build_manager_stats_text(tg_username))
             parts.append("")
     else:
@@ -4451,7 +4451,7 @@ def build_all_users_stats_text():
 
     parts.append("=== FARMERS ===")
     if FARMERS_USERS:
-        for user_id, tg_username in FARMERS_USERS.items():
+        for user_id, username in FARMERS_USERS.items():
             parts.append(build_farmer_stats_text(tg_username))
             parts.append("")
     else:
@@ -4593,13 +4593,12 @@ def handle_message(msg):
             return
 
         if text == ADMIN_ALL_STATS:
-            if not is_admin(user_id):
-                tg_send_message(chat_id, "У вас нет доступа.")
-                return
-
-            stats_text = build_all_users_stats_text()
-            tg_send_long_message(chat_id, stats_text)
-            send_admin_menu(chat_id, "Меню Admin:")
+            try:
+                result = build_all_users_stats_text()
+                send_long_text(chat_id, result)
+            except Exception as e:
+                logging.exception("ADMIN_ALL_STATS crashed")
+                tg_send_message(chat_id, f"Ошибка в статистике всех:\n{e}")
             return
 
         if text == ADMIN_BOT_CHECK:
