@@ -548,9 +548,18 @@ def tg_edit_message_text(chat_id, message_id, text, inline_buttons=None):
 
         if resp.status_code != 200:
             logging.warning(f"Telegram editMessageText failed: {resp.text}")
+            return False
+
+        data = resp.json()
+        if not data.get("ok"):
+            logging.warning(f"Telegram editMessageText api error: {data}")
+            return False
+
+        return True
 
     except Exception as e:
         logging.error(f"tg_edit_message_text error: {e}")
+        return False
 
 def tg_answer_callback_query(callback_query_id, text=""):
     try:
@@ -598,6 +607,7 @@ def send_accounts_main_menu(chat_id, text="Меню Accounts:"):
     keyboard = [
         [{"text": SUBMENU_ACCOUNTS_MAIN}, {"text": MENU_KINGS}],
         [{"text": MENU_BMS}, {"text": MENU_FPS}],
+        [{"text": MENU_PIXELS}],
         [{"text": MENU_MANAGER_STATS}],
         [{"text": SUBMENU_BACK_MAIN}]
     ]
@@ -605,11 +615,9 @@ def send_accounts_main_menu(chat_id, text="Меню Accounts:"):
 
 def send_fps_menu(chat_id, text="Меню ФП:"):
     keyboard = [
-        [{"text": SUBMENU_ACCOUNTS_MAIN}, {"text": MENU_KINGS}],
-        [{"text": MENU_BMS}, {"text": MENU_FPS}],
-        [{"text": MENU_PIXELS}],
-        [{"text": MENU_MANAGER_STATS}],
-        [{"text": SUBMENU_BACK_MAIN}]
+        [{"text": SUBMENU_GET_FP}],
+        [{"text": SUBMENU_SEARCH_FP}],
+        [{"text": BTN_BACK_TO_MENU}]
     ]
     tg_send_message(chat_id, text, keyboard)
 
@@ -698,7 +706,7 @@ def send_admin_menu(chat_id, text="Меню Admin:"):
     keyboard = [
         [{"text": ADMIN_BACKUP}, {"text": ADMIN_UPDATE_5M}],
         [{"text": ADMIN_ACCOUNTANTS}, {"text": ADMIN_FARMERS}],
-        [{"text": ADMIN_ALL_STATS}],
+        [{"text": ADMIN_ALL_STATS}, {"text": ADMIN_BOT_CHECK}],
         [{"text": BTN_BACK_FROM_ADMIN}]
     ]
     tg_send_message(chat_id, text, keyboard)
@@ -714,8 +722,8 @@ def send_admin_farmers_menu(chat_id, text="Admin / Фармеры:"):
 def send_admin_accountants_menu(chat_id, text="Меню Акаунтеры:"):
     keyboard = [
         [{"text": ADMIN_ADD_ACCOUNTS}, {"text": ADMIN_ADD_KINGS}],
-        [{"text": ADMIN_ADD_BMS}, {"text": ADMIN_ADD_FPS}],
-        [{"text": ADMIN_ADD_PIXELS}],
+        [{"text": ADMIN_ADD_CRYPTO_KINGS}, {"text": ADMIN_ADD_BMS}],
+        [{"text": ADMIN_ADD_FPS}, {"text": ADMIN_ADD_PIXELS}],
         [{"text": BTN_BACK_FROM_ACCOUNTANTS}]
     ]
     tg_send_message(chat_id, text, keyboard)
@@ -1955,7 +1963,7 @@ def confirm_fp_issue(chat_id, user_id, username):
                 return
 
             fp_link = row[0]
-            today = datetime.now().strftime("%d/%m/%Y")
+            today = datetime.now(MOSCOW_TZ).strftime("%d/%m/%Y")
             who_took_text = f"@{username}" if username else "без username"
 
             sheet_update_and_refresh(
@@ -2030,7 +2038,7 @@ def confirm_pixel_issue(chat_id, user_id, username):
                 send_pixels_menu(chat_id, "Этот Пиксель недоступен.")
                 return
 
-            today = datetime.now().strftime("%d/%m/%Y")
+            today = datetime.now(MOSCOW_TZ).strftime("%d/%m/%Y")
             who_took_text = f"@{username}" if username else "без username"
 
             sheet_update_and_refresh(
@@ -2368,7 +2376,7 @@ def issue_farm_kings(chat_id, user_id, username, king_names):
         send_farm_kings_menu(chat_id, "Ошибка выдачи фарм кингов. Начни заново.")
         return
 
-    today = datetime.now().strftime("%d/%m/%Y")
+    today = datetime.now(MOSCOW_TZ).strftime("%d/%m/%Y")
     who_took_text = f"@{username}" if username else "без username"
 
     issue_rows = []
@@ -2542,7 +2550,7 @@ def build_farm_bm_search_text(bm_id):
 
 
 def issue_farm_bm(chat_id, user_id, username):
-    today = datetime.now().strftime("%d/%m/%Y")
+    today = datetime.now(MOSCOW_TZ).strftime("%d/%m/%Y")
     who_took_text = f"@{username}" if username else "без username"
 
     with issue_lock:
@@ -2675,7 +2683,7 @@ def issue_farm_fps(chat_id, user_id, username, count_needed):
         send_farm_fps_menu(chat_id, f"Недостаточно свободных FP. Доступно: {len(found)}")
         return
 
-    today = datetime.now().strftime("%d/%m/%Y")
+    today = datetime.now(MOSCOW_TZ).strftime("%d/%m/%Y")
     who_took_text = f"@{username}" if username else "без username"
 
     issue_rows = []
@@ -2847,21 +2855,25 @@ def parse_sheet_date(value):
 
 
 def get_manager_stats_period():
-    now = datetime.now()
+    now = datetime.now(MOSCOW_TZ)
 
-    if now.day >= 10:
-        start_date = datetime(now.year, now.month, 10)
-        if now.month == 12:
-            end_date = datetime(now.year + 1, 1, 10)
-        else:
-            end_date = datetime(now.year, now.month + 1, 10)
-    else:
+    # с 1 по 9 число показываем ПРОШЛЫЙ месяц
+    if now.day < 10:
         if now.month == 1:
-            start_date = datetime(now.year - 1, 12, 10)
+            start_date = datetime(now.year - 1, 12, 1)
+            end_date = datetime(now.year, 1, 1)
         else:
-            start_date = datetime(now.year, now.month - 1, 10)
+            start_date = datetime(now.year, now.month - 1, 1)
+            end_date = datetime(now.year, now.month, 1)
 
-        end_date = datetime(now.year, now.month, 10)
+    # с 10 числа показываем ТЕКУЩИЙ месяц
+    else:
+        start_date = datetime(now.year, now.month, 1)
+
+        if now.month == 12:
+            end_date = datetime(now.year + 1, 1, 1)
+        else:
+            end_date = datetime(now.year, now.month + 1, 1)
 
     return start_date, end_date
 
@@ -2891,6 +2903,16 @@ def build_manager_stats_summary_text(username):
 
     kings_rows = get_sheet_rows_cached(SHEET_KINGS)
     for row in kings_rows[1:]:
+        if len(row) < 10:
+            row = row + [''] * (10 - len(row))
+        if str(row[8]).strip().lower() != target_username:
+            continue
+        transfer_date = parse_sheet_date(str(row[6]).strip())
+        if transfer_date and start_date <= transfer_date < end_date:
+            kings_count += 1
+
+    crypto_kings_rows = get_sheet_rows_cached(SHEET_CRYPTO_KINGS)
+    for row in crypto_kings_rows[1:]:
         if len(row) < 10:
             row = row + [''] * (10 - len(row))
         if str(row[8]).strip().lower() != target_username:
@@ -2957,6 +2979,19 @@ def build_manager_stats_text(username):
 
     kings_lines = []
     for row in kings_rows[1:]:
+        if len(row) < 10:
+            row = row + [''] * (10 - len(row))
+
+        who_took = str(row[8]).strip().lower()
+        transfer_date = parse_sheet_date(row[6])
+
+        if who_took == target_username and transfer_date and start_date <= transfer_date < end_date:
+            kings_lines.append(
+                f"{row[0]} | {transfer_date.strftime('%d/%m/%Y')} | {row[5]}"
+            )
+
+    crypto_kings_rows = get_sheet_rows_cached(SHEET_CRYPTO_KINGS)
+    for row in crypto_kings_rows[1:]:
         if len(row) < 10:
             row = row + [''] * (10 - len(row))
 
@@ -3630,7 +3665,7 @@ def append_issue_row(account_number, purchase_date, price, transfer_date, suppli
     )
 
 def issue_accounts_bulk(account_numbers, for_whom, username):
-    today = datetime.now().strftime("%d/%m/%Y")
+    today = datetime.now(MOSCOW_TZ).strftime("%d/%m/%Y")
     who_took_text = f"@{username}" if username else "без username"
 
     unique_numbers = []
@@ -3727,7 +3762,7 @@ def issue_accounts_bulk(account_numbers, for_whom, username):
 
 
 def issue_next_quick_account_for_person(for_whom, username):
-    today = datetime.now().strftime("%d/%m/%Y")
+    today = datetime.now(MOSCOW_TZ).strftime("%d/%m/%Y")
     who_took_text = f"@{username}" if username else "без username"
 
     with issue_lock, accounts_lock:
@@ -4098,7 +4133,7 @@ def confirm_bm_issue(chat_id, user_id, username):
             purchase_date = row[1]
             price = row[2]
             supplier = row[3]
-            today = datetime.now().strftime("%d/%m/%Y")
+            today = datetime.now(MOSCOW_TZ).strftime("%d/%m/%Y")
             who_took_text = f"@{username}" if username else "без username"
 
             sheet_update_and_refresh(
@@ -4229,7 +4264,7 @@ def confirm_king_issue(chat_id, user_id, username):
                 set_state(user_id, state)
                 return
 
-            today = datetime.now().strftime("%d/%m/%Y")
+            today = datetime.now(MOSCOW_TZ).strftime("%d/%m/%Y")
             who_took_text = f"@{username}" if username else "без username"
 
             sheet_update_and_refresh(
@@ -4335,7 +4370,7 @@ def confirm_crypto_king_issue(chat_id, user_id, username):
                 set_state(user_id, state)
                 return
 
-            today = datetime.now().strftime("%d/%m/%Y")
+            today = datetime.now(MOSCOW_TZ).strftime("%d/%m/%Y")
             who_took_text = f"@{username}" if username else "без username"
 
             sheet_update_and_refresh(
@@ -4911,43 +4946,49 @@ def run_bot_diagnostics():
     def add_result(name, ok, details=""):
         nonlocal ok_count, fail_count
         mark = "✅" if ok else "❌"
-        report.append(f"{mark} {name}" + (f" — {details}" if details else ""))
+        line = f"{mark} {name}"
+        if details:
+            line += f" — {details}"
+        report.append(line)
+
         if ok:
             ok_count += 1
         else:
             fail_count += 1
 
-    # 1. Telegram base url
+    # 1. Проверка токена и Telegram API
     try:
         if BOT_TOKEN and BASE_URL.startswith("https://api.telegram.org/bot"):
-            add_result("Telegram config", True)
+            add_result("Подключение к Telegram настроено", True)
         else:
-            add_result("Telegram config", False, "BOT_TOKEN/BASE_URL некорректен")
+            add_result("Подключение к Telegram настроено", False, "BOT_TOKEN или BASE_URL заполнены неправильно")
     except Exception as e:
-        add_result("Telegram config", False, str(e))
+        add_result("Подключение к Telegram настроено", False, str(e))
 
-    # 2. Google client
+    # 2. Проверка Google credentials
     try:
         client = get_gspread_client()
-        add_result("Google client", client is not None)
+        add_result("Авторизация в Google Sheets", client is not None)
     except Exception as e:
-        add_result("Google client", False, str(e))
+        add_result("Авторизация в Google Sheets", False, str(e))
 
-    # 3. Открытие таблицы
+    # 3. Проверка основной таблицы
     try:
         client = get_gspread_client()
         spreadsheet = client.open_by_key(SPREADSHEET_ID)
-        add_result("Open main spreadsheet", True, spreadsheet.title)
+        add_result("Основная таблица открывается", True, f"Название: {spreadsheet.title}")
     except Exception as e:
-        add_result("Open main spreadsheet", False, str(e))
+        add_result("Основная таблица открывается", False, str(e))
 
-    # 4. Проверка всех листов
+    # 4. Проверка всех рабочих листов
     sheets_to_check = [
         SHEET_ACCOUNTS,
         SHEET_ISSUES,
         SHEET_KINGS,
+        SHEET_CRYPTO_KINGS,
         SHEET_BMS,
         SHEET_FPS,
+        SHEET_PIXELS,
         SHEET_FARM_KINGS,
         SHEET_FARM_BMS,
         SHEET_FARM_FPS,
@@ -4957,60 +4998,61 @@ def run_bot_diagnostics():
         try:
             sheet = get_sheet(sheet_name)
             rows = sheet.get_all_values()
-            add_result(f"Sheet: {sheet_name}", True, f"rows={len(rows)}")
+            add_result(f"Лист '{sheet_name}' доступен", True, f"Строк: {len(rows)}")
         except Exception as e:
-            add_result(f"Sheet: {sheet_name}", False, str(e))
+            add_result(f"Лист '{sheet_name}' доступен", False, str(e))
 
-    # 5. Проверка backup spreadsheet
+    # 5. Проверка backup таблицы
     try:
         client = get_gspread_client()
         backup_spreadsheet = client.open_by_key(BACKUP_SPREADSHEET_ID)
-        add_result("Open backup spreadsheet", True, backup_spreadsheet.title)
+        add_result("Бэкап таблица открывается", True, f"Название: {backup_spreadsheet.title}")
     except Exception as e:
-        add_result("Open backup spreadsheet", False, str(e))
+        add_result("Бэкап таблица открывается", False, str(e))
 
-    # 6. Проверка кеша таблиц
+    # 6. Проверка обновления кеша
     try:
         refresh_sheet_cache(SHEET_ACCOUNTS)
         refresh_sheet_cache(SHEET_ISSUES)
-        add_result("Table cache refresh", True)
+        add_result("Кеш таблиц обновляется", True)
     except Exception as e:
-        add_result("Table cache refresh", False, str(e))
+        add_result("Кеш таблиц обновляется", False, str(e))
 
-    # 7. Проверка helper-функций
+    # 7. Проверка вспомогательных функций
     try:
         parse_date("15/02/2026")
         parse_price("123.45")
         normalize_numeric_for_sheet("100")
-        add_result("Helpers", True)
+        add_result("Базовые функции работают", True)
     except Exception as e:
-        add_result("Helpers", False, str(e))
+        add_result("Базовые функции работают", False, str(e))
 
-    # 8. Проверка статистики
+    # 8. Проверка общей статистики
     try:
         build_stats_text()
-        add_result("Global stats builder", True)
+        add_result("Общая статистика собирается", True)
     except Exception as e:
-        add_result("Global stats builder", False, str(e))
+        add_result("Общая статистика собирается", False, str(e))
 
-    # 9. Проверка manager stats
+    # 9. Проверка статистики accounts
     try:
         build_manager_stats_text("test_user")
-        add_result("Manager stats builder", True)
+        add_result("Статистика accounts собирается", True)
     except Exception as e:
-        add_result("Manager stats builder", False, str(e))
+        add_result("Статистика accounts собирается", False, str(e))
 
-    # 10. Проверка farmer stats
+    # 10. Проверка статистики farmers
     try:
         build_farmer_stats_text("test_user")
-        add_result("Farmer stats builder", True)
+        add_result("Статистика farmers собирается", True)
     except Exception as e:
-        add_result("Farmer stats builder", False, str(e))
+        add_result("Статистика farmers собирается", False, str(e))
 
     summary = (
-        f"Проверка бота завершена\n\n"
+        "Проверка бота завершена\n\n"
         f"Успешно: {ok_count}\n"
         f"Ошибок: {fail_count}\n\n"
+        "Что именно проверено:\n"
         + "\n".join(report)
     )
 
@@ -5032,6 +5074,39 @@ def tg_send_long_message(chat_id, text, chunk_size=3500):
         tg_send_message(chat_id, part.strip())
         text = text[len(part):].strip()
 
+TELEGRAM_MESSAGE_LIMIT = 4096
+SAFE_EDIT_LIMIT = 3500
+
+
+def safe_replace_stats_message(chat_id, message_id, full_text, back_callback_data):
+    text = str(full_text or "").strip()
+
+    # если текст влезает — редактируем текущее сообщение
+    if len(text) <= SAFE_EDIT_LIMIT:
+        tg_edit_message_text(
+            chat_id,
+            message_id,
+            text,
+            inline_buttons=[[{
+                "text": "Назад",
+                "callback_data": back_callback_data
+            }]]
+        )
+        return
+
+    # если текст длинный — старое сообщение заменяем на короткое
+    tg_edit_message_text(
+        chat_id,
+        message_id,
+        "Полная статистика слишком большая, поэтому отправлена ниже отдельными сообщениями.",
+        inline_buttons=[[{
+            "text": "Назад",
+            "callback_data": back_callback_data
+        }]]
+    )
+
+    # а полную статистику отправляем кусками
+    tg_send_long_message(chat_id, text)
 
 def build_all_users_stats_messages():
     messages = []
@@ -5232,9 +5307,9 @@ def handle_message(msg):
                 tg_send_message(chat_id, "У вас нет доступа.")
                 return
 
-            tg_send_message(chat_id, "Запускаю проверку бота...")
+            tg_send_message(chat_id, "Запускаю полную проверку бота...")
             result = run_bot_diagnostics()
-            tg_send_message(chat_id, result)
+            tg_send_long_message(chat_id, result)
             send_admin_menu(chat_id, "Меню Admin:")
             return
 
@@ -6725,14 +6800,11 @@ def handle_callback_query(callback_query):
             full_text = build_manager_stats_text(username)
 
             tg_answer_callback_query(callback_id)
-            tg_edit_message_text(
-                chat_id,
-                message_id,
-                full_text,
-                inline_buttons=[[{
-                    "text": "Назад",
-                    "callback_data": f"backstats_accounts:{username}"
-                }]]
+            safe_replace_stats_message(
+                chat_id=chat_id,
+                message_id=message_id,
+                full_text=full_text,
+                back_callback_data=f"backstats_accounts:{username}"
             )
             return
 
@@ -6741,14 +6813,11 @@ def handle_callback_query(callback_query):
             full_text = build_farmer_stats_text(username)
 
             tg_answer_callback_query(callback_id)
-            tg_edit_message_text(
-                chat_id,
-                message_id,
-                full_text,
-                inline_buttons=[[{
-                    "text": "Назад",
-                    "callback_data": f"backstats_farmers:{username}"
-                }]]
+            safe_replace_stats_message(
+                chat_id=chat_id,
+                message_id=message_id,
+                full_text=full_text,
+                back_callback_data=f"backstats_farmers:{username}"
             )
             return
 
