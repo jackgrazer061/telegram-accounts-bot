@@ -44,17 +44,23 @@ if not BACKUP_SPREADSHEET_ID:
 ADMINS = {
     7573650707,  # jack
     7681133609,  # cilian
+    7172090459,  # jackie
+    7389698288,  # andrew
 }
 
 ACCOUNTS_USERS = {
     7953116439,   # willem
     8334712952,   # ariana
     7851493919,   # cate
+    7426931469,   # jim
 }
 
 FARMERS_USERS = {
-    # сюда добавь id фармеров
-    # 123456789,
+    8482380951,    # joseph
+    8554652263,    # lee
+    8389730381,    # jaime
+    8589105033,    # owen
+    8503147017,    # zendaya
 }
 
 def is_admin(user_id):
