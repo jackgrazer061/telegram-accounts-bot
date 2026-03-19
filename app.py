@@ -167,9 +167,10 @@ SUBMENU_SEARCH_BM = 'Поиск БМа'
 SUBMENU_GET_FP = 'Выдать ФП'
 SUBMENU_SEARCH_FP = 'Поиск ФП'
 
-ADMIN_BACKUP = 'Бэкап таблиц'
 ADMIN_ACCOUNTANTS = 'Акаунтеры'
 ADMIN_FARMERS = 'Фармеры'
+ADMIN_BOT_CHECK = 'Проверка бота'
+ADMIN_BACKUP = 'Бэкап таблиц'
 ADMIN_UPDATE_5M = 'Обновление 5м'
 
 ADMIN_ADD_ACCOUNTS = 'Добавить лички'
@@ -599,6 +600,7 @@ def send_admin_menu(chat_id, text="Меню Admin:"):
     keyboard = [
         [{"text": ADMIN_BACKUP}, {"text": ADMIN_UPDATE_5M}],
         [{"text": ADMIN_ACCOUNTANTS}, {"text": ADMIN_FARMERS}],
+        [{"text": ADMIN_BOT_CHECK}],
         [{"text": BTN_BACK_FROM_ADMIN}]
     ]
     tg_send_message(chat_id, text, keyboard)
@@ -4263,7 +4265,119 @@ def cache_warmer_loop():
         except Exception:
             logging.exception("cache_warmer_loop error")
             time.sleep(5)
-            
+
+def run_bot_diagnostics():
+    report = []
+    ok_count = 0
+    fail_count = 0
+
+    def add_result(name, ok, details=""):
+        nonlocal ok_count, fail_count
+        mark = "✅" if ok else "❌"
+        report.append(f"{mark} {name}" + (f" — {details}" if details else ""))
+        if ok:
+            ok_count += 1
+        else:
+            fail_count += 1
+
+    # 1. Telegram base url
+    try:
+        if BOT_TOKEN and BASE_URL.startswith("https://api.telegram.org/bot"):
+            add_result("Telegram config", True)
+        else:
+            add_result("Telegram config", False, "BOT_TOKEN/BASE_URL некорректен")
+    except Exception as e:
+        add_result("Telegram config", False, str(e))
+
+    # 2. Google client
+    try:
+        client = get_gspread_client()
+        add_result("Google client", client is not None)
+    except Exception as e:
+        add_result("Google client", False, str(e))
+
+    # 3. Открытие таблицы
+    try:
+        client = get_gspread_client()
+        spreadsheet = client.open_by_key(SPREADSHEET_ID)
+        add_result("Open main spreadsheet", True, spreadsheet.title)
+    except Exception as e:
+        add_result("Open main spreadsheet", False, str(e))
+
+    # 4. Проверка всех листов
+    sheets_to_check = [
+        SHEET_ACCOUNTS,
+        SHEET_ISSUES,
+        SHEET_KINGS,
+        SHEET_BMS,
+        SHEET_FPS,
+        SHEET_FARM_KINGS,
+        SHEET_FARM_BMS,
+        SHEET_FARM_FPS,
+    ]
+
+    for sheet_name in sheets_to_check:
+        try:
+            sheet = get_sheet(sheet_name)
+            rows = sheet.get_all_values()
+            add_result(f"Sheet: {sheet_name}", True, f"rows={len(rows)}")
+        except Exception as e:
+            add_result(f"Sheet: {sheet_name}", False, str(e))
+
+    # 5. Проверка backup spreadsheet
+    try:
+        client = get_gspread_client()
+        backup_spreadsheet = client.open_by_key(BACKUP_SPREADSHEET_ID)
+        add_result("Open backup spreadsheet", True, backup_spreadsheet.title)
+    except Exception as e:
+        add_result("Open backup spreadsheet", False, str(e))
+
+    # 6. Проверка кеша таблиц
+    try:
+        refresh_sheet_cache(SHEET_ACCOUNTS)
+        refresh_sheet_cache(SHEET_ISSUES)
+        add_result("Table cache refresh", True)
+    except Exception as e:
+        add_result("Table cache refresh", False, str(e))
+
+    # 7. Проверка helper-функций
+    try:
+        parse_date("15/02/2026")
+        parse_price("123.45")
+        normalize_numeric_for_sheet("100")
+        add_result("Helpers", True)
+    except Exception as e:
+        add_result("Helpers", False, str(e))
+
+    # 8. Проверка статистики
+    try:
+        build_stats_text()
+        add_result("Global stats builder", True)
+    except Exception as e:
+        add_result("Global stats builder", False, str(e))
+
+    # 9. Проверка manager stats
+    try:
+        build_manager_stats_text("test_user")
+        add_result("Manager stats builder", True)
+    except Exception as e:
+        add_result("Manager stats builder", False, str(e))
+
+    # 10. Проверка farmer stats
+    try:
+        build_farmer_stats_text("test_user")
+        add_result("Farmer stats builder", True)
+    except Exception as e:
+        add_result("Farmer stats builder", False, str(e))
+
+    summary = (
+        f"Проверка бота завершена\n\n"
+        f"Успешно: {ok_count}\n"
+        f"Ошибок: {fail_count}\n\n"
+        + "\n".join(report)
+    )
+
+    return summary
 # =========================
 # MESSAGE HANDLER
 # =========================            
@@ -4394,6 +4508,17 @@ def handle_message(msg):
                 chat_id,
                 f"Уведомление отправлено.\n\nУспешно: {sent}\nОшибок: {failed}"
             )
+            return
+
+        if text == ADMIN_BOT_CHECK:
+            if not is_admin(user_id):
+                tg_send_message(chat_id, "У вас нет доступа.")
+                return
+
+            tg_send_message(chat_id, "Запускаю проверку бота...")
+            result = run_bot_diagnostics()
+            tg_send_message(chat_id, result)
+            send_admin_menu(chat_id, "Меню Admin:")
             return
 
         if text == BTN_BACK_FROM_ADMIN:
