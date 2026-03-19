@@ -5609,10 +5609,6 @@ def webhook():
         logging.exception(f"webhook error: {e}")
         return jsonify({"ok": True})
 
-    except Exception as e:
-        logging.error(f"webhook error: {e}")
-        return jsonify({"ok": True})
-
 @app.route("/fastadscheck-import", methods=["POST"])
 def fastadscheck_import():
     try:
