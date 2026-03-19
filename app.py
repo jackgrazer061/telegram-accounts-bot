@@ -93,6 +93,7 @@ SHEET_FPS = "База_ФП"
 SHEET_FARM_KINGS = "База фарм кинги"
 SHEET_FARM_BMS = "База фарм бм"
 SHEET_FARM_FPS = "База фарм фп"
+SHEET_CRYPTO_KINGS = "База_крипта_кинги"
 
 LIMIT_OPTIONS = ['-250', '250-500', '500-1200', '1200-1500', 'unlim']
 THRESHOLD_OPTIONS = ['0-49', '50-99', '100-199', '200-499', '500+']
@@ -179,6 +180,8 @@ ADMIN_BOT_CHECK = 'Проверка бота'
 ADMIN_BACKUP = 'Бэкап таблиц'
 ADMIN_UPDATE_5M = 'Обновление 5м'
 ADMIN_ALL_STATS = 'Статистика всех'
+SUBMENU_CRYPTO_KINGS = 'Крипта кинги'
+ADMIN_ADD_CRYPTO_KINGS = 'Добавить crypto king'
 
 ADMIN_ADD_ACCOUNTS = 'Добавить лички'
 ADMIN_ADD_KINGS = 'Добавить кинги'
@@ -251,6 +254,7 @@ def reset_google_cache():
             SHEET_ACCOUNTS: {"rows": None, "updated_at": 0},
             SHEET_ISSUES: {"rows": None, "updated_at": 0},
             SHEET_KINGS: {"rows": None, "updated_at": 0},
+            SHEET_CRYPTO_KINGS: {"rows": None, "updated_at": 0},
             SHEET_BMS: {"rows": None, "updated_at": 0},
             SHEET_FPS: {"rows": None, "updated_at": 0},
             SHEET_FARM_KINGS: {"rows": None, "updated_at": 0},
@@ -265,6 +269,7 @@ def reset_table_cache():
             SHEET_ACCOUNTS: {"rows": None, "updated_at": 0},
             SHEET_ISSUES: {"rows": None, "updated_at": 0},
             SHEET_KINGS: {"rows": None, "updated_at": 0},
+            SHEET_CRYPTO_KINGS: {"rows": None, "updated_at": 0},
             SHEET_BMS: {"rows": None, "updated_at": 0},
             SHEET_FPS: {"rows": None, "updated_at": 0},
             SHEET_FARM_KINGS: {"rows": None, "updated_at": 0},
@@ -294,6 +299,7 @@ table_cache = {
     SHEET_ACCOUNTS: {"rows": None, "updated_at": 0},
     SHEET_ISSUES: {"rows": None, "updated_at": 0},
     SHEET_KINGS: {"rows": None, "updated_at": 0},
+    SHEET_CRYPTO_KINGS: {"rows": None, "updated_at": 0},
     SHEET_BMS: {"rows": None, "updated_at": 0},
     SHEET_FPS: {"rows": None, "updated_at": 0},
     SHEET_FARM_KINGS: {"rows": None, "updated_at": 0},
@@ -648,7 +654,7 @@ def send_free_accounts_limit_menu(chat_id, text="Выбери лимит:"):
     
 def send_kings_menu(chat_id, text="Меню кингов:"):
     keyboard = [
-        [{"text": SUBMENU_GET_KINGS}],
+        [{"text": SUBMENU_GET_KINGS}, {"text": SUBMENU_CRYPTO_KINGS}],
         [{"text": SUBMENU_FREE_KINGS}],
         [{"text": SUBMENU_RETURN_KING}],
         [{"text": SUBMENU_SEARCH_KING}],
@@ -686,6 +692,7 @@ def send_admin_accountants_menu(chat_id, text="Меню Акаунтеры:"):
     keyboard = [
         [{"text": ADMIN_ADD_ACCOUNTS}, {"text": ADMIN_ADD_KINGS}],
         [{"text": ADMIN_ADD_BMS}, {"text": ADMIN_ADD_FPS}],
+        [{"text": ADMIN_ADD_CRYPTO_KINGS}],
         [{"text": BTN_BACK_FROM_ACCOUNTANTS}]
     ]
     tg_send_message(chat_id, text, keyboard)
@@ -755,6 +762,120 @@ def get_free_king_geos():
             seen.add(geo)
 
     return geos
+
+def get_free_crypto_king_geos():
+    rows = get_sheet_rows_cached(SHEET_CRYPTO_KINGS)
+
+    geos = []
+    seen = set()
+
+    for row in rows[1:]:
+        if len(row) < 10:
+            row = row + [''] * (10 - len(row))
+
+        status = str(row[4]).strip().lower()
+        geo = str(row[7]).strip()
+
+        if status == "free" and geo and geo not in seen:
+            geos.append(geo)
+            seen.add(geo)
+
+    return geos
+
+
+def send_crypto_king_geo_options(chat_id):
+    geos = get_free_crypto_king_geos()
+
+    if not geos:
+        send_kings_menu(chat_id, "Нет свободных crypto king ни по одному GEO.")
+        return
+
+    keyboard = []
+    for geo in geos:
+        keyboard.append([{"text": geo}])
+
+    keyboard.append([{"text": MENU_CANCEL}])
+
+    tg_send_message(chat_id, "Какое нужно гео?", keyboard)
+
+
+def crypto_king_name_exists(king_name):
+    rows = get_sheet_rows_cached(SHEET_CRYPTO_KINGS)
+
+    target = str(king_name).strip().lower()
+    if not target:
+        return False
+
+    for row in rows[1:]:
+        existing_name = str(row[0]).strip().lower() if len(row) > 0 else ""
+        if existing_name == target:
+            return True
+
+    return False
+
+
+def find_free_crypto_king_by_geo(geo, exclude_row=None):
+    rows = get_sheet_rows_cached(SHEET_CRYPTO_KINGS)
+
+    candidates = []
+
+    for idx, row in enumerate(rows[1:], start=2):
+        if len(row) < 10:
+            row = row + [''] * (10 - len(row))
+
+        status = str(row[4]).strip().lower()
+        row_geo = str(row[7]).strip()
+
+        if status != "free":
+            continue
+
+        if row_geo != geo:
+            continue
+
+        if exclude_row and idx == exclude_row:
+            continue
+
+        purchase_date = parse_date(row[1]) or datetime.max
+
+        candidates.append({
+            "row_index": idx,
+            "purchase_date_obj": purchase_date,
+            "purchase_date": row[1],
+            "price": row[2],
+            "supplier": row[3],
+            "geo": row[7],
+            "data_text": row[9]
+        })
+
+    if not candidates:
+        return None
+
+    candidates.sort(key=lambda x: x["purchase_date_obj"])
+    return candidates[0]
+
+
+def show_found_crypto_king(chat_id, user_id, found):
+    state = get_state(user_id)
+
+    state["mode"] = "crypto_king_found"
+    state["king_row"] = found["row_index"]
+    set_state(user_id, state)
+
+    text = (
+        "Найден crypto king:\n\n"
+        f"Дата покупки: {found['purchase_date']}\n"
+        f"Цена: {found['price']}\n"
+        f"Гео: {found['geo']}\n"
+        f"Для кого: {state['king_for_whom']}\n"
+        f"Название: {state['king_name']}"
+    )
+
+    keyboard = [
+        [{"text": BTN_KING_CONFIRM}, {"text": BTN_KING_NEXT}],
+        [{"text": MENU_CANCEL}]
+    ]
+
+    tg_send_message(chat_id, text, keyboard)
 
 def send_king_geo_options(chat_id):
     geos = get_free_king_geos()
@@ -1341,7 +1462,8 @@ def handle_document_message(msg):
             "awaiting_kings_txt",
             "awaiting_bms_text",
             "awaiting_farm_kings_txt",
-            "awaiting_farm_bms_text"
+            "awaiting_farm_bms_text",
+            "awaiting_crypto_kings_txt"
         ]:
             tg_send_message(
                 chat_id,
@@ -1389,6 +1511,8 @@ def handle_document_message(msg):
             result_message = add_kings_from_txt_content(file_text, target_sheet=SHEET_FARM_KINGS)
         elif mode == "awaiting_farm_bms_text":
             result_message = add_bms_from_txt_content(file_text, target_sheet=SHEET_FARM_BMS)
+        elif mode == "awaiting_crypto_kings_txt":
+            result_message = add_kings_from_txt_content(file_text, target_sheet=SHEET_CRYPTO_KINGS)
         else:
             tg_send_message(chat_id, "Неизвестный режим загрузки файла.")
             return
@@ -3872,6 +3996,111 @@ def confirm_king_issue(chat_id, user_id, username):
         tg_send_message(chat_id, "Ошибка выдачи кинга. Попробуй ещё раз.")
         send_accounts_main_menu(chat_id, "Меню Accounts:")
 
+def confirm_crypto_king_issue(chat_id, user_id, username):
+    try:
+        with issue_lock:
+            state = get_state(user_id)
+
+            if state.get("mode") != "crypto_king_found":
+                send_kings_menu(chat_id, "Сначала выбери crypto king заново.")
+                return
+
+            row_index = state.get("king_row")
+            if not row_index:
+                send_kings_menu(chat_id, "Не найден выбранный crypto king. Начни заново.")
+                return
+
+            rows = get_sheet_rows_cached(SHEET_CRYPTO_KINGS)
+
+            if row_index - 1 >= len(rows):
+                clear_state(user_id)
+                send_kings_menu(chat_id, "Crypto king не найден в таблице. Начни заново.")
+                return
+
+            row = rows[row_index - 1]
+
+            if len(row) < 10:
+                row = row + [''] * (10 - len(row))
+
+            status = str(row[4]).strip().lower()
+
+            if status == "taken":
+                clear_state(user_id)
+                send_kings_menu(chat_id, "Этот crypto king уже занят.")
+                return
+
+            if status == "ban":
+                clear_state(user_id)
+                send_kings_menu(chat_id, "Этот crypto king уже в ban.")
+                return
+
+            if status != "free":
+                clear_state(user_id)
+                send_kings_menu(chat_id, "Этот crypto king недоступен.")
+                return
+
+            king_name = state["king_name"].strip()
+
+            current_name_in_row = str(row[0]).strip()
+            if not current_name_in_row and crypto_king_name_exists(king_name):
+                tg_send_message(chat_id, f"Название '{king_name}' уже существует. Напиши другое название.")
+                state["mode"] = "awaiting_crypto_king_name"
+                set_state(user_id, state)
+                return
+
+            today = datetime.now().strftime("%d/%m/%Y")
+            who_took_text = f"@{username}" if username else "без username"
+
+            sheet_update_and_refresh(
+                SHEET_CRYPTO_KINGS,
+                f"A{row_index}:I{row_index}",
+                [[
+                    king_name,
+                    row[1],
+                    row[2],
+                    row[3],
+                    "taken",
+                    state["king_for_whom"],
+                    today,
+                    row[7],
+                    who_took_text
+                ]]
+            )
+
+            append_king_to_issues_sheet(
+                king_name=king_name,
+                purchase_date=row[1],
+                price=row[2],
+                transfer_date=today,
+                supplier=row[3],
+                for_whom=state["king_for_whom"]
+            )
+
+            data_text = row[9] if len(row) > 9 else ""
+            invalidate_stats_cache()
+            clear_state(user_id)
+
+        tg_send_message(
+            chat_id,
+            f"Готово ✅\n\n"
+            f"Crypto king выдан.\n"
+            f"Название: {king_name}\n"
+            f"Для кого: {state['king_for_whom']}\n"
+            f"Гео: {row[7]}"
+        )
+
+        if data_text:
+            tg_send_message(chat_id, data_text)
+        else:
+            tg_send_message(chat_id, "Данные crypto king не найдены.")
+
+        send_kings_menu(chat_id, "Выбери следующее действие:")
+
+    except Exception as e:
+        logging.error(f"confirm_crypto_king_issue error: {e}")
+        tg_send_message(chat_id, "Ошибка выдачи crypto king. Попробуй ещё раз.")
+        send_kings_menu(chat_id, "Меню кингов:")
+
 def append_king_to_issues_sheet(king_name, purchase_date, price, transfer_date, supplier, for_whom):
     next_row = get_next_empty_row_in_issues()
 
@@ -4245,6 +4474,7 @@ def backup_tables():
 
             accounts = main_spreadsheet.worksheet(SHEET_ACCOUNTS)
             kings = main_spreadsheet.worksheet(SHEET_KINGS)
+            crypto_kings = main_spreadsheet.worksheet(SHEET_CRYPTO_KINGS)
             issues = main_spreadsheet.worksheet(SHEET_ISSUES)
             bms = main_spreadsheet.worksheet(SHEET_BMS)
             fps = main_spreadsheet.worksheet(SHEET_FPS)
@@ -4254,6 +4484,7 @@ def backup_tables():
 
             backup_accounts = backup_spreadsheet.worksheet("backup_accounts")
             backup_kings = backup_spreadsheet.worksheet("backup_kings")
+            backup_crypto_kings = backup_spreadsheet.worksheet("backup_crypto_kings")
             backup_issues = backup_spreadsheet.worksheet("backup_issues")
             backup_bms = backup_spreadsheet.worksheet("backup_bms")
             backup_fps = backup_spreadsheet.worksheet("backup_fps")
@@ -4263,6 +4494,7 @@ def backup_tables():
 
             accounts_data = accounts.get_all_values()
             kings_data = kings.get_all_values()
+            crypto_kings_data = crypto_kings.get_all_values()
             issues_data = issues.get_all_values()
             bms_data = bms.get_all_values()
             fps_data = fps.get_all_values()
@@ -4272,6 +4504,7 @@ def backup_tables():
 
             backup_accounts.clear()
             backup_kings.clear()
+            backup_crypto_kings.clear()
             backup_issues.clear()
             backup_bms.clear()
             backup_fps.clear()
@@ -4302,6 +4535,9 @@ def backup_tables():
 
             if farm_fps_data:
                 backup_farm_fps.append_rows(farm_fps_data)
+
+            if crypto_kings_data:
+                backup_crypto_kings.append_rows(crypto_kings_data)
 
             last_backup_date = datetime.now(MOSCOW_TZ).date()
 
@@ -4361,6 +4597,7 @@ def cache_warmer_loop():
             refresh_sheet_cache(SHEET_ACCOUNTS)
             refresh_sheet_cache(SHEET_ISSUES)
             refresh_sheet_cache(SHEET_KINGS)
+            refresh_sheet_cache(SHEET_CRYPTO_KINGS)
             refresh_sheet_cache(SHEET_BMS)
             refresh_sheet_cache(SHEET_FPS)
             refresh_sheet_cache(SHEET_FARM_KINGS)
@@ -4834,6 +5071,15 @@ def handle_message(msg):
             send_add_kings_instructions(chat_id)
             return
 
+        if text == ADMIN_ADD_CRYPTO_KINGS:
+            if not is_admin(user_id):
+                tg_send_message(chat_id, "У вас нет доступа.")
+                return
+
+            set_state(user_id, {"mode": "awaiting_crypto_kings_txt"})
+            send_add_kings_instructions(chat_id)
+            return
+
         if text == ADMIN_ADD_BMS:
             if not is_admin(user_id):
                 tg_send_message(chat_id, "У вас нет доступа.")
@@ -5013,12 +5259,43 @@ def handle_message(msg):
             send_king_geo_options(chat_id)
             return
 
+        if text == SUBMENU_CRYPTO_KINGS:
+            clear_state(user_id)
+            set_state(user_id, {"mode": "awaiting_crypto_king_geo"})
+            send_crypto_king_geo_options(chat_id)
+            return
+
         if text == BTN_KING_CONFIRM:
-            confirm_king_issue(chat_id, user_id, username)
+            if state.get("mode") == "crypto_king_found":
+                confirm_crypto_king_issue(chat_id, user_id, username)
+            else:
+                confirm_king_issue(chat_id, user_id, username)
             return
 
         if text == BTN_KING_NEXT:
-            if not state or not state.get("king_geo"):
+            if not state:
+                send_kings_menu(chat_id, "Начни заново.")
+                return
+
+            if state.get("mode") == "crypto_king_found" or state.get("mode") == "awaiting_crypto_king_name":
+                if not state.get("king_geo"):
+                    send_kings_menu(chat_id, "Начни заново.")
+                    return
+
+                found = find_free_crypto_king_by_geo(
+                    state["king_geo"],
+                    exclude_row=state.get("king_row")
+                )
+
+                if not found:
+                    clear_state(user_id)
+                    send_kings_menu(chat_id, "Свободных crypto king с таким GEO больше нет.")
+                    return
+
+                show_found_crypto_king(chat_id, user_id, found)
+                return
+
+            if not state.get("king_geo"):
                 send_kings_menu(chat_id, "Начни заново.")
                 return
 
@@ -5481,6 +5758,81 @@ def handle_message(msg):
             return
 
         # ========= СОСТОЯНИЯ: КИНГИ =========
+        if state.get("mode") == "awaiting_crypto_king_geo":
+            geos = get_free_crypto_king_geos()
+
+            if text not in geos:
+                send_crypto_king_geo_options(chat_id)
+                return
+
+            set_state(user_id, {
+                "mode": "awaiting_crypto_king_department",
+                "king_geo": text
+            })
+
+            keyboard = [
+                [{"text": DEPT_CRYPTO}],
+                [{"text": MENU_CANCEL}]
+            ]
+            tg_send_message(chat_id, "Выбери для кого crypto king:", keyboard)
+            return
+        
+
+        if state.get("mode") == "awaiting_crypto_king_department":
+            if text != DEPT_CRYPTO:
+                keyboard = [
+                    [{"text": DEPT_CRYPTO}],
+                    [{"text": MENU_CANCEL}]
+                ]
+                tg_send_message(chat_id, "Нужно выбрать Крипта кнопкой:", keyboard)
+                return
+
+            state["mode"] = "awaiting_crypto_king_for_whom"
+            state["king_department"] = text
+            set_state(user_id, state)
+
+            send_person_menu(chat_id, DEPT_CRYPTO)
+            return
+
+
+        if state.get("mode") == "awaiting_crypto_king_for_whom":
+            if text not in CRYPTO_NAMES:
+                send_person_menu(chat_id, DEPT_CRYPTO)
+                return
+
+            state["mode"] = "awaiting_crypto_king_name"
+            state["king_for_whom"] = text
+            set_state(user_id, state)
+
+            tg_send_message(chat_id, "Какое название будет у crypto king?")
+            return
+
+
+        if state.get("mode") == "awaiting_crypto_king_name":
+            king_name = text.strip()
+
+            if not king_name:
+                tg_send_message(chat_id, "Напиши название crypto king.")
+                return
+
+            if crypto_king_name_exists(king_name):
+                tg_send_message(chat_id, f"Название '{king_name}' уже существует. Напиши другое.")
+                return
+
+            state["mode"] = "crypto_king_found"
+            state["king_name"] = king_name
+            set_state(user_id, state)
+
+            found = find_free_crypto_king_by_geo(state["king_geo"])
+
+            if not found:
+                clear_state(user_id)
+                send_kings_menu(chat_id, "Свободных crypto king с таким GEO нет.")
+                return
+
+            show_found_crypto_king(chat_id, user_id, found)
+            return
+        
         if state.get("mode") == "awaiting_king_geo":
             geos = get_free_king_geos()
 
