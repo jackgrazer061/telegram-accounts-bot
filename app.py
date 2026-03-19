@@ -2394,276 +2394,164 @@ def get_manager_stats_period():
 
 def build_manager_stats_text(username):
     if not username:
-        return "У тебя не установлен username в Telegram, поэтому я не могу собрать личную статистику."
+        return "У пользователя не указан username."
 
-    username = username.strip().lstrip("@").lower()
+    username = str(username).strip().lstrip("@").lower()
     target_username = f"@{username}"
 
     start_date, end_date = get_manager_stats_period()
 
-    # ---------- ЛИЧКИ ----------
     accounts_rows = get_sheet_rows_cached(SHEET_ACCOUNTS)
+    kings_rows = get_sheet_rows_cached(SHEET_KINGS)
+    bms_rows = get_sheet_rows_cached(SHEET_BMS)
+    fps_rows = get_sheet_rows_cached(SHEET_FPS)
 
     accounts_lines = []
     for row in accounts_rows[1:]:
         if len(row) < 12:
             row = row + [''] * (12 - len(row))
 
-        account_number = str(row[0]).strip()
-        transfer_date_raw = str(row[10]).strip()
         who_took = str(row[11]).strip().lower()
-        for_whom = str(row[9]).strip()
+        transfer_date = parse_sheet_date(row[10])
 
-        if who_took != target_username:
-            continue
-
-        transfer_date = parse_sheet_date(transfer_date_raw)
-        if not transfer_date:
-            continue
-
-        if not (start_date <= transfer_date < end_date):
-            continue
-
-        accounts_lines.append(
-            f"{account_number} | {transfer_date.strftime('%d/%m/%Y')} | {for_whom}"
-        )
-
-    # ---------- КИНГИ ----------
-    kings_rows = get_sheet_rows_cached(SHEET_KINGS)
+        if who_took == target_username and transfer_date and start_date <= transfer_date < end_date:
+            accounts_lines.append(
+                f"{row[0]} | {transfer_date.strftime('%d/%m/%Y')} | {row[9]}"
+            )
 
     kings_lines = []
     for row in kings_rows[1:]:
         if len(row) < 10:
             row = row + [''] * (10 - len(row))
 
-        king_name = str(row[0]).strip()
-        transfer_date_raw = str(row[6]).strip()
-        for_whom = str(row[5]).strip()
         who_took = str(row[8]).strip().lower()
+        transfer_date = parse_sheet_date(row[6])
 
-        if who_took != target_username:
-            continue
-
-        transfer_date = parse_sheet_date(transfer_date_raw)
-        if not transfer_date:
-            continue
-
-        if not (start_date <= transfer_date < end_date):
-            continue
-
-        kings_lines.append(
-            f"{king_name} | {transfer_date.strftime('%d/%m/%Y')} | {for_whom}"
-        )
-
-    # ---------- БМы ----------
-    bms_rows = get_sheet_rows_cached(SHEET_BMS)
+        if who_took == target_username and transfer_date and start_date <= transfer_date < end_date:
+            kings_lines.append(
+                f"{row[0]} | {transfer_date.strftime('%d/%m/%Y')} | {row[5]}"
+            )
 
     bms_lines = []
     for row in bms_rows[1:]:
         if len(row) < 9:
             row = row + [''] * (9 - len(row))
 
-        bm_id = str(row[0]).strip()
-        transfer_date_raw = str(row[7]).strip()
-        for_whom = str(row[5]).strip()
         who_took = str(row[6]).strip().lower()
+        transfer_date = parse_sheet_date(row[7])
 
-        if who_took != target_username:
-            continue
-
-        transfer_date = parse_sheet_date(transfer_date_raw)
-        if not transfer_date:
-            continue
-
-        if not (start_date <= transfer_date < end_date):
-            continue
-
-        bms_lines.append(
-            f"{bm_id} | {transfer_date.strftime('%d/%m/%Y')} | {for_whom}"
-        )
-
-    period_text = (
-        f"Период: {start_date.strftime('%d/%m/%Y')} - "
-        f"{(end_date).strftime('%d/%m/%Y')}"
-    )
-
-    text_parts = [f"Статистика менеджера {target_username}", period_text, ""]
-
-    text_parts.append(f"Кинги: {len(kings_lines)}")
-    if kings_lines:
-        text_parts.extend(kings_lines)
-    else:
-        text_parts.append("нет выдач")
-
-    text_parts.append("")
-    text_parts.append(f"Лички: {len(accounts_lines)}")
-    if accounts_lines:
-        text_parts.extend(accounts_lines)
-    else:
-        text_parts.append("нет выдач")
-
-    text_parts.append("")
-    text_parts.append(f"БМы: {len(bms_lines)}")
-    if bms_lines:
-        text_parts.extend(bms_lines)
-    else:
-        text_parts.append("нет выдач")
-
-    return "\n".join(text_parts)
-
-def build_farmer_stats_text(username):
-    if not username:
-        return "У тебя не установлен username в Telegram, поэтому я не могу собрать личную статистику."
-
-    username = username.strip().lstrip("@").lower()
-    target_username = f"@{username}"
-
-    start_date, end_date = get_manager_stats_period()
-
-    # ---------- ФП ----------
-    fps_rows = get_sheet_rows_cached(SHEET_FPS)
+        if who_took == target_username and transfer_date and start_date <= transfer_date < end_date:
+            bms_lines.append(
+                f"{row[0]} | {transfer_date.strftime('%d/%m/%Y')} | {row[5]}"
+            )
 
     fps_lines = []
     for row in fps_rows[1:]:
         if len(row) < 9:
             row = row + [''] * (9 - len(row))
 
-        fp_link = str(row[0]).strip()
-        transfer_date_raw = str(row[8]).strip()
-        for_whom = str(row[6]).strip()
         who_took = str(row[7]).strip().lower()
+        transfer_date = parse_sheet_date(row[8])
 
-        if who_took != target_username:
-            continue
+        if who_took == target_username and transfer_date and start_date <= transfer_date < end_date:
+            fps_lines.append(
+                f"{row[0]} | {transfer_date.strftime('%d/%m/%Y')} | {row[6]}"
+            )
 
-        transfer_date = parse_sheet_date(transfer_date_raw)
-        if not transfer_date:
-            continue
+    text_parts = [
+        f"Статистика accounts {target_username}",
+        f"Период: {start_date.strftime('%d/%m/%Y')} - {end_date.strftime('%d/%m/%Y')}",
+        ""
+    ]
 
-        if not (start_date <= transfer_date < end_date):
-            continue
-
-        fps_lines.append(
-            f"{fp_link} | {transfer_date.strftime('%d/%m/%Y')} | {for_whom}"
-        )
-
+    text_parts.append(f"Кинги: {len(kings_lines)}")
+    text_parts.extend(kings_lines if kings_lines else ["нет выдач"])
     text_parts.append("")
-    text_parts.append(f"ФП: {len(fps_lines)}")
-    if fps_lines:
-        text_parts.extend(fps_lines)
-    else:
-        text_parts.append("нет выдач")
 
-    # ---------- FARM KINGS ----------
+    text_parts.append(f"Лички: {len(accounts_lines)}")
+    text_parts.extend(accounts_lines if accounts_lines else ["нет выдач"])
+    text_parts.append("")
+
+    text_parts.append(f"БМы: {len(bms_lines)}")
+    text_parts.extend(bms_lines if bms_lines else ["нет выдач"])
+    text_parts.append("")
+
+    text_parts.append(f"ФП: {len(fps_lines)}")
+    text_parts.extend(fps_lines if fps_lines else ["нет выдач"])
+
+    return "\n".join(text_parts)
+
+def build_farmer_stats_text(username):
+    if not username:
+        return "У пользователя не указан username."
+
+    username = str(username).strip().lstrip("@").lower()
+    target_username = f"@{username}"
+
+    start_date, end_date = get_manager_stats_period()
+
     farm_kings_rows = get_sheet_rows_cached(SHEET_FARM_KINGS)
+    farm_bms_rows = get_sheet_rows_cached(SHEET_FARM_BMS)
+    farm_fps_rows = get_sheet_rows_cached(SHEET_FARM_FPS)
 
     farm_kings_lines = []
     for row in farm_kings_rows[1:]:
         if len(row) < 10:
             row = row + [''] * (10 - len(row))
 
-        king_name = str(row[0]).strip()
-        transfer_date_raw = str(row[6]).strip()
-        for_whom = str(row[5]).strip()
         who_took = str(row[8]).strip().lower()
+        transfer_date = parse_sheet_date(row[6])
 
-        if who_took != target_username:
-            continue
-
-        transfer_date = parse_sheet_date(transfer_date_raw)
-        if not transfer_date:
-            continue
-
-        if not (start_date <= transfer_date < end_date):
-            continue
-
-        farm_kings_lines.append(
-            f"{king_name} | {transfer_date.strftime('%d/%m/%Y')} | {for_whom}"
-        )
-
-    # ---------- FARM BM ----------
-    farm_bms_rows = get_sheet_rows_cached(SHEET_FARM_BMS)
+        if who_took == target_username and transfer_date and start_date <= transfer_date < end_date:
+            farm_kings_lines.append(
+                f"{row[0]} | {transfer_date.strftime('%d/%m/%Y')} | {row[5]}"
+            )
 
     farm_bms_lines = []
     for row in farm_bms_rows[1:]:
         if len(row) < 9:
             row = row + [''] * (9 - len(row))
 
-        bm_id = str(row[0]).strip()
-        transfer_date_raw = str(row[7]).strip()
-        for_whom = str(row[5]).strip()
         who_took = str(row[6]).strip().lower()
+        transfer_date = parse_sheet_date(row[7])
 
-        if who_took != target_username:
-            continue
-
-        transfer_date = parse_sheet_date(transfer_date_raw)
-        if not transfer_date:
-            continue
-
-        if not (start_date <= transfer_date < end_date):
-            continue
-
-        farm_bms_lines.append(
-            f"{bm_id} | {transfer_date.strftime('%d/%m/%Y')} | {for_whom}"
-        )
-
-    # ---------- FARM FP ----------
-    farm_fps_rows = get_sheet_rows_cached(SHEET_FARM_FPS)
+        if who_took == target_username and transfer_date and start_date <= transfer_date < end_date:
+            farm_bms_lines.append(
+                f"{row[0]} | {transfer_date.strftime('%d/%m/%Y')} | {row[5]}"
+            )
 
     farm_fps_lines = []
     for row in farm_fps_rows[1:]:
         if len(row) < 9:
             row = row + [''] * (9 - len(row))
 
-        fp_link = str(row[0]).strip()
-        transfer_date_raw = str(row[8]).strip()
-        for_whom = str(row[6]).strip()
         who_took = str(row[7]).strip().lower()
+        transfer_date = parse_sheet_date(row[8])
 
-        if who_took != target_username:
-            continue
+        if who_took == target_username and transfer_date and start_date <= transfer_date < end_date:
+            farm_fps_lines.append(
+                f"{row[0]} | {transfer_date.strftime('%d/%m/%Y')} | {row[6]}"
+            )
 
-        transfer_date = parse_sheet_date(transfer_date_raw)
-        if not transfer_date:
-            continue
-
-        if not (start_date <= transfer_date < end_date):
-            continue
-
-        farm_fps_lines.append(
-            f"{fp_link} | {transfer_date.strftime('%d/%m/%Y')} | {for_whom}"
-        )
-
-    period_text = (
-        f"Период: {start_date.strftime('%d/%m/%Y')} - "
-        f"{end_date.strftime('%d/%m/%Y')}"
-    )
-
-    text_parts = [f"Статистика фармера {target_username}", period_text, ""]
+    text_parts = [
+        f"Статистика farmers {target_username}",
+        f"Период: {start_date.strftime('%d/%m/%Y')} - {end_date.strftime('%d/%m/%Y')}",
+        ""
+    ]
 
     text_parts.append(f"Farm kings: {len(farm_kings_lines)}")
-    if farm_kings_lines:
-        text_parts.extend(farm_kings_lines)
-    else:
-        text_parts.append("нет выдач")
-
+    text_parts.extend(farm_kings_lines if farm_kings_lines else ["нет выдач"])
     text_parts.append("")
+
     text_parts.append(f"Farm BM: {len(farm_bms_lines)}")
-    if farm_bms_lines:
-        text_parts.extend(farm_bms_lines)
-    else:
-        text_parts.append("нет выдач")
-
+    text_parts.extend(farm_bms_lines if farm_bms_lines else ["нет выдач"])
     text_parts.append("")
+
     text_parts.append(f"Farm FP: {len(farm_fps_lines)}")
-    if farm_fps_lines:
-        text_parts.extend(farm_fps_lines)
-    else:
-        text_parts.append("нет выдач")
+    text_parts.extend(farm_fps_lines if farm_fps_lines else ["нет выдач"])
 
     return "\n".join(text_parts)
-
+    
 def get_state(user_id):
     with state_lock:
         state = user_states.get(str(user_id))
