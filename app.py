@@ -11,7 +11,6 @@ import requests
 import gspread
 from google.oauth2.service_account import Credentials
 import threading
-import queue
 
 app = Flask(__name__)
 CORS(app)
@@ -206,7 +205,6 @@ BTN_FP_NEXT = 'Другое ФП'
 # Память состояний пользователей (для старта хватит)
 user_states = {}
 issue_lock = threading.Lock()
-update_queue = queue.Queue(maxsize=10000)
 
 backup_lock = threading.Lock()
 google_lock = threading.RLock()
@@ -5561,21 +5559,6 @@ def process_incoming_message(msg):
     elif msg.get("document"):
         handle_document_message(msg)
 
-def message_worker_loop():
-    while True:
-        try:
-            msg = update_queue.get()
-            logging.info(f"WORKER GOT MESSAGE chat_id={msg['chat']['id']} text={msg.get('text')}")
-            try:
-                process_incoming_message(msg)
-                logging.info("WORKER DONE")
-            except Exception:
-                logging.exception("message_worker_loop crashed")
-            finally:
-                update_queue.task_done()
-        except Exception:
-            logging.exception("message_worker outer loop crashed")
-            time.sleep(1)
 # =========================
 # FLASK
 # =========================
@@ -5788,6 +5771,4 @@ if __name__ == "__main__":
     watchdog_thread.start()
 
     port = int(os.environ.get("PORT", 10000))
-   #  for _ in range(2):
-      #   threading.Thread(target=message_worker_loop, daemon=True).start()
     app.run(host="0.0.0.0", port=port)
