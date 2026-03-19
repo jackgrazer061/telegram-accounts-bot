@@ -94,6 +94,7 @@ SHEET_FARM_KINGS = "База фарм кинги"
 SHEET_FARM_BMS = "База фарм бм"
 SHEET_FARM_FPS = "База фарм фп"
 SHEET_CRYPTO_KINGS = "База_крипта_кинги"
+SHEET_PIXELS = "База_пикселей"
 
 LIMIT_OPTIONS = ['-250', '250-500', '500-1200', '1200-1500', 'unlim']
 THRESHOLD_OPTIONS = ['0-49', '50-99', '100-199', '200-499', '500+']
@@ -101,6 +102,7 @@ GMT_OPTIONS = ['-10', '-9', '-8', '-7', '-6', '-5', '-4', '-3', '-2', '-1', '0',
 ACCOUNT_CURRENCY_COL = 12  # M колонка в База_личек
 
 MENU_ACCOUNTS = 'Accounts'
+MENU_PIXELS = 'Пиксели'
 MENU_FARMERS = 'Farmers'
 FARM_MENU_KING = 'King'
 FARM_MENU_BM = 'BM'
@@ -131,6 +133,9 @@ MENU_FARMER_STATS = 'Статистика фармера'
 MENU_ADMIN = 'Admin'
 MENU_CANCEL = 'Отмена'
 
+SUBMENU_GET_PIXELS = 'Получить Пиксели'
+SUBMENU_SEARCH_PIXEL = 'Найти Пиксель'
+SUBMENU_RETURN_PIXEL = 'Вернуть Пиксель'
 SUBMENU_ACCOUNTS_MAIN = 'Лички'
 SUBMENU_BACK_MAIN = 'В меню'
 
@@ -190,6 +195,10 @@ ADMIN_ADD_FPS = 'Добавить ФП'
 ADMIN_ADD_FARM_KINGS = 'Добавить king'
 ADMIN_ADD_FARM_BMS = 'Добавить bm'
 ADMIN_ADD_FARM_FPS = 'Добавить fp'
+ADMIN_ADD_PIXELS = 'Добавить Пиксели'
+BTN_PIXEL_CONFIRM = 'Выдать Пиксель'
+BTN_PIXEL_NEXT = 'Другой Пиксель'
+BTN_PIXEL_BAN_CONFIRM = 'Подтвердить ban'
 BTN_BACK_FROM_ADMIN_FARMERS = 'Назад в Admin'
 BTN_BM_CONFIRM = 'Выдать БМ'
 BTN_BM_NEXT = 'Другой БМ'
@@ -260,6 +269,7 @@ def reset_google_cache():
             SHEET_FARM_KINGS: {"rows": None, "updated_at": 0},
             SHEET_FARM_BMS: {"rows": None, "updated_at": 0},
             SHEET_FARM_FPS: {"rows": None, "updated_at": 0},
+            SHEET_PIXELS: {"rows": None, "updated_at": 0},
         }
 
 def reset_table_cache():
@@ -275,6 +285,7 @@ def reset_table_cache():
             SHEET_FARM_KINGS: {"rows": None, "updated_at": 0},
             SHEET_FARM_BMS: {"rows": None, "updated_at": 0},
             SHEET_FARM_FPS: {"rows": None, "updated_at": 0},
+            SHEET_PIXELS: {"rows": None, "updated_at": 0},
         }
 
 def check_google_available():
@@ -305,6 +316,7 @@ table_cache = {
     SHEET_FARM_KINGS: {"rows": None, "updated_at": 0},
     SHEET_FARM_BMS: {"rows": None, "updated_at": 0},
     SHEET_FARM_FPS: {"rows": None, "updated_at": 0},
+    SHEET_PIXELS: {"rows": None, "updated_at": 0},
 }
 
 table_cache_lock = threading.Lock()
@@ -593,8 +605,19 @@ def send_accounts_main_menu(chat_id, text="Меню Accounts:"):
 
 def send_fps_menu(chat_id, text="Меню ФП:"):
     keyboard = [
-        [{"text": SUBMENU_GET_FP}],
-        [{"text": SUBMENU_SEARCH_FP}],
+        [{"text": SUBMENU_ACCOUNTS_MAIN}, {"text": MENU_KINGS}],
+        [{"text": MENU_BMS}, {"text": MENU_FPS}],
+        [{"text": MENU_PIXELS}],
+        [{"text": MENU_MANAGER_STATS}],
+        [{"text": SUBMENU_BACK_MAIN}]
+    ]
+    tg_send_message(chat_id, text, keyboard)
+
+def send_pixels_menu(chat_id, text="Меню Пикселей:"):
+    keyboard = [
+        [{"text": SUBMENU_GET_PIXELS}],
+        [{"text": SUBMENU_SEARCH_PIXEL}],
+        [{"text": SUBMENU_RETURN_PIXEL}],
         [{"text": BTN_BACK_TO_MENU}]
     ]
     tg_send_message(chat_id, text, keyboard)
@@ -692,7 +715,7 @@ def send_admin_accountants_menu(chat_id, text="Меню Акаунтеры:"):
     keyboard = [
         [{"text": ADMIN_ADD_ACCOUNTS}, {"text": ADMIN_ADD_KINGS}],
         [{"text": ADMIN_ADD_BMS}, {"text": ADMIN_ADD_FPS}],
-        [{"text": ADMIN_ADD_CRYPTO_KINGS}],
+        [{"text": ADMIN_ADD_PIXELS}],
         [{"text": BTN_BACK_FROM_ACCOUNTANTS}]
     ]
     tg_send_message(chat_id, text, keyboard)
@@ -741,6 +764,17 @@ def send_add_fps_instructions(chat_id):
         "Пример:\n"
         "https://facebook.com/profile.php?id=123; 15/02/2026; 300; WD; sklad1\n"
         "https://facebook.com/profile.php?id=456; 16/02/2026; 500; TT; sklad2"
+    )
+    tg_send_message(chat_id, text)
+
+def send_add_pixels_instructions(chat_id):
+    text = (
+        "Пришли Пиксели сообщением, каждый с новой строки.\n\n"
+        "Формат:\n"
+        "дата покупки; цена; поставщик; данные\n\n"
+        "Пример:\n"
+        "15/02/2026; 300; WD; pixel data 1\n"
+        "16/02/2026; 500; TT; pixel data 2"
     )
     tg_send_message(chat_id, text)
 
@@ -1719,6 +1753,65 @@ def add_fps_from_text(text, target_sheet=SHEET_FPS):
 
     return message
 
+def add_pixels_from_text(text, target_sheet=SHEET_PIXELS):
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    to_append = []
+    errors = []
+
+    for i, line in enumerate(lines, start=1):
+        fields = [x.strip() for x in line.split(";")]
+        if len(fields) != 4:
+            errors.append(f"Строка {i}: должно быть 4 поля через ';'")
+            continue
+
+        purchase_date_raw, price_raw, supplier, data_text = fields
+
+        purchase_date = parse_date(purchase_date_raw)
+        if not purchase_date:
+            errors.append(f"Строка {i}: неверная дата покупки '{purchase_date_raw}'")
+            continue
+
+        price = parse_price(price_raw)
+        if price is None:
+            errors.append(f"Строка {i}: неверная цена '{price_raw}'")
+            continue
+
+        if not supplier:
+            errors.append(f"Строка {i}: не указан поставщик")
+            continue
+
+        if not data_text:
+            errors.append(f"Строка {i}: не указаны данные")
+            continue
+
+        to_append.append([
+            purchase_date.strftime("%d/%m/%Y"),  # A дата покупки
+            price,                               # B цена
+            supplier,                            # C поставщик
+            "free",                              # D статус
+            "",                                  # E кому выдали
+            "",                                  # F дата взятия
+            "",                                  # G кто взял
+            data_text                            # H данные
+        ])
+
+    if to_append:
+        sheet_append_rows_and_refresh(target_sheet, to_append)
+        invalidate_stats_cache()
+
+    message = (
+        f"Готово ✅\n"
+        f"Добавлено Пикселей: {len(to_append)}\n"
+        f"Ошибок: {len(errors)}"
+    )
+
+    if errors:
+        message += "\n\nОшибки:\n" + "\n".join(errors[:10])
+        if len(errors) > 10:
+            message += f"\n... и ещё {len(errors) - 10}"
+
+    return message
+
 def find_fp_in_base(fp_link):
     rows = get_sheet_rows_cached(SHEET_FPS)
 
@@ -1894,6 +1987,200 @@ def confirm_fp_issue(chat_id, user_id, username):
         logging.exception("confirm_fp_issue crashed")
         tg_send_message(chat_id, "Ошибка выдачи ФП. Попробуй ещё раз.")
         send_accounts_main_menu(chat_id, "Меню Accounts:")
+
+def confirm_pixel_issue(chat_id, user_id, username):
+    try:
+        with issue_lock:
+            state = get_state(user_id)
+
+            if state.get("mode") != "pixel_found":
+                send_pixels_menu(chat_id, "Сначала выбери Пиксель заново.")
+                return
+
+            row_index = state.get("pixel_row")
+            if not row_index:
+                send_pixels_menu(chat_id, "Не найден выбранный Пиксель. Начни заново.")
+                return
+
+            rows = get_sheet_rows_cached(SHEET_PIXELS)
+
+            if row_index - 1 >= len(rows):
+                clear_state(user_id)
+                send_pixels_menu(chat_id, "Пиксель не найден в таблице. Начни заново.")
+                return
+
+            row = rows[row_index - 1]
+            if len(row) < 8:
+                row = row + [''] * (8 - len(row))
+
+            status = str(row[3]).strip().lower()
+
+            if status == "taken":
+                clear_state(user_id)
+                send_pixels_menu(chat_id, "Этот Пиксель уже занят.")
+                return
+
+            if status == "ban":
+                clear_state(user_id)
+                send_pixels_menu(chat_id, "Этот Пиксель уже в ban.")
+                return
+
+            if status != "free":
+                clear_state(user_id)
+                send_pixels_menu(chat_id, "Этот Пиксель недоступен.")
+                return
+
+            today = datetime.now().strftime("%d/%m/%Y")
+            who_took_text = f"@{username}" if username else "без username"
+
+            sheet_update_and_refresh(
+                SHEET_PIXELS,
+                f"D{row_index}:G{row_index}",
+                [[
+                    "taken",
+                    state["pixel_for_whom"],
+                    today,
+                    who_took_text
+                ]]
+            )
+
+            data_text = row[7]
+            clear_state(user_id)
+
+        tg_send_message(
+            chat_id,
+            f"Готово ✅\n\n"
+            f"Пиксель выдан.\n"
+            f"Для кого: {state['pixel_for_whom']}\n"
+            f"Кто взял в боте: {who_took_text}"
+        )
+
+        if data_text:
+            tg_send_message(chat_id, data_text)
+        else:
+            tg_send_message(chat_id, "Данные Пикселя не найдены.")
+
+        send_pixels_menu(chat_id, "Выбери следующее действие:")
+
+    except Exception:
+        logging.exception("confirm_pixel_issue crashed")
+        tg_send_message(chat_id, "Ошибка выдачи Пикселя. Попробуй ещё раз.")
+        send_pixels_menu(chat_id, "Меню Пикселей:")
+
+def find_pixel_in_base_by_data(pixel_query):
+    rows = get_sheet_rows_cached(SHEET_PIXELS)
+    target = str(pixel_query).strip().lower()
+
+    for idx, row in enumerate(rows[1:], start=2):
+        if len(row) < 8:
+            row = row + [''] * (8 - len(row))
+
+        data_text = str(row[7]).strip().lower()
+        if target and target in data_text:
+            return {
+                "row_index": idx,
+                "row": row
+            }
+
+    return None
+
+
+def build_pixel_search_text(pixel_query):
+    found = find_pixel_in_base_by_data(pixel_query)
+    if not found:
+        return None
+
+    row = found["row"]
+    if len(row) < 8:
+        row = row + [''] * (8 - len(row))
+
+    return (
+        f"Дата покупки: {row[0] or 'не указана'}\n"
+        f"Цена: {row[1] or 'не указана'}\n"
+        f"У кого купили: {row[2] or 'не указан'}\n"
+        f"Статус: {row[3] or 'не указан'}\n"
+        f"Для кого: {row[4] or 'не указано'}\n"
+        f"Дата выдачи: {row[5] or 'не указана'}\n"
+        f"Кто взял: {row[6] or 'не указано'}\n\n"
+        f"Данные:\n{row[7] or 'нет данных'}"
+    )
+
+
+def find_free_pixel(exclude_row=None):
+    rows = get_sheet_rows_cached(SHEET_PIXELS)
+
+    candidates = []
+    for idx, row in enumerate(rows[1:], start=2):
+        if len(row) < 8:
+            row = row + [''] * (8 - len(row))
+
+        status = str(row[3]).strip().lower()
+        if status != "free":
+            continue
+
+        if exclude_row and idx == exclude_row:
+            continue
+
+        purchase_date = parse_date(row[0]) or datetime.max
+
+        candidates.append({
+            "row_index": idx,
+            "purchase_date_obj": purchase_date,
+            "purchase_date": row[0],
+            "price": row[1],
+            "supplier": row[2],
+            "data_text": row[7]
+        })
+
+    if not candidates:
+        return None
+
+    candidates.sort(key=lambda x: x["purchase_date_obj"])
+    return candidates[0]
+
+
+def show_found_pixel(chat_id, user_id, found):
+    state = get_state(user_id)
+    state["mode"] = "pixel_found"
+    state["pixel_row"] = found["row_index"]
+    set_state(user_id, state)
+
+    text = (
+        "Найден Пиксель:\n\n"
+        f"Дата покупки: {found['purchase_date']}\n"
+        f"Цена: {found['price']}\n"
+        f"Для кого: {state['pixel_for_whom']}"
+    )
+
+    keyboard = [
+        [{"text": BTN_PIXEL_CONFIRM}, {"text": BTN_PIXEL_NEXT}],
+        [{"text": BTN_BACK_TO_MENU}]
+    ]
+
+    tg_send_message(chat_id, text, keyboard)
+
+
+def return_pixel_to_ban(pixel_query):
+    found = find_pixel_in_base_by_data(pixel_query)
+    if not found:
+        return False, "Пиксель не найден."
+
+    row = found["row"]
+    if len(row) < 8:
+        row = row + [''] * (8 - len(row))
+
+    status = str(row[3]).strip().lower()
+    if status == "ban":
+        return False, "Этот Пиксель уже в ban."
+
+    sheet_update_and_refresh(
+        SHEET_PIXELS,
+        f"D{found['row_index']}:E{found['row_index']}",
+        [["ban", "ban"]]
+    )
+
+    invalidate_stats_cache()
+    return True, "Пиксель переведён в ban."
 
 def get_free_farm_king_geos():
     rows = get_sheet_rows_cached(SHEET_FARM_KINGS)
@@ -4478,6 +4765,7 @@ def backup_tables():
             issues = main_spreadsheet.worksheet(SHEET_ISSUES)
             bms = main_spreadsheet.worksheet(SHEET_BMS)
             fps = main_spreadsheet.worksheet(SHEET_FPS)
+            pixels = main_spreadsheet.worksheet(SHEET_PIXELS)
             farm_kings = main_spreadsheet.worksheet(SHEET_FARM_KINGS)
             farm_bms = main_spreadsheet.worksheet(SHEET_FARM_BMS)
             farm_fps = main_spreadsheet.worksheet(SHEET_FARM_FPS)
@@ -4488,6 +4776,7 @@ def backup_tables():
             backup_issues = backup_spreadsheet.worksheet("backup_issues")
             backup_bms = backup_spreadsheet.worksheet("backup_bms")
             backup_fps = backup_spreadsheet.worksheet("backup_fps")
+            backup_pixels = backup_spreadsheet.worksheet("backup_pixels")
             backup_farm_kings = backup_spreadsheet.worksheet("backup_farm_kings")
             backup_farm_bms = backup_spreadsheet.worksheet("backup_farm_bms")
             backup_farm_fps = backup_spreadsheet.worksheet("backup_farm_fps")
@@ -4498,6 +4787,7 @@ def backup_tables():
             issues_data = issues.get_all_values()
             bms_data = bms.get_all_values()
             fps_data = fps.get_all_values()
+            pixels_data = pixels.get_all_values()
             farm_kings_data = farm_kings.get_all_values()
             farm_bms_data = farm_bms.get_all_values()
             farm_fps_data = farm_fps.get_all_values()
@@ -4508,6 +4798,7 @@ def backup_tables():
             backup_issues.clear()
             backup_bms.clear()
             backup_fps.clear()
+            backup_pixels.clear()
             backup_farm_kings.clear()
             backup_farm_bms.clear()
             backup_farm_fps.clear()
@@ -4526,6 +4817,9 @@ def backup_tables():
 
             if fps_data:
                 backup_fps.append_rows(fps_data)
+
+            if pixels_data:
+                backup_pixels.append_rows(pixels_data)
 
             if farm_kings_data:
                 backup_farm_kings.append_rows(farm_kings_data)
@@ -4600,6 +4894,7 @@ def cache_warmer_loop():
             refresh_sheet_cache(SHEET_CRYPTO_KINGS)
             refresh_sheet_cache(SHEET_BMS)
             refresh_sheet_cache(SHEET_FPS)
+            refresh_sheet_cache(SHEET_PIXELS)
             refresh_sheet_cache(SHEET_FARM_KINGS)
             refresh_sheet_cache(SHEET_FARM_BMS)
             refresh_sheet_cache(SHEET_FARM_FPS)
@@ -4991,6 +5286,11 @@ def handle_message(msg):
             send_fps_menu(chat_id)
             return
 
+        if text == MENU_PIXELS:
+            clear_state(user_id)
+            send_pixels_menu(chat_id)
+            return
+
         if text == SUBMENU_BACK_MAIN:
             clear_state(user_id)
             send_main_menu(chat_id, user_id=user_id)
@@ -5096,6 +5396,15 @@ def handle_message(msg):
 
             set_state(user_id, {"mode": "awaiting_fps_add"})
             send_add_fps_instructions(chat_id)
+            return
+
+        if text == ADMIN_ADD_PIXELS:
+            if not is_admin(user_id):
+                tg_send_message(chat_id, "У вас нет доступа.")
+                return
+
+            set_state(user_id, {"mode": "awaiting_pixels_add"})
+            send_add_pixels_instructions(chat_id)
             return
 
         if text == ADMIN_ADD_FARM_KINGS:
@@ -5392,6 +5701,52 @@ def handle_message(msg):
             show_found_fp(chat_id, user_id, found)
             return
 
+        if text == SUBMENU_SEARCH_PIXEL:
+            set_state(user_id, {"mode": "awaiting_search_pixel"})
+            tg_send_message(chat_id, "Впиши часть данных Пикселя для поиска.")
+            return
+
+        if text == SUBMENU_RETURN_PIXEL:
+            set_state(user_id, {"mode": "awaiting_return_pixel"})
+            tg_send_message(chat_id, "Впиши часть данных Пикселя, который нужно перевести в ban.")
+            return
+
+        if text == SUBMENU_GET_PIXELS:
+            clear_state(user_id)
+            set_state(user_id, {"mode": "awaiting_pixel_department"})
+            send_department_menu(chat_id, "Выбери для кого Пиксель:")
+            return
+
+        if text == BTN_PIXEL_CONFIRM:
+            confirm_pixel_issue(chat_id, user_id, username)
+            return
+
+        if text == BTN_PIXEL_NEXT:
+            if not state:
+                send_pixels_menu(chat_id, "Начни заново.")
+                return
+
+            found = find_free_pixel(exclude_row=state.get("pixel_row"))
+
+            if not found:
+                clear_state(user_id)
+                send_pixels_menu(chat_id, "Свободных Пикселей больше нет.")
+                return
+
+            show_found_pixel(chat_id, user_id, found)
+            return
+
+        if text == BTN_PIXEL_BAN_CONFIRM:
+            if state.get("mode") != "awaiting_return_pixel_confirm":
+                send_pixels_menu(chat_id, "Сначала выбери действие заново.")
+                return
+
+            pixel_query = state.get("return_pixel_query", "")
+            ok, message = return_pixel_to_ban(pixel_query)
+            clear_state(user_id)
+            send_pixels_menu(chat_id, message)
+            return
+        
         # ========= FARMERS =========
         if text == FARM_SUBMENU_FREE_KINGS:
             send_free_farm_kings(chat_id)
@@ -6008,6 +6363,105 @@ def handle_message(msg):
             send_accounts_main_menu(chat_id, "Меню Accounts:")
             return
 
+        if state.get("mode") == "awaiting_pixels_add":
+            result = add_pixels_from_text(text)
+            clear_state(user_id)
+            tg_send_message(chat_id, result)
+
+            if is_admin(user_id):
+                send_admin_menu(chat_id, "Выбери следующее действие:")
+            else:
+                send_main_menu(chat_id, "Готово. Выбери следующее действие:", user_id=user_id)
+            return
+
+
+        if state.get("mode") == "awaiting_search_pixel":
+            pixel_query = text.strip()
+
+            if not pixel_query:
+                tg_send_message(chat_id, "Впиши данные Пикселя.")
+                return
+
+            result = build_pixel_search_text(pixel_query)
+            clear_state(user_id)
+
+            if not result:
+                send_pixels_menu(chat_id, "Пиксель не найден.")
+                return
+
+            tg_send_message(chat_id, result)
+            send_pixels_menu(chat_id, "Выбери следующее действие:")
+            return
+
+
+        if state.get("mode") == "awaiting_return_pixel":
+            pixel_query = text.strip()
+
+            if not pixel_query:
+                tg_send_message(chat_id, "Впиши данные Пикселя.")
+                return
+
+            found = find_pixel_in_base_by_data(pixel_query)
+            if not found:
+                clear_state(user_id)
+                send_pixels_menu(chat_id, "Пиксель не найден.")
+                return
+
+            set_state(user_id, {
+                "mode": "awaiting_return_pixel_confirm",
+                "return_pixel_query": pixel_query
+            })
+
+            keyboard = [
+                [{"text": BTN_PIXEL_BAN_CONFIRM}, {"text": MENU_CANCEL}]
+            ]
+
+            tg_send_message(
+                chat_id,
+                "Внимание: Пиксель будет перемещён в ban.\nПодтвердить?",
+                keyboard
+            )
+            return
+
+
+        if state.get("mode") == "awaiting_pixel_department":
+            if text not in [DEPT_CRYPTO, DEPT_GAMBLA]:
+                send_department_menu(chat_id, "Нужно выбрать отдел кнопкой:")
+                return
+
+            state["mode"] = "awaiting_pixel_for_whom"
+            state["pixel_department"] = text
+            set_state(user_id, state)
+
+            send_person_menu(chat_id, text)
+            return
+
+
+        if state.get("mode") == "awaiting_pixel_for_whom":
+            allowed_names = []
+
+            if state.get("pixel_department") == DEPT_CRYPTO:
+                allowed_names = CRYPTO_NAMES
+            elif state.get("pixel_department") == DEPT_GAMBLA:
+                allowed_names = GAMBLA_NAMES
+
+            if text not in allowed_names:
+                send_person_menu(chat_id, state.get("pixel_department"))
+                return
+
+            state["pixel_for_whom"] = text
+            set_state(user_id, state)
+
+            found = find_free_pixel()
+
+            if not found:
+                clear_state(user_id)
+                send_pixels_menu(chat_id, "Свободных Пикселей сейчас нет.")
+                return
+
+            show_found_pixel(chat_id, user_id, found)
+            return
+        
                 # ========= СОСТОЯНИЯ: фп =========
         if state.get("mode") == "awaiting_search_fp":
             fp_link = text.strip()
