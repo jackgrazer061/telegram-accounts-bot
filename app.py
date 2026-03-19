@@ -4443,7 +4443,7 @@ def build_all_users_stats_text():
     parts.append("=== ACCOUNTS ===")
     if ACCOUNTS_USERS:
         for user_id, username in ACCOUNTS_USERS.items():
-            parts.append(build_manager_stats_text(tg_username))
+            parts.append(build_manager_stats_text(username))
             parts.append("")
     else:
         parts.append("Нет accounts пользователей.")
@@ -4452,7 +4452,7 @@ def build_all_users_stats_text():
     parts.append("=== FARMERS ===")
     if FARMERS_USERS:
         for user_id, username in FARMERS_USERS.items():
-            parts.append(build_farmer_stats_text(tg_username))
+            parts.append(build_farmer_stats_text(username))
             parts.append("")
     else:
         parts.append("Нет farmers пользователей.")
