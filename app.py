@@ -5592,16 +5592,12 @@ def health():
 def webhook():
     try:
         update = request.get_json(silent=True) or {}
-        logging.info(f"WEBHOOK UPDATE: {json.dumps(update, ensure_ascii=False)[:2000]}")
+        logging.info(f"WEBHOOK DIRECT UPDATE: {json.dumps(update, ensure_ascii=False)[:2000]}")
 
         msg = update.get("message") or update.get("edited_message")
 
         if msg:
-            try:
-                update_queue.put_nowait(msg)
-                logging.info(f"PUT TO QUEUE chat_id={msg['chat']['id']} text={msg.get('text')}")
-            except Exception as e:
-                logging.exception(f"update_queue overflow/error: {e}")
+            process_incoming_message(msg)
 
         return jsonify({"ok": True})
 
@@ -5792,6 +5788,6 @@ if __name__ == "__main__":
     watchdog_thread.start()
 
     port = int(os.environ.get("PORT", 10000))
-    for _ in range(2):
-        threading.Thread(target=message_worker_loop, daemon=True).start()
+   #  for _ in range(2):
+      #   threading.Thread(target=message_worker_loop, daemon=True).start()
     app.run(host="0.0.0.0", port=port)
