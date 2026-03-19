@@ -4325,28 +4325,28 @@ def tg_send_long_message(chat_id, text, chunk_size=3500):
         text = text[len(part):].strip()
 
 
-def build_all_users_stats_text():
-    parts = ["Статистика всех", ""]
+def build_all_users_stats_messages():
+    messages = []
 
-    parts.append("=== ACCOUNTS ===")
+    messages.append("Статистика всех")
+
     if ACCOUNTS_USERS:
+        messages.append("=== ACCOUNTS ===")
         for user_id, username in ACCOUNTS_USERS.items():
-            parts.append(build_manager_stats_text(username))
-            parts.append("")
+            messages.append(build_manager_stats_text(username))
     else:
-        parts.append("Нет accounts пользователей.")
-        parts.append("")
+        messages.append("=== ACCOUNTS ===")
+        messages.append("Нет accounts пользователей.")
 
-    parts.append("=== FARMERS ===")
     if FARMERS_USERS:
+        messages.append("=== FARMERS ===")
         for user_id, username in FARMERS_USERS.items():
-            parts.append(build_farmer_stats_text(username))
-            parts.append("")
+            messages.append(build_farmer_stats_text(username))
     else:
-        parts.append("Нет farmers пользователей.")
-        parts.append("")
+        messages.append("=== FARMERS ===")
+        messages.append("Нет farmers пользователей.")
 
-    return "\n".join(parts).strip()
+    return messages
     
 # =========================
 # MESSAGE HANDLER
@@ -4482,10 +4482,13 @@ def handle_message(msg):
 
         if text == ADMIN_ALL_STATS:
             try:
-                result = build_all_users_stats_text()
-                send_long_text(chat_id, result)
+                messages = build_all_users_stats_messages()
+
+                for msg_text in messages:
+                    tg_send_message(chat_id, msg_text)
+
+                send_admin_menu(chat_id, "Меню Admin:")
             except Exception as e:
-                logging.exception("ADMIN_ALL_STATS crashed")
                 tg_send_message(chat_id, f"Ошибка в статистике всех:\n{e}")
             return
 
