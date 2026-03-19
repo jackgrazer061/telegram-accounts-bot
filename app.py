@@ -487,6 +487,68 @@ def tg_send_message(chat_id, text, keyboard=None):
     except Exception as e:
         logging.error(f"tg_send_message error: {e}")
 
+def tg_send_inline_message(chat_id, text, inline_buttons):
+    try:
+        payload = {
+            "chat_id": chat_id,
+            "text": text,
+            "reply_markup": {
+                "inline_keyboard": inline_buttons
+            }
+        }
+
+        resp = requests.post(
+            f"{BASE_URL}/sendMessage",
+            json=payload,
+            timeout=20
+        )
+
+        if resp.status_code != 200:
+            logging.warning(f"Telegram inline send failed: {resp.text}")
+
+    except Exception as e:
+        logging.error(f"tg_send_inline_message error: {e}")
+
+def tg_edit_message_text(chat_id, message_id, text, inline_buttons=None):
+    try:
+        payload = {
+            "chat_id": chat_id,
+            "message_id": message_id,
+            "text": text
+        }
+
+        if inline_buttons is not None:
+            payload["reply_markup"] = {
+                "inline_keyboard": inline_buttons
+            }
+
+        resp = requests.post(
+            f"{BASE_URL}/editMessageText",
+            json=payload,
+            timeout=20
+        )
+
+        if resp.status_code != 200:
+            logging.warning(f"Telegram editMessageText failed: {resp.text}")
+
+    except Exception as e:
+        logging.error(f"tg_edit_message_text error: {e}")
+
+def tg_answer_callback_query(callback_query_id, text=""):
+    try:
+        payload = {
+            "callback_query_id": callback_query_id,
+            "text": text
+        }
+
+        requests.post(
+            f"{BASE_URL}/answerCallbackQuery",
+            json=payload,
+            timeout=20
+        )
+    except Exception as e:
+        logging.error(f"tg_answer_callback_query error: {e}")
+
 def send_main_menu(chat_id, text="Главное меню:", user_id=None):
     if user_id is not None and is_admin(user_id):
         keyboard = [
@@ -2392,6 +2454,69 @@ def get_manager_stats_period():
 
     return start_date, end_date
 
+def build_manager_stats_summary_text(username):
+    if not username:
+        return "Не указан username."
+
+    username = username.strip().lstrip("@").lower()
+    target_username = f"@{username}"
+
+    start_date, end_date = get_manager_stats_period()
+
+    accounts_count = 0
+    kings_count = 0
+    bms_count = 0
+    fps_count = 0
+
+    accounts_rows = get_sheet_rows_cached(SHEET_ACCOUNTS)
+    for row in accounts_rows[1:]:
+        if len(row) < 12:
+            row = row + [''] * (12 - len(row))
+        if str(row[11]).strip().lower() != target_username:
+            continue
+        transfer_date = parse_sheet_date(str(row[10]).strip())
+        if transfer_date and start_date <= transfer_date < end_date:
+            accounts_count += 1
+
+    kings_rows = get_sheet_rows_cached(SHEET_KINGS)
+    for row in kings_rows[1:]:
+        if len(row) < 10:
+            row = row + [''] * (10 - len(row))
+        if str(row[8]).strip().lower() != target_username:
+            continue
+        transfer_date = parse_sheet_date(str(row[6]).strip())
+        if transfer_date and start_date <= transfer_date < end_date:
+            kings_count += 1
+
+    bms_rows = get_sheet_rows_cached(SHEET_BMS)
+    for row in bms_rows[1:]:
+        if len(row) < 9:
+            row = row + [''] * (9 - len(row))
+        if str(row[6]).strip().lower() != target_username:
+            continue
+        transfer_date = parse_sheet_date(str(row[7]).strip())
+        if transfer_date and start_date <= transfer_date < end_date:
+            bms_count += 1
+
+    fps_rows = get_sheet_rows_cached(SHEET_FPS)
+    for row in fps_rows[1:]:
+        if len(row) < 9:
+            row = row + [''] * (9 - len(row))
+        if str(row[7]).strip().lower() != target_username:
+            continue
+        transfer_date = parse_sheet_date(str(row[8]).strip())
+        if transfer_date and start_date <= transfer_date < end_date:
+            fps_count += 1
+
+    return (
+        f"Статистика accounts {target_username}\n"
+        f"Период: {start_date.strftime('%d/%m/%Y')} - {end_date.strftime('%d/%m/%Y')}\n\n"
+        f"Кинги: {kings_count}\n"
+        f"Лички: {accounts_count}\n"
+        f"БМы: {bms_count}\n"
+        f"ФП: {fps_count}"
+    )
+
 def build_manager_stats_text(username):
     if not username:
         return "У пользователя не указан username."
@@ -2480,6 +2605,57 @@ def build_manager_stats_text(username):
     text_parts.extend(fps_lines if fps_lines else ["нет выдач"])
 
     return "\n".join(text_parts)
+
+def build_farmer_stats_summary_text(username):
+    if not username:
+        return "Не указан username."
+
+    username = username.strip().lstrip("@").lower()
+    target_username = f"@{username}"
+
+    start_date, end_date = get_manager_stats_period()
+
+    farm_kings_count = 0
+    farm_bms_count = 0
+    farm_fps_count = 0
+
+    farm_kings_rows = get_sheet_rows_cached(SHEET_FARM_KINGS)
+    for row in farm_kings_rows[1:]:
+        if len(row) < 10:
+            row = row + [''] * (10 - len(row))
+        if str(row[8]).strip().lower() != target_username:
+            continue
+        transfer_date = parse_sheet_date(str(row[6]).strip())
+        if transfer_date and start_date <= transfer_date < end_date:
+            farm_kings_count += 1
+
+    farm_bms_rows = get_sheet_rows_cached(SHEET_FARM_BMS)
+    for row in farm_bms_rows[1:]:
+        if len(row) < 9:
+            row = row + [''] * (9 - len(row))
+        if str(row[6]).strip().lower() != target_username:
+            continue
+        transfer_date = parse_sheet_date(str(row[7]).strip())
+        if transfer_date and start_date <= transfer_date < end_date:
+            farm_bms_count += 1
+
+    farm_fps_rows = get_sheet_rows_cached(SHEET_FARM_FPS)
+    for row in farm_fps_rows[1:]:
+        if len(row) < 9:
+            row = row + [''] * (9 - len(row))
+        if str(row[7]).strip().lower() != target_username:
+            continue
+        transfer_date = parse_sheet_date(str(row[8]).strip())
+        if transfer_date and start_date <= transfer_date < end_date:
+            farm_fps_count += 1
+
+    return (
+        f"Статистика farmer {target_username}\n"
+        f"Период: {start_date.strftime('%d/%m/%Y')} - {end_date.strftime('%d/%m/%Y')}\n\n"
+        f"Farm kings: {farm_kings_count}\n"
+        f"Farm BM: {farm_bms_count}\n"
+        f"Farm FP: {farm_fps_count}"
+    )
 
 def build_farmer_stats_text(username):
     if not username:
@@ -4347,7 +4523,38 @@ def build_all_users_stats_messages():
         messages.append("Нет farmers пользователей.")
 
     return messages
-    
+
+def send_all_users_stats(chat_id):
+    tg_send_message(chat_id, "Статистика всех")
+
+    if ACCOUNTS_USERS:
+        tg_send_message(chat_id, "=== ACCOUNTS ===")
+        for user_id, username in ACCOUNTS_USERS.items():
+            summary_text = build_manager_stats_summary_text(username)
+
+            tg_send_inline_message(
+                chat_id,
+                summary_text,
+                [[{
+                    "text": "Полная статистика",
+                    "callback_data": f"fullstats_accounts:{username}"
+                }]]
+            )
+
+    if FARMERS_USERS:
+        tg_send_message(chat_id, "=== FARMERS ===")
+        for user_id, username in FARMERS_USERS.items():
+            summary_text = build_farmer_stats_summary_text(username)
+
+            tg_send_inline_message(
+                chat_id,
+                summary_text,
+                [[{
+                    "text": "Полная статистика",
+                    "callback_data": f"fullstats_farmers:{username}"
+                }]]
+            )
+            
 # =========================
 # MESSAGE HANDLER
 # =========================            
@@ -4482,11 +4689,7 @@ def handle_message(msg):
 
         if text == ADMIN_ALL_STATS:
             try:
-                messages = build_all_users_stats_messages()
-
-                for msg_text in messages:
-                    tg_send_message(chat_id, msg_text)
-
+                send_all_users_stats(chat_id)
                 send_admin_menu(chat_id, "Меню Admin:")
             except Exception as e:
                 tg_send_message(chat_id, f"Ошибка в статистике всех:\n{e}")
@@ -5699,6 +5902,91 @@ def handle_message(msg):
         except Exception:
             pass
 
+def handle_callback_query(callback_query):
+    try:
+        callback_id = callback_query["id"]
+        data = callback_query.get("data", "")
+        chat_id = callback_query["message"]["chat"]["id"]
+        message_id = callback_query["message"]["message_id"]
+        user_id = callback_query["from"]["id"]
+
+        if not has_access(user_id):
+            tg_answer_callback_query(callback_id, "Нет доступа")
+            return
+
+        if data.startswith("fullstats_accounts:"):
+            username = data.split(":", 1)[1]
+            full_text = build_manager_stats_text(username)
+
+            tg_answer_callback_query(callback_id)
+            tg_edit_message_text(
+                chat_id,
+                message_id,
+                full_text,
+                inline_buttons=[[{
+                    "text": "Назад",
+                    "callback_data": f"backstats_accounts:{username}"
+                }]]
+            )
+            return
+
+        if data.startswith("fullstats_farmers:"):
+            username = data.split(":", 1)[1]
+            full_text = build_farmer_stats_text(username)
+
+            tg_answer_callback_query(callback_id)
+            tg_edit_message_text(
+                chat_id,
+                message_id,
+                full_text,
+                inline_buttons=[[{
+                    "text": "Назад",
+                    "callback_data": f"backstats_farmers:{username}"
+                }]]
+            )
+            return
+
+        if data.startswith("backstats_accounts:"):
+            username = data.split(":", 1)[1]
+            summary_text = build_manager_stats_summary_text(username)
+
+            tg_answer_callback_query(callback_id)
+            tg_edit_message_text(
+                chat_id,
+                message_id,
+                summary_text,
+                inline_buttons=[[{
+                    "text": "Полная статистика",
+                    "callback_data": f"fullstats_accounts:{username}"
+                }]]
+            )
+            return
+
+        if data.startswith("backstats_farmers:"):
+            username = data.split(":", 1)[1]
+            summary_text = build_farmer_stats_summary_text(username)
+
+            tg_answer_callback_query(callback_id)
+            tg_edit_message_text(
+                chat_id,
+                message_id,
+                summary_text,
+                inline_buttons=[[{
+                    "text": "Полная статистика",
+                    "callback_data": f"fullstats_farmers:{username}"
+                }]]
+            )
+            return
+
+        tg_answer_callback_query(callback_id, "Неизвестная команда")
+
+    except Exception as e:
+        logging.exception("handle_callback_query crashed")
+        try:
+            tg_answer_callback_query(callback_query["id"], "Ошибка")
+        except Exception:
+            pass
+
 def process_incoming_message(msg):
     if msg.get("text"):
         handle_message(msg)
@@ -5725,15 +6013,20 @@ def webhook():
 
         cleanup_processed_updates()
 
-        msg = update.get("message") or update.get("edited_message")
-
-        logging.info(
-            f"WEBHOOK update_id={update_id} has_message={bool(msg)}"
-        )
-
         if is_duplicate_update(update_id):
             logging.info(f"SKIP DUPLICATE update_id={update_id}")
             return jsonify({"ok": True})
+
+        callback_query = update.get("callback_query")
+        if callback_query:
+            handle_callback_query(callback_query)
+            return jsonify({"ok": True})
+
+        msg = update.get("message") or update.get("edited_message")
+
+        logging.info(
+            f"WEBHOOK update_id={update_id} has_message={bool(msg)} has_callback={bool(callback_query)}"
+        )
 
         if msg:
             process_incoming_message(msg)
