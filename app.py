@@ -42,25 +42,25 @@ if not BACKUP_SPREADSHEET_ID:
 # =========================
 
 ADMINS = {
-    7573650707: "Jack Grazer",
-    7681133609: "Cilian Murphy",
-    7172090459: "Jackie Chan",
-    7389698288: "Andrew Garfield",
+    7573650707: "JackGrazer_Deputy_Head_Account",
+    7681133609: "Cillian_Murphy_Head_of_Account",
+    7172090459: "JackieChan_FarmLead",
+    7389698288: "andrewgarfield_farmlead",
 }
 
 ACCOUNTS_USERS = {
-    7953116439: "Willem Dafoe",
-    8334712952: "Ariana Grande",
-    7851493919: "Cate Blanchett",
-    7426931469: "Jim Carrey",
+    7953116439: "WillemDafoe_Accmanager",
+    8334712952: "Ariana_Grande_Account_manager",
+    7851493919: "CateBlanchettAccountManager",
+    7426931469: "JimCarrey_AccountManager",
 }
 
 FARMERS_USERS = {
-    8482380951: "Joseph Gordon",
-    8554652263: "Lee Sung",
-    8389730381: "Jaime Murray",
-    8589105033: "Owen Wilson",
-    8503147017: "Zendaya",
+    8482380951: "josephgordonlevitt_farmer",
+    8554652263: "leesungkyoung_farmer",
+    8389730381: "JaimeMurray_farmer",
+    8589105033: "owenwilson_farmer",
+    8503147017: "zendaya_farmer",
 }
 
 def is_admin(user_id):
@@ -4459,6 +4459,7 @@ def build_all_users_stats_text():
         parts.append("")
 
     return "\n".join(parts).strip()
+    
 # =========================
 # MESSAGE HANDLER
 # =========================            
