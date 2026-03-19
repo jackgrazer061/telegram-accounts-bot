@@ -204,7 +204,13 @@ BTN_FP_NEXT = 'Другое ФП'
 
 # Память состояний пользователей (для старта хватит)
 user_states = {}
+state_lock = threading.Lock()
+user_action_lock = threading.Lock()
 issue_lock = threading.Lock()
+accounts_lock = threading.Lock()
+processed_updates = {}
+processed_updates_lock = threading.Lock()
+PROCESSED_UPDATES_TTL = 600  # 10 минут
 
 backup_lock = threading.Lock()
 google_lock = threading.RLock()
@@ -2616,38 +2622,68 @@ def build_farmer_stats_text(username):
     return "\n".join(text_parts)
 
 def get_state(user_id):
-    state = user_states.get(str(user_id))
+    with state_lock:
+        state = user_states.get(str(user_id))
 
-    if not state:
-        return {}
+        if not state:
+            return {}
 
-    state_time = state.get("_time", 0)
+        state_time = state.get("_time", 0)
 
-    if time.time() - state_time > STATE_TTL:
-        clear_state(user_id)
-        return {}
+        if time.time() - state_time > STATE_TTL:
+            user_states.pop(str(user_id), None)
+            return {}
 
-    return state
+        return dict(state)
 
 def cleanup_states():
     now = time.time()
     to_delete = []
 
-    for uid, state in user_states.items():
-        if now - state.get("_time", 0) > STATE_TTL:
-            to_delete.append(uid)
+    with state_lock:
+        for uid, state in user_states.items():
+            if now - state.get("_time", 0) > STATE_TTL:
+                to_delete.append(uid)
 
-    for uid in to_delete:
-        user_states.pop(uid, None)
+        for uid in to_delete:
+            user_states.pop(uid, None)
 
+def cleanup_processed_updates():
+    now = time.time()
+    to_delete = []
+
+    with processed_updates_lock:
+        for update_id, ts in processed_updates.items():
+            if now - ts > PROCESSED_UPDATES_TTL:
+                to_delete.append(update_id)
+
+        for update_id in to_delete:
+            processed_updates.pop(update_id, None)
+
+
+def is_duplicate_update(update_id):
+    if update_id is None:
+        return False
+
+    now = time.time()
+
+    with processed_updates_lock:
+        ts = processed_updates.get(update_id)
+        if ts and now - ts <= PROCESSED_UPDATES_TTL:
+            return True
+
+        processed_updates[update_id] = now
+        return False
 
 def set_state(user_id, data):
     data["_time"] = time.time()
-    user_states[str(user_id)] = data
+    with state_lock:
+        user_states[str(user_id)] = data
 
 
 def clear_state(user_id):
-    user_states.pop(str(user_id), None)
+    with state_lock:
+        user_states.pop(str(user_id), None)
 
 def find_account_in_base(account_number):
     rows = get_sheet_rows_cached(SHEET_ACCOUNTS)
@@ -2664,38 +2700,40 @@ def find_account_in_base(account_number):
     return None
 
 def update_account_from_fastadscheck(account_number, limit_value, threshold_value, gmt_value, currency_value, account_url=""):
-    found = find_account_in_base(account_number)
+    with accounts_lock:
+        found = find_account_in_base(account_number)
 
-    if not found:
-        return False, f"Личка {account_number} не найдена в таблице."
+        if not found:
+            return False, f"Личка {account_number} не найдена в таблице."
 
-    row_index = found["row_index"]
+        row_index = found["row_index"]
 
-    row = found["row"]
-    if len(row) < 14:
-        row = row + [''] * (14 - len(row))
+        row = found["row"]
+        if len(row) < 14:
+            row = row + [''] * (14 - len(row))
 
-    # точные значения в E и F
-    values_en = [[
-        normalize_numeric_for_sheet(limit_value),      # E
-        normalize_numeric_for_sheet(threshold_value),  # F
-        str(gmt_value),                                # G
-        row[7] if len(row) > 7 else "",                # H
-        row[8] if len(row) > 8 else "",                # I
-        row[9] if len(row) > 9 else "",                # J
-        row[10] if len(row) > 10 else "",              # K
-        row[11] if len(row) > 11 else "",              # L
-        currency_value or "",                          # M
-        account_url or ""                              # N
-    ]]
+        values_en = [[
+            normalize_numeric_for_sheet(limit_value),      # E
+            normalize_numeric_for_sheet(threshold_value),  # F
+            str(gmt_value),                                # G
+            row[7] if len(row) > 7 else "",                # H
+            row[8] if len(row) > 8 else "",                # I
+            row[9] if len(row) > 9 else "",                # J
+            row[10] if len(row) > 10 else "",              # K
+            row[11] if len(row) > 11 else "",              # L
+            currency_value or "",                          # M
+            account_url or ""                              # N
+        ]]
 
-    sheet_update_raw(
-        SHEET_ACCOUNTS,
-        f"E{row_index}:N{row_index}",
-        values_en
-    )
+        sheet_update_raw(
+            SHEET_ACCOUNTS,
+            f"E{row_index}:N{row_index}",
+            values_en
+        )
 
-    return True, f"Личка {account_number} обновлена"
+        refresh_sheet_cache(SHEET_ACCOUNTS)
+
+        return True, f"Личка {account_number} обновлена"
 
 def find_last_issue_row(account_number):
     rows = get_sheet_rows_cached(SHEET_ISSUES)
@@ -3089,7 +3127,7 @@ def issue_accounts_bulk(account_numbers, for_whom, username):
     not_found = []
     not_available = []
 
-    with issue_lock:
+    with issue_lock, accounts_lock:
         rows = get_sheet_rows_cached(SHEET_ACCOUNTS, force=True)
 
         indexed = {}
@@ -3174,7 +3212,7 @@ def issue_next_quick_account_for_person(for_whom, username):
     today = datetime.now().strftime("%d/%m/%Y")
     who_took_text = f"@{username}" if username else "без username"
 
-    with issue_lock:
+    with issue_lock, accounts_lock:
         rows = get_sheet_rows_cached(SHEET_ACCOUNTS, force=True)
 
         candidates = []
@@ -4239,11 +4277,12 @@ def handle_message(msg):
         user_id = msg["from"]["id"]
 
         now = time.time()
-        last = last_user_action.get(user_id, 0)
-        if now - last < ACTION_COOLDOWN:
-            return
+        with user_action_lock:
+            last = last_user_action.get(user_id, 0)
+            if now - last < ACTION_COOLDOWN:
+                return
+            last_user_action[user_id] = now
 
-        last_user_action[user_id] = now
         username = msg["from"].get("username", "")
         text = str(msg.get("text", "")).strip()
 
@@ -5575,9 +5614,19 @@ def health():
 def webhook():
     try:
         update = request.get_json(silent=True) or {}
-        logging.info(f"WEBHOOK DIRECT UPDATE: {json.dumps(update, ensure_ascii=False)[:2000]}")
+        update_id = update.get("update_id")
+
+        cleanup_processed_updates()
 
         msg = update.get("message") or update.get("edited_message")
+
+        logging.info(
+            f"WEBHOOK update_id={update_id} has_message={bool(msg)}"
+        )
+
+        if is_duplicate_update(update_id):
+            logging.info(f"SKIP DUPLICATE update_id={update_id}")
+            return jsonify({"ok": True})
 
         if msg:
             process_incoming_message(msg)
@@ -5692,59 +5741,60 @@ def fastadscheck_add():
                 "error": "rows пустой или неверный формат"
             }), 400
 
-        existing_rows = get_sheet_rows_cached(SHEET_ACCOUNTS)
-        existing_accounts = set()
+        with accounts_lock:
+            existing_rows = get_sheet_rows_cached(SHEET_ACCOUNTS)
+            existing_accounts = set()
 
-        for row in existing_rows[1:]:
-            if row and len(row) > 0 and str(row[0]).strip():
-                existing_accounts.add(str(row[0]).strip())
+            for row in existing_rows[1:]:
+                if row and len(row) > 0 and str(row[0]).strip():
+                    existing_accounts.add(str(row[0]).strip())
 
-        to_append = []
-        duplicates = 0
-        skipped = []
+            to_append = []
+            duplicates = 0
+            skipped = []
 
-        for item in rows:
-            account_id = str(item.get("account_id", "")).strip()
-            gmt_value = str(item.get("gmt", "")).strip()
-            currency_value = str(item.get("currency", "")).strip().upper()
-            account_url = str(item.get("account_url", "")).strip()
-            limit_value = item.get("limit_usd")
-            threshold_value = item.get("threshold_usd")
+            for item in rows:
+                account_id = str(item.get("account_id", "")).strip()
+                gmt_value = str(item.get("gmt", "")).strip()
+                currency_value = str(item.get("currency", "")).strip().upper()
+                account_url = str(item.get("account_url", "")).strip()
+                limit_value = item.get("limit_usd")
+                threshold_value = item.get("threshold_usd")
 
-            if not account_id:
-                skipped.append("empty_account_id")
-                continue
+                if not account_id:
+                    skipped.append("empty_account_id")
+                    continue
 
-            if account_id in existing_accounts:
-                duplicates += 1
-                continue
+                if account_id in existing_accounts:
+                    duplicates += 1
+                    continue
 
-            to_append.append([
-                account_id,                                               # A номер
-                "",                                                       # B дата покупки
-                "",                                                       # C цена
-                "",                                                       # D поставщик
-                normalize_numeric_for_sheet(limit_value) if limit_value is not None else "",         # E лимит
-                normalize_numeric_for_sheet(threshold_value) if threshold_value is not None else "", # F трешхолд
-                gmt_value,                                                # G GMT
-                "",                                                       # H склады
-                "free",                                                   # I статус
-                "",                                                       # J кому выдали
-                "",                                                       # K дата взятия
-                "",                                                       # L кто взял
-                currency_value,                                           # M валюта
-                account_url                                               # N ссылка
-            ])
+                to_append.append([
+                    account_id,
+                    "",
+                    "",
+                    "",
+                    normalize_numeric_for_sheet(limit_value) if limit_value is not None else "",
+                    normalize_numeric_for_sheet(threshold_value) if threshold_value is not None else "",
+                    gmt_value,
+                    "",
+                    "free",
+                    "",
+                    "",
+                    "",
+                    currency_value,
+                    account_url
+                ])
 
-            existing_accounts.add(account_id)
+                existing_accounts.add(account_id)
 
-        if to_append:
-            sheet_append_rows_and_refresh(
-                SHEET_ACCOUNTS,
-                to_append,
-                value_input_option="USER_ENTERED"
-            )
-            invalidate_stats_cache()
+            if to_append:
+                sheet_append_rows_and_refresh(
+                    SHEET_ACCOUNTS,
+                    to_append,
+                    value_input_option="USER_ENTERED"
+                )
+                invalidate_stats_cache()
 
         return jsonify({
             "ok": True,
@@ -5760,10 +5810,11 @@ def fastadscheck_add():
             "ok": False,
             "error": str(e)
         }), 500
-
+        
 if __name__ == "__main__":
     # cache_thread = threading.Thread(target=cache_warmer_loop, daemon=True)
     # cache_thread.start()
+
     backup_thread = threading.Thread(target=backup_scheduler_loop, daemon=True)
     backup_thread.start()
 
