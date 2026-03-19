@@ -42,25 +42,25 @@ if not BACKUP_SPREADSHEET_ID:
 # =========================
 
 ADMINS = {
-    7573650707,  # jack
-    7681133609,  # cilian
-    7172090459,  # jackie
-    7389698288,  # andrew
+    7573650707: "Jack Grazer",
+    7681133609: "Cilian Murphy",
+    7172090459: "Jackie Chan",
+    7389698288: "Andrew Garfield",
 }
 
 ACCOUNTS_USERS = {
-    7953116439,   # willem
-    8334712952,   # ariana
-    7851493919,   # cate
-    7426931469,   # jim
+    7953116439: "Willem Dafoe",
+    8334712952: "Ariana Grande",
+    7851493919: "Cate Blanchett",
+    7426931469: "Jim Carrey",
 }
 
 FARMERS_USERS = {
-    8482380951,    # joseph
-    8554652263,    # lee
-    8389730381,    # jaime
-    8589105033,    # owen
-    8503147017,    # zendaya
+    8482380951: "Joseph Gordon",
+    8554652263: "Lee Sung",
+    8389730381: "Jaime Murray",
+    8589105033: "Owen Wilson",
+    8503147017: "Zendaya",
 }
 
 def is_admin(user_id):
@@ -178,6 +178,7 @@ ADMIN_FARMERS = 'Фармеры'
 ADMIN_BOT_CHECK = 'Проверка бота'
 ADMIN_BACKUP = 'Бэкап таблиц'
 ADMIN_UPDATE_5M = 'Обновление 5м'
+ADMIN_ALL_STATS = 'Статистика всех'
 
 ADMIN_ADD_ACCOUNTS = 'Добавить лички'
 ADMIN_ADD_KINGS = 'Добавить кинги'
@@ -606,7 +607,7 @@ def send_admin_menu(chat_id, text="Меню Admin:"):
     keyboard = [
         [{"text": ADMIN_BACKUP}, {"text": ADMIN_UPDATE_5M}],
         [{"text": ADMIN_ACCOUNTANTS}, {"text": ADMIN_FARMERS}],
-        [{"text": ADMIN_BOT_CHECK}],
+        [{"text": ADMIN_ALL_STATS}],
         [{"text": BTN_BACK_FROM_ADMIN}]
     ]
     tg_send_message(chat_id, text, keyboard)
@@ -1445,7 +1446,7 @@ def send_person_menu(chat_id, department):
     tg_send_message(chat_id, title, keyboard)
 
 def notify_all_users_about_update():
-    recipients = sorted(ADMINS | ACCOUNTS_USERS | FARMERS_USERS)
+    recipients = sorted(set(ADMINS.keys()) | set(ACCOUNTS_USERS.keys()) | set(FARMERS_USERS.keys()))
 
     text = "Внимание: через 5 минут бот будет перезапущен из-за обновления."
     sent = 0
@@ -1701,12 +1702,12 @@ def confirm_fp_issue(chat_id, user_id, username):
         )
 
         tg_send_message(chat_id, f"Ссылка:\n{fp_link}")
-        send_fps_menu(chat_id, "Выбери следующее действие:")
+        send_accounts_main_menu(chat_id, "Меню Accounts:")
 
     except Exception as e:
         logging.exception("confirm_fp_issue crashed")
         tg_send_message(chat_id, "Ошибка выдачи ФП. Попробуй ещё раз.")
-        send_fps_menu(chat_id, "Меню ФП:")
+        send_accounts_main_menu(chat_id, "Меню Accounts:")
 
 def get_free_farm_king_geos():
     rows = get_sheet_rows_cached(SHEET_FARM_KINGS)
@@ -2518,6 +2519,40 @@ def build_farmer_stats_text(username):
     target_username = f"@{username}"
 
     start_date, end_date = get_manager_stats_period()
+
+    # ---------- ФП ----------
+    fps_rows = get_sheet_rows_cached(SHEET_FPS)
+
+    fps_lines = []
+    for row in fps_rows[1:]:
+        if len(row) < 9:
+            row = row + [''] * (9 - len(row))
+
+        fp_link = str(row[0]).strip()
+        transfer_date_raw = str(row[8]).strip()
+        for_whom = str(row[6]).strip()
+        who_took = str(row[7]).strip().lower()
+
+        if who_took != target_username:
+            continue
+
+        transfer_date = parse_sheet_date(transfer_date_raw)
+        if not transfer_date:
+            continue
+
+        if not (start_date <= transfer_date < end_date):
+            continue
+
+        fps_lines.append(
+            f"{fp_link} | {transfer_date.strftime('%d/%m/%Y')} | {for_whom}"
+        )
+
+    text_parts.append("")
+    text_parts.append(f"ФП: {len(fps_lines)}")
+    if fps_lines:
+        text_parts.extend(fps_lines)
+    else:
+        text_parts.append("нет выдач")
 
     # ---------- FARM KINGS ----------
     farm_kings_rows = get_sheet_rows_cached(SHEET_FARM_KINGS)
@@ -3351,12 +3386,12 @@ def confirm_issue(chat_id, user_id, username):
         else:
             tg_send_message(chat_id, "Ссылка на личку не найдена в колонке N.")
 
-        send_main_menu(chat_id, "Выбери следующее действие:", user_id=user_id)
+        send_accounts_main_menu(chat_id, "Меню Accounts:")
 
     except Exception as e:
         logging.exception("confirm_issue crashed")
         tg_send_message(chat_id, "Ошибка выдачи лички. Попробуй ещё раз.")
-        send_main_menu(chat_id, "Главное меню:", user_id=user_id)
+        send_accounts_main_menu(chat_id, "Меню Accounts:")
 
 def king_name_exists(king_name):
     rows = get_sheet_rows_cached(SHEET_KINGS)
@@ -3636,12 +3671,12 @@ def confirm_bm_issue(chat_id, user_id, username):
         else:
             tg_send_message(chat_id, "Данные БМа не найдены.")
 
-        send_bms_menu(chat_id, "Выбери следующее действие:")
+        send_accounts_main_menu(chat_id, "Меню Accounts:")
 
     except Exception as e:
         logging.exception("confirm_bm_issue crashed")
         tg_send_message(chat_id, "Ошибка выдачи БМа. Попробуй ещё раз.")
-        send_bms_menu(chat_id, "Меню БМов:")
+        send_accounts_main_menu(chat_id, "Меню Accounts:")
 
     
 def show_found_king(chat_id, user_id, found):
@@ -3766,12 +3801,12 @@ def confirm_king_issue(chat_id, user_id, username):
         else:
             tg_send_message(chat_id, "Данные кинга не найдены.")
 
-        send_kings_menu(chat_id, "Выбери следующее действие:")
+        send_accounts_main_menu(chat_id, "Меню Accounts:")
 
     except Exception as e:
         logging.error(f"confirm_king_issue error: {e}")
         tg_send_message(chat_id, "Ошибка выдачи кинга. Попробуй ещё раз.")
-        send_kings_menu(chat_id, "Меню кингов:")
+        send_accounts_main_menu(chat_id, "Меню Accounts:")
 
 def append_king_to_issues_sheet(king_name, purchase_date, price, transfer_date, supplier, for_whom):
     next_row = get_next_empty_row_in_issues()
@@ -4384,6 +4419,46 @@ def run_bot_diagnostics():
     )
 
     return summary
+
+def tg_send_long_message(chat_id, text, chunk_size=3500):
+    text = str(text or "").strip()
+    if not text:
+        return
+
+    while text:
+        part = text[:chunk_size]
+
+        if len(text) > chunk_size:
+            split_pos = part.rfind("\n")
+            if split_pos > 500:
+                part = part[:split_pos]
+
+        tg_send_message(chat_id, part.strip())
+        text = text[len(part):].strip()
+
+
+def build_all_users_stats_text():
+    parts = ["Статистика всех", ""]
+
+    parts.append("=== ACCOUNTS ===")
+    if ACCOUNTS_USERS:
+        for user_id, tg_username in ACCOUNTS_USERS.items():
+            parts.append(build_manager_stats_text(tg_username))
+            parts.append("")
+    else:
+        parts.append("Нет accounts пользователей.")
+        parts.append("")
+
+    parts.append("=== FARMERS ===")
+    if FARMERS_USERS:
+        for user_id, tg_username in FARMERS_USERS.items():
+            parts.append(build_farmer_stats_text(tg_username))
+            parts.append("")
+    else:
+        parts.append("Нет farmers пользователей.")
+        parts.append("")
+
+    return "\n".join(parts).strip()
 # =========================
 # MESSAGE HANDLER
 # =========================            
@@ -4455,7 +4530,7 @@ def handle_message(msg):
         if text == MENU_MANAGER_STATS:
             manager_stats_text = build_manager_stats_text(username)
             tg_send_message(chat_id, manager_stats_text)
-            send_main_menu(chat_id, "Главное меню:", user_id=user_id)
+            send_accounts_main_menu(chat_id, "Меню Accounts:")
             return
 
         if text == MENU_FARMER_STATS:
@@ -4514,6 +4589,16 @@ def handle_message(msg):
                 chat_id,
                 f"Уведомление отправлено.\n\nУспешно: {sent}\nОшибок: {failed}"
             )
+            return
+
+        if text == ADMIN_ALL_STATS:
+            if not is_admin(user_id):
+                tg_send_message(chat_id, "У вас нет доступа.")
+                return
+
+            stats_text = build_all_users_stats_text()
+            tg_send_long_message(chat_id, stats_text)
+            send_admin_menu(chat_id, "Меню Admin:")
             return
 
         if text == ADMIN_BOT_CHECK:
@@ -4809,13 +4894,13 @@ def handle_message(msg):
             account_number = state.get("return_account_number", "")
             ok, message = return_account_to_ban(account_number)
             clear_state(user_id)
-            send_accounts_menu(chat_id, message)
+            send_accounts_main_menu(chat_id, message)
             return
 
         # ========= КИНГИ =========
         if text == SUBMENU_FREE_KINGS:
             send_free_kings(chat_id)
-            send_kings_menu(chat_id, "Выбери следующее действие:")
+            send_accounts_main_menu(chat_id, "Меню Accounts:")
             return
 
         if text == SUBMENU_SEARCH_KING:
@@ -4865,14 +4950,14 @@ def handle_message(msg):
             ok, message = return_king_to_ban(king_name)
 
             clear_state(user_id)
-            send_kings_menu(chat_id, message)
+            send_accounts_main_menu(chat_id, message)
             return
 
         # ========= БМы =========
         if text == SUBMENU_FREE_BMS:
             free_count = count_free_bms()
             tg_send_message(chat_id, f"Свободных БМов: {free_count}")
-            send_bms_menu(chat_id, "Выбери следующее действие:")
+            send_accounts_main_menu(chat_id, "Меню Accounts:")
             return
 
         if text == SUBMENU_SEARCH_BM:
@@ -5059,7 +5144,7 @@ def handle_message(msg):
 
             clear_state(user_id)
             send_free_accounts(chat_id, text)
-            send_accounts_menu(chat_id, "Выбери следующее действие:")
+            send_accounts_main_menu(chat_id, "Меню Accounts:")
             return
 
         # ========= СОСТОЯНИЯ: ПОИСК / ВОЗВРАТ ЛИЧЕК =========
@@ -5078,7 +5163,7 @@ def handle_message(msg):
                 return
 
             tg_send_message(chat_id, result)
-            send_accounts_menu(chat_id, "Выбери следующее действие:")
+            send_accounts_main_menu(chat_id, "Меню Accounts:")
             return
 
         if state.get("mode") == "awaiting_return_account":
@@ -5388,7 +5473,7 @@ def handle_message(msg):
                 return
 
             tg_send_message(chat_id, result)
-            send_kings_menu(chat_id, "Выбери следующее действие:")
+            send_accounts_main_menu(chat_id, "Меню Accounts:")
             return
 
         if state.get("mode") == "awaiting_return_king_name":
@@ -5474,7 +5559,7 @@ def handle_message(msg):
                 return
 
             tg_send_message(chat_id, result)
-            send_bms_menu(chat_id, "Выбери следующее действие:")
+            send_accounts_main_menu(chat_id, "Меню Accounts:")
             return
 
                 # ========= СОСТОЯНИЯ: фп =========
@@ -5493,7 +5578,7 @@ def handle_message(msg):
                 return
 
             tg_send_message(chat_id, result)
-            send_fps_menu(chat_id, "Выбери следующее действие:")
+            send_accounts_main_menu(chat_id, "Меню Accounts:")
             return
 
         if state.get("mode") == "awaiting_fp_department":
