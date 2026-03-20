@@ -2273,7 +2273,7 @@ def build_pixel_search_text(pixel_query):
         f"Данные:\n{row[7] or 'нет данных'}"
     )
 
-    def extract_pixel_name_from_data(data_text):
+def extract_pixel_name_from_data(data_text):
     text = str(data_text or "").strip()
 
     if not text:
