@@ -4813,21 +4813,23 @@ def find_last_king_issue_row(king_name):
 
 
 def find_king_in_base_by_name(king_name):
-    rows = get_sheet_rows_cached(SHEET_KINGS)
-
     target = str(king_name).strip().lower()
 
-    for idx, row in enumerate(rows[1:], start=2):
-        if len(row) < 10:
-            row = row + [''] * (10 - len(row))
+    for sheet_name in [SHEET_KINGS, SHEET_CRYPTO_KINGS]:
+        rows = get_sheet_rows_cached(sheet_name)
 
-        existing_name = str(row[0]).strip().lower()
+        for idx, row in enumerate(rows[1:], start=2):
+            if len(row) < 10:
+                row = row + [''] * (10 - len(row))
 
-        if existing_name == target:
-            return {
-                "row_index": idx,
-                "row": row
-            }
+            existing_name = str(row[0]).strip().lower()
+
+            if existing_name == target:
+                return {
+                    "sheet_name": sheet_name,
+                    "row_index": idx,
+                    "row": row
+                }
 
     return None
 
@@ -4835,9 +4837,10 @@ def find_king_in_base_by_name(king_name):
 def return_king_to_ban(king_name):
     base_info = find_king_in_base_by_name(king_name)
     if not base_info:
-        return False, "Кинг не найден в База_кингов."
+        return False, "Кинг не найден в базах."
 
     row = base_info["row"]
+    sheet_name = base_info["sheet_name"]
 
     if len(row) < 10:
         row = row + [''] * (10 - len(row))
@@ -4847,10 +4850,8 @@ def return_king_to_ban(king_name):
     if status == "ban":
         return False, "Этот кинг уже в ban."
 
-
-    # E = статус, F = кому выдали
     sheet_update_and_refresh(
-        SHEET_KINGS,
+        sheet_name,
         f"E{base_info['row_index']}:F{base_info['row_index']}",
         [["ban", "ban"]]
     )
@@ -4865,7 +4866,7 @@ def return_king_to_ban(king_name):
 
     invalidate_stats_cache()
     return True, f"Кинг '{king_name}' переведён в ban."
-
+    
 def build_king_search_text(king_name):
     king_info = find_king_in_base_by_name(king_name)
 
@@ -4873,9 +4874,12 @@ def build_king_search_text(king_name):
         return None
 
     row = king_info["row"]
+    sheet_name = king_info["sheet_name"]
 
     if len(row) < 10:
         row = row + [''] * (10 - len(row))
+
+    base_label = "Crypto king" if sheet_name == SHEET_CRYPTO_KINGS else "King"
 
     name = row[0]
     price = row[2]
@@ -4901,6 +4905,7 @@ def build_king_search_text(king_name):
         data_text = "нет данных"
 
     text = (
+        f"Тип: {base_label}\n"
         f"Название: {name}\n"
         f"Статус: {status}\n"
         f"Цена: {price}\n"
