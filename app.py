@@ -2140,7 +2140,6 @@ def confirm_fp_issue(chat_id, user_id, username):
             f"Кто взял в боте: {who_took_text}"
         )
 
-        tg_send_message(chat_id, f"Ссылка:\n{fp_link}")
         send_accounts_main_menu(chat_id, "Меню Accounts:")
 
     except Exception:
