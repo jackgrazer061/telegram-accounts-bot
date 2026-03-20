@@ -1887,7 +1887,6 @@ def build_fp_search_text(fp_link):
         f"Ссылка ФП: {row[0]}\n"
         f"Дата покупки: {row[1] or 'не указана'}\n"
         f"Цена: {row[2] or 'не указана'}\n"
-        f"У кого купили: {row[3] or 'не указан'}\n"
         f"Склад: {row[4] or 'не указан'}\n"
         f"Статус: {row[5] or 'не указан'}\n"
         f"Для кого: {row[6] or 'не указано'}\n"
@@ -2360,16 +2359,41 @@ def issue_pixels_bulk(chat_id, user_id, username, count_needed):
         tg_send_message(chat_id, "Ошибка выдачи Пикселей. Попробуй ещё раз.")
         send_pixels_menu(chat_id, "Меню Пикселей:")
 
+def extract_pixel_id_from_data(data_text):
+    text = str(data_text or "").strip()
+    if not text:
+        return ""
+
+    match = re.search(r'ID\s*пикселя\s*:\s*([0-9]+)', text, re.IGNORECASE)
+    if match:
+        return match.group(1).strip()
+
+    return ""
+
+
 def find_pixel_in_base_by_data(pixel_query):
     rows = get_sheet_rows_cached(SHEET_PIXELS)
     target = str(pixel_query).strip().lower()
+    target_digits = re.sub(r"\D", "", target)
 
     for idx, row in enumerate(rows[1:], start=2):
         if len(row) < 8:
             row = row + [''] * (8 - len(row))
 
-        data_text = str(row[7]).strip().lower()
-        if target and target in data_text:
+        data_text = str(row[7]).strip()
+        data_text_lower = data_text.lower()
+
+        pixel_id = extract_pixel_id_from_data(data_text)
+
+        # 1) точный поиск по ID пикселя
+        if target_digits and pixel_id and target_digits == pixel_id:
+            return {
+                "row_index": idx,
+                "row": row
+            }
+
+        # 2) запасной поиск по тексту
+        if target and target in data_text_lower:
             return {
                 "row_index": idx,
                 "row": row
@@ -6230,12 +6254,12 @@ def handle_message(msg):
 
         if text == SUBMENU_SEARCH_PIXEL:
             update_state(user_id, mode="awaiting_search_pixel")
-            tg_send_message(chat_id, "Впиши часть данных Пикселя для поиска.")
+            tg_send_message(chat_id, "Впиши ID пикселя или часть данных Пикселя для поиска.")
             return
 
         if text == SUBMENU_RETURN_PIXEL:
             update_state(user_id, mode="awaiting_return_pixel")
-            tg_send_message(chat_id, "Впиши часть данных Пикселя, который нужно перевести в ban.")
+            tg_send_message(chat_id, "Впиши ID пикселя или часть данных Пикселя, который нужно перевести в ban.")
             return
 
         if text == SUBMENU_GET_PIXELS:
@@ -6906,7 +6930,7 @@ def handle_message(msg):
             pixel_query = text.strip()
 
             if not pixel_query:
-                tg_send_message(chat_id, "Впиши данные Пикселя.")
+                tg_send_message(chat_id, "Впиши ID пикселя или данные Пикселя.")
                 return
 
             result = build_pixel_search_text(pixel_query)
@@ -6925,7 +6949,7 @@ def handle_message(msg):
             pixel_query = text.strip()
 
             if not pixel_query:
-                tg_send_message(chat_id, "Впиши данные Пикселя.")
+                tg_send_message(chat_id, "Впиши ID пикселя или данные Пикселя.")
                 return
 
             found = find_pixel_in_base_by_data(pixel_query)
