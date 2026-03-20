@@ -777,12 +777,17 @@ def send_add_fps_instructions(chat_id):
 
 def send_add_pixels_instructions(chat_id):
     text = (
-        "Пришли Пиксели сообщением, каждый с новой строки.\n\n"
-        "Формат:\n"
-        "дата покупки; цена; поставщик; данные\n\n"
+        "Пришли Пиксели сообщением блоками.\n\n"
+        "Формат одного блока:\n"
+        "дата покупки; цена; поставщик\n"
+        "данные пикселя\n\n"
+        "Потом пустая строка и следующий пиксель.\n\n"
         "Пример:\n"
-        "15/02/2026; 300; WD; pixel data 1\n"
-        "16/02/2026; 500; TT; pixel data 2"
+        "15/02/2026; 300; WD\n"
+        "pixel data 1 line 1\n"
+        "pixel data 1 line 2\n\n"
+        "16/02/2026; 500; TT\n"
+        "pixel data 2"
     )
     tg_send_message(chat_id, text)
 
@@ -1762,34 +1767,63 @@ def add_fps_from_text(text, target_sheet=SHEET_FPS):
     return message
 
 def add_pixels_from_text(text, target_sheet=SHEET_PIXELS):
-    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    lines = text.splitlines()
+
+    blocks = []
+    current_header = None
+    current_data_lines = []
+
+    for raw_line in lines:
+        line = raw_line.rstrip()
+
+        # пустая строка = конец блока
+        if not line.strip():
+            if current_header is not None:
+                blocks.append((current_header, current_data_lines))
+                current_header = None
+                current_data_lines = []
+            continue
+
+        # если header еще не начат — это первая строка блока
+        if current_header is None:
+            current_header = line.strip()
+            current_data_lines = []
+        else:
+            current_data_lines.append(line)
+
+    # последний блок
+    if current_header is not None:
+        blocks.append((current_header, current_data_lines))
+
     to_append = []
     errors = []
 
-    for i, line in enumerate(lines, start=1):
-        fields = [x.strip() for x in line.split(";")]
-        if len(fields) != 4:
-            errors.append(f"Строка {i}: должно быть 4 поля через ';'")
+    for i, (header, data_lines) in enumerate(blocks, start=1):
+        fields = [x.strip() for x in header.split(";")]
+
+        if len(fields) != 3:
+            errors.append(f"Блок {i}: должно быть 3 поля в первой строке: дата покупки; цена; поставщик")
             continue
 
-        purchase_date_raw, price_raw, supplier, data_text = fields
+        purchase_date_raw, price_raw, supplier = fields
 
         purchase_date = parse_date(purchase_date_raw)
         if not purchase_date:
-            errors.append(f"Строка {i}: неверная дата покупки '{purchase_date_raw}'")
+            errors.append(f"Блок {i}: неверная дата покупки '{purchase_date_raw}'")
             continue
 
         price = parse_price(price_raw)
         if price is None:
-            errors.append(f"Строка {i}: неверная цена '{price_raw}'")
+            errors.append(f"Блок {i}: неверная цена '{price_raw}'")
             continue
 
         if not supplier:
-            errors.append(f"Строка {i}: не указан поставщик")
+            errors.append(f"Блок {i}: не указан поставщик")
             continue
 
+        data_text = "\n".join([x.rstrip() for x in data_lines]).strip()
         if not data_text:
-            errors.append(f"Строка {i}: не указаны данные")
+            errors.append(f"Блок {i}: не указаны данные Пикселя")
             continue
 
         to_append.append([
