@@ -48,6 +48,8 @@ ADMINS = {
     7389698288: "andrewgarfield_farmlead",
 }
 
+FP_WAREHOUSE_NOTIFY_ADMIN_ID = 7573650707
+
 ACCOUNTS_USERS = {
     7953116439: "WillemDafoe_Accmanager",
     8334712952: "Ariana_Grande_Account_manager",
@@ -1895,6 +1897,80 @@ def build_fp_search_text(fp_link):
 
     return text
 
+def extract_warehouse_sort_key(warehouse_name):
+    text = str(warehouse_name or "").strip().lower()
+
+    # ищем последнее число в названии склада
+    nums = re.findall(r"\d+", text)
+    if nums:
+        return int(nums[-1])
+
+    # если числа нет — отправляем в конец
+    return 10**9
+
+
+def get_next_fp_warehouse_name(current_warehouse):
+    rows = get_sheet_rows_cached(SHEET_FPS)
+
+    warehouses = set()
+    for row in rows[1:]:
+        if len(row) < 5:
+            row = row + [''] * (5 - len(row))
+
+        warehouse = str(row[4]).strip()
+        if warehouse:
+            warehouses.add(warehouse)
+
+    if not warehouses:
+        return None
+
+    ordered = sorted(warehouses, key=extract_warehouse_sort_key)
+
+    current = str(current_warehouse or "").strip()
+    if current not in ordered:
+        return None
+
+    idx = ordered.index(current)
+    if idx + 1 < len(ordered):
+        return ordered[idx + 1]
+
+    return None
+
+
+def count_free_fp_in_warehouse(warehouse_name):
+    rows = get_sheet_rows_cached(SHEET_FPS)
+
+    count = 0
+    target = str(warehouse_name or "").strip()
+
+    for row in rows[1:]:
+        if len(row) < 9:
+            row = row + [''] * (9 - len(row))
+
+        warehouse = str(row[4]).strip()
+        status = str(row[5]).strip().lower()
+
+        if warehouse == target and status == "free":
+            count += 1
+
+    return count
+
+
+def notify_admin_fp_warehouse_finished(warehouse_name):
+    next_warehouse = get_next_fp_warehouse_name(warehouse_name)
+
+    if next_warehouse:
+        text = (
+            f"Склад {warehouse_name} закончился.\n"
+            f"Нужно открыть доступ к складу {next_warehouse}."
+        )
+    else:
+        text = (
+            f"Склад {warehouse_name} закончился.\n"
+            f"Следующего склада для выдачи не найдено."
+        )
+
+    tg_send_message(FP_WAREHOUSE_NOTIFY_ADMIN_ID, text)
 
 def find_free_fp(exclude_link=None):
     rows = get_sheet_rows_cached(SHEET_FPS)
@@ -1907,6 +1983,7 @@ def find_free_fp(exclude_link=None):
 
         fp_link = str(row[0]).strip()
         purchase_date_raw = str(row[1]).strip()
+        warehouse = str(row[4]).strip()
         status = str(row[5]).strip().lower()
 
         if status != "free":
@@ -1916,6 +1993,7 @@ def find_free_fp(exclude_link=None):
             continue
 
         purchase_date = parse_date(purchase_date_raw) or datetime.max
+        warehouse_key = extract_warehouse_sort_key(warehouse)
 
         candidates.append({
             "row_index": idx,
@@ -1924,13 +2002,15 @@ def find_free_fp(exclude_link=None):
             "purchase_date": purchase_date_raw,
             "price": row[2],
             "supplier": row[3],
-            "warehouse": row[4]
+            "warehouse": warehouse,
+            "warehouse_key": warehouse_key
         })
 
     if not candidates:
         return None
 
-    candidates.sort(key=lambda x: x["purchase_date_obj"])
+    # сначала по складу, потом по дате покупки
+    candidates.sort(key=lambda x: (x["warehouse_key"], x["purchase_date_obj"]))
     return candidates[0]
 
 
@@ -1997,7 +2077,8 @@ def confirm_fp_issue(chat_id, user_id, username):
                 return
 
             fp_link = row[0]
-            today = datetime.now(MOSCOW_TZ).strftime("%d/%m/%Y")
+            warehouse_name = row[4]
+            today = datetime.now().strftime("%d/%m/%Y")
             who_took_text = f"@{username}" if username else "без username"
 
             sheet_update_and_refresh(
@@ -2010,6 +2091,14 @@ def confirm_fp_issue(chat_id, user_id, username):
                     today
                 ]]
             )
+
+            remaining_in_warehouse = count_free_fp_in_warehouse(warehouse_name)
+
+            if remaining_in_warehouse == 0:
+                try:
+                    notify_admin_fp_warehouse_finished(warehouse_name)
+                except Exception:
+                    logging.exception("notify_admin_fp_warehouse_finished crashed")
 
             clear_state(user_id)
 
