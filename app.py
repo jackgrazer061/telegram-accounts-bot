@@ -2119,83 +2119,120 @@ def confirm_fp_issue(chat_id, user_id, username):
         tg_send_message(chat_id, "Ошибка выдачи ФП. Попробуй ещё раз.")
         send_accounts_main_menu(chat_id, "Меню Accounts:")
 
-def confirm_pixel_issue(chat_id, user_id, username):
+def issue_pixels_bulk(chat_id, user_id, username, count_needed):
     try:
-        with issue_lock:
-            state = get_state(user_id)
+        state = get_state(user_id)
 
-            if state.get("mode") != "pixel_found":
-                send_pixels_menu(chat_id, "Сначала выбери Пиксель заново.")
-                return
+        if state.get("mode") != "awaiting_pixel_count":
+            send_pixels_menu(chat_id, "Сначала начни выдачу Пикселей заново.")
+            return
 
-            row_index = state.get("pixel_row")
-            if not row_index:
-                send_pixels_menu(chat_id, "Не найден выбранный Пиксель. Начни заново.")
-                return
-
-            rows = get_sheet_rows_cached(SHEET_PIXELS)
-
-            if row_index - 1 >= len(rows):
-                clear_state(user_id)
-                send_pixels_menu(chat_id, "Пиксель не найден в таблице. Начни заново.")
-                return
-
-            row = rows[row_index - 1]
-            if len(row) < 8:
-                row = row + [''] * (8 - len(row))
-
-            status = str(row[3]).strip().lower()
-
-            if status == "taken":
-                clear_state(user_id)
-                send_pixels_menu(chat_id, "Этот Пиксель уже занят.")
-                return
-
-            if status == "ban":
-                clear_state(user_id)
-                send_pixels_menu(chat_id, "Этот Пиксель уже в ban.")
-                return
-
-            if status != "free":
-                clear_state(user_id)
-                send_pixels_menu(chat_id, "Этот Пиксель недоступен.")
-                return
-
-            today = datetime.now(MOSCOW_TZ).strftime("%d/%m/%Y")
-            who_took_text = f"@{username}" if username else "без username"
-
-            sheet_update_and_refresh(
-                SHEET_PIXELS,
-                f"D{row_index}:G{row_index}",
-                [[
-                    "taken",
-                    state["pixel_for_whom"],
-                    today,
-                    who_took_text
-                ]]
-            )
-
-            data_text = row[7]
+        pixel_for_whom = state.get("pixel_for_whom")
+        if not pixel_for_whom:
             clear_state(user_id)
+            send_pixels_menu(chat_id, "Не найдено для кого выдавать Пиксели. Начни заново.")
+            return
+
+        found_pixels = find_free_pixels(count_needed)
+
+        if len(found_pixels) < count_needed:
+            clear_state(user_id)
+            send_pixels_menu(chat_id, f"Недостаточно свободных Пикселей. Доступно: {len(found_pixels)}")
+            return
+
+        today = datetime.now().strftime("%d/%m/%Y")
+        who_took_text = f"@{username}" if username else "без username"
+
+        issued_messages = []
+        issue_rows = []
+
+        with issue_lock:
+            current_rows = get_sheet_rows_cached(SHEET_PIXELS, force=True)
+
+            for item in found_pixels:
+                row_index = item["row_index"]
+
+                if row_index - 1 >= len(current_rows):
+                    clear_state(user_id)
+                    send_pixels_menu(chat_id, "Один из Пикселей пропал из таблицы. Начни заново.")
+                    return
+
+                row = current_rows[row_index - 1]
+                if len(row) < 8:
+                    row = row + [''] * (8 - len(row))
+
+                status = str(row[3]).strip().lower()
+                if status != "free":
+                    clear_state(user_id)
+                    send_pixels_menu(chat_id, "Один из Пикселей уже не свободен. Начни заново.")
+                    return
+
+            for item in found_pixels:
+                row_index = item["row_index"]
+                row = current_rows[row_index - 1]
+                if len(row) < 8:
+                    row = row + [''] * (8 - len(row))
+
+                sheet_update_raw(
+                    SHEET_PIXELS,
+                    f"D{row_index}:G{row_index}",
+                    [[
+                        "taken",
+                        pixel_for_whom,
+                        today,
+                        who_took_text
+                    ]]
+                )
+
+                pixel_name = extract_pixel_name_from_data(row[7])
+
+                issue_rows.append([
+                    pixel_name,                          # A
+                    "PIXEL",                            # B
+                    row[0],                             # C дата покупки
+                    normalize_numeric_for_sheet(row[1]),# D цена
+                    today,                              # E дата выдачи
+                    row[2],                             # F поставщик
+                    pixel_for_whom                      # G кому выдали
+                ])
+
+                issued_messages.append({
+                    "pixel_name": pixel_name,
+                    "data_text": row[7]
+                })
+
+            refresh_sheet_cache(SHEET_PIXELS)
+
+            if issue_rows:
+                sheet_append_rows_and_refresh(
+                    SHEET_ISSUES,
+                    issue_rows,
+                    value_input_option="USER_ENTERED"
+                )
+
+            invalidate_stats_cache()
+
+        clear_state(user_id)
 
         tg_send_message(
             chat_id,
             f"Готово ✅\n\n"
-            f"Пиксель выдан.\n"
-            f"Для кого: {state['pixel_for_whom']}\n"
+            f"Выдано Пикселей: {len(issued_messages)}\n"
+            f"Для кого: {pixel_for_whom}\n"
             f"Кто взял в боте: {who_took_text}"
         )
 
-        if data_text:
-            tg_send_message(chat_id, data_text)
-        else:
-            tg_send_message(chat_id, "Данные Пикселя не найдены.")
+        for i, item in enumerate(issued_messages, start=1):
+            tg_send_message(
+                chat_id,
+                f"Пиксель {i}: {item['pixel_name']}\n\n{item['data_text']}"
+            )
 
         send_pixels_menu(chat_id, "Выбери следующее действие:")
 
     except Exception:
-        logging.exception("confirm_pixel_issue crashed")
-        tg_send_message(chat_id, "Ошибка выдачи Пикселя. Попробуй ещё раз.")
+        logging.exception("issue_pixels_bulk crashed")
+        tg_send_message(chat_id, "Ошибка выдачи Пикселей. Попробуй ещё раз.")
         send_pixels_menu(chat_id, "Меню Пикселей:")
 
 def find_pixel_in_base_by_data(pixel_query):
@@ -2236,6 +2273,56 @@ def build_pixel_search_text(pixel_query):
         f"Данные:\n{row[7] or 'нет данных'}"
     )
 
+    def extract_pixel_name_from_data(data_text):
+    text = str(data_text or "").strip()
+
+    if not text:
+        return "PIXEL"
+
+    # ищем строку вида: Имя пикселя: px13
+    match = re.search(r'Имя\s*пикселя\s*:\s*(.+)', text, re.IGNORECASE)
+    if match:
+        return match.group(1).strip()
+
+    # запасной вариант — просто первая непустая строка
+    for line in text.splitlines():
+        line = line.strip()
+        if line:
+            return line[:100]
+
+    return "PIXEL"
+
+
+def find_free_pixels(count_needed, exclude_rows=None):
+    rows = get_sheet_rows_cached(SHEET_PIXELS)
+
+    exclude_rows = set(exclude_rows or [])
+    candidates = []
+
+    for idx, row in enumerate(rows[1:], start=2):
+        if len(row) < 8:
+            row = row + [''] * (8 - len(row))
+
+        status = str(row[3]).strip().lower()
+        if status != "free":
+            continue
+
+        if idx in exclude_rows:
+            continue
+
+        purchase_date = parse_date(row[0]) or datetime.max
+
+        candidates.append({
+            "row_index": idx,
+            "purchase_date_obj": purchase_date,
+            "purchase_date": row[0],
+            "price": row[1],
+            "supplier": row[2],
+            "data_text": row[7]
+        })
+
+    candidates.sort(key=lambda x: x["purchase_date_obj"])
+    return candidates[:count_needed]
 
 def find_free_pixel(exclude_row=None):
     rows = get_sheet_rows_cached(SHEET_PIXELS)
@@ -5948,7 +6035,7 @@ def handle_message(msg):
         if text == SUBMENU_GET_PIXELS:
             clear_state(user_id)
             set_state(user_id, {"mode": "awaiting_pixel_department"})
-            send_department_menu(chat_id, "Выбери для кого Пиксель:")
+            send_department_menu(chat_id, "Выбери для кого Пиксели:")
             return
 
         if text == BTN_PIXEL_CONFIRM:
@@ -6683,17 +6770,27 @@ def handle_message(msg):
                 send_person_menu(chat_id, state.get("pixel_department"))
                 return
 
-            state["pixel_for_whom"] = text
-            set_state(user_id, state)
+            set_state(user_id, {
+                "mode": "awaiting_pixel_count",
+                "pixel_department": state.get("pixel_department"),
+                "pixel_for_whom": text
+            })
 
-            found = find_free_pixel()
+            tg_send_message(chat_id, "Сколько Пикселей нужно?")
+            return
 
-            if not found:
-                clear_state(user_id)
-                send_pixels_menu(chat_id, "Свободных Пикселей сейчас нет.")
+        if state.get("mode") == "awaiting_pixel_count":
+            try:
+                count_needed = int(text.strip())
+            except Exception:
+                tg_send_message(chat_id, "Впиши число.")
                 return
 
-            show_found_pixel(chat_id, user_id, found)
+            if count_needed <= 0:
+                tg_send_message(chat_id, "Количество должно быть больше нуля.")
+                return
+
+            issue_pixels_bulk(chat_id, user_id, username, count_needed)
             return
         
                 # ========= СОСТОЯНИЯ: фп =========
