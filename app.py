@@ -3238,6 +3238,15 @@ def clear_state(user_id):
     with state_lock:
         user_states.pop(str(user_id), None)
 
+def set_last_accounts_section(user_id, section_name):
+    state = get_state(user_id)
+    state["last_accounts_section"] = section_name
+    set_state(user_id, state)
+
+def get_last_accounts_section(user_id):
+    state = get_state(user_id)
+    return state.get("last_accounts_section", "")
+
 def find_account_in_base(account_number):
     rows = get_sheet_rows_cached(SHEET_ACCOUNTS)
 
@@ -4565,28 +4574,29 @@ def build_king_search_text(king_name):
 def build_stats_text():
 
     # ---------- КИНГИ ----------
-    kings_rows = get_sheet_rows_cached(SHEET_KINGS)
-
     kings_free = 0
     kings_taken = 0
     kings_ban = 0
     kings_geo_stats = {}
 
-    for row in kings_rows[1:]:
-        if len(row) < 10:
-            row = row + [''] * (10 - len(row))
+    for source_sheet in [SHEET_KINGS, SHEET_CRYPTO_KINGS]:
+        kings_rows = get_sheet_rows_cached(source_sheet)
 
-        status = str(row[4]).strip().lower()
-        geo = str(row[7]).strip()
+        for row in kings_rows[1:]:
+            if len(row) < 10:
+                row = row + [''] * (10 - len(row))
 
-        if status == "free":
-            kings_free += 1
-            if geo:
-                kings_geo_stats[geo] = kings_geo_stats.get(geo, 0) + 1
-        elif status == "taken":
-            kings_taken += 1
-        elif status == "ban":
-            kings_ban += 1
+            status = str(row[4]).strip().lower()
+            geo = str(row[7]).strip()
+
+            if status == "free":
+                kings_free += 1
+                if geo:
+                    kings_geo_stats[geo] = kings_geo_stats.get(geo, 0) + 1
+            elif status == "taken":
+                kings_taken += 1
+            elif status == "ban":
+                kings_ban += 1
 
     # ---------- ЛИЧКИ ----------
     accounts_rows = get_sheet_rows_cached(SHEET_ACCOUNTS)
@@ -5348,21 +5358,25 @@ def handle_message(msg):
 
         if text == MENU_KINGS:
             clear_state(user_id)
+            set_state(user_id, {"last_accounts_section": "kings"})
             send_kings_menu(chat_id)
             return
 
         if text == MENU_BMS:
             clear_state(user_id)
+            set_state(user_id, {"last_accounts_section": "bms"})
             send_bms_menu(chat_id)
             return
 
         if text == MENU_FPS:
             clear_state(user_id)
+            set_state(user_id, {"last_accounts_section": "fps"})
             send_fps_menu(chat_id)
             return
 
         if text == MENU_PIXELS:
             clear_state(user_id)
+            set_state(user_id, {"last_accounts_section": "pixels"})
             send_pixels_menu(chat_id)
             return
 
@@ -5372,7 +5386,29 @@ def handle_message(msg):
             return
 
         if text == BTN_BACK_TO_MENU:
+            last_section = state.get("last_accounts_section", "")
             clear_state(user_id)
+
+            if last_section == "kings":
+                set_state(user_id, {"last_accounts_section": "kings"})
+                send_kings_menu(chat_id, "Меню кингов:")
+                return
+
+            if last_section == "bms":
+                set_state(user_id, {"last_accounts_section": "bms"})
+                send_bms_menu(chat_id, "Меню БМов:")
+                return
+
+            if last_section == "fps":
+                set_state(user_id, {"last_accounts_section": "fps"})
+                send_fps_menu(chat_id, "Меню ФП:")
+                return
+
+            if last_section == "pixels":
+                set_state(user_id, {"last_accounts_section": "pixels"})
+                send_pixels_menu(chat_id, "Меню Пикселей:")
+                return
+
             send_main_menu(chat_id, user_id=user_id)
             return
 
