@@ -240,7 +240,7 @@ last_backup_date = None
 MOSCOW_TZ = ZoneInfo("Europe/Moscow")
 
 last_user_action = {}
-ACTION_COOLDOWN = 1
+ACTION_COOLDOWN = 0.2
 
 STATE_TTL = 600  # 10 минут
 
@@ -2078,7 +2078,7 @@ def confirm_fp_issue(chat_id, user_id, username):
 
             fp_link = row[0]
             warehouse_name = row[4]
-            today = datetime.now().strftime("%d/%m/%Y")
+            today = datetime.now(MOSCOW_TZ).strftime("%d/%m/%Y")
             who_took_text = f"@{username}" if username else "без username"
 
             sheet_update_and_refresh(
@@ -2119,6 +2119,103 @@ def confirm_fp_issue(chat_id, user_id, username):
         tg_send_message(chat_id, "Ошибка выдачи ФП. Попробуй ещё раз.")
         send_accounts_main_menu(chat_id, "Меню Accounts:")
 
+def confirm_pixel_issue(chat_id, user_id, username):
+    try:
+        with issue_lock:
+            state = get_state(user_id)
+
+            if state.get("mode") != "pixel_found":
+                send_pixels_menu(chat_id, "Сначала выбери Пиксель заново.")
+                return
+
+            row_index = state.get("pixel_row")
+            if not row_index:
+                send_pixels_menu(chat_id, "Не найден выбранный Пиксель. Начни заново.")
+                return
+
+            rows = get_sheet_rows_cached(SHEET_PIXELS)
+
+            if row_index - 1 >= len(rows):
+                clear_state(user_id)
+                send_pixels_menu(chat_id, "Пиксель не найден в таблице. Начни заново.")
+                return
+
+            row = rows[row_index - 1]
+            if len(row) < 8:
+                row = row + [''] * (8 - len(row))
+
+            status = str(row[3]).strip().lower()
+
+            if status == "taken":
+                clear_state(user_id)
+                send_pixels_menu(chat_id, "Этот Пиксель уже занят.")
+                return
+
+            if status == "ban":
+                clear_state(user_id)
+                send_pixels_menu(chat_id, "Этот Пиксель уже в ban.")
+                return
+
+            if status != "free":
+                clear_state(user_id)
+                send_pixels_menu(chat_id, "Этот Пиксель недоступен.")
+                return
+
+            today = datetime.now(MOSCOW_TZ).strftime("%d/%m/%Y")
+            who_took_text = f"@{username}" if username else "без username"
+            data_text = row[7]
+            pixel_name = extract_pixel_name_from_data(data_text)
+
+            sheet_update_and_refresh(
+                SHEET_PIXELS,
+                f"D{row_index}:G{row_index}",
+                [[
+                    "taken",
+                    state["pixel_for_whom"],
+                    today,
+                    who_took_text
+                ]]
+            )
+
+            next_row = get_next_empty_row_in_issues()
+            sheet_update_and_refresh(
+                SHEET_ISSUES,
+                f"A{next_row}:G{next_row}",
+                [[
+                    pixel_name,
+                    "PIXEL",
+                    row[0],
+                    normalize_numeric_for_sheet(row[1]),
+                    today,
+                    row[2],
+                    state["pixel_for_whom"]
+                ]]
+            )
+
+            invalidate_stats_cache()
+            clear_state(user_id)
+
+        tg_send_message(
+            chat_id,
+            f"Готово ✅\n\n"
+            f"Пиксель выдан.\n"
+            f"Имя: {pixel_name}\n"
+            f"Для кого: {state['pixel_for_whom']}\n"
+            f"Кто взял в боте: {who_took_text}"
+        )
+
+        if data_text:
+            tg_send_message(chat_id, data_text)
+        else:
+            tg_send_message(chat_id, "Данные Пикселя не найдены.")
+
+        send_pixels_menu(chat_id, "Выбери следующее действие:")
+
+    except Exception:
+        logging.exception("confirm_pixel_issue crashed")
+        tg_send_message(chat_id, "Ошибка выдачи Пикселя. Попробуй ещё раз.")
+        send_pixels_menu(chat_id, "Меню Пикселей:")
+
 def issue_pixels_bulk(chat_id, user_id, username, count_needed):
     try:
         state = get_state(user_id)
@@ -2140,7 +2237,7 @@ def issue_pixels_bulk(chat_id, user_id, username, count_needed):
             send_pixels_menu(chat_id, f"Недостаточно свободных Пикселей. Доступно: {len(found_pixels)}")
             return
 
-        today = datetime.now().strftime("%d/%m/%Y")
+        today = datetime.now(MOSCOW_TZ).strftime("%d/%m/%Y")
         who_took_text = f"@{username}" if username else "без username"
 
         issued_messages = []
@@ -3100,6 +3197,7 @@ def build_manager_stats_summary_text(username):
     kings_count = 0
     bms_count = 0
     fps_count = 0
+    pixels_count = 0
 
     accounts_rows = get_sheet_rows_cached(SHEET_ACCOUNTS)
     for row in accounts_rows[1:]:
@@ -3151,13 +3249,24 @@ def build_manager_stats_summary_text(username):
         if transfer_date and start_date <= transfer_date < end_date:
             fps_count += 1
 
+    pixels_rows = get_sheet_rows_cached(SHEET_PIXELS)
+    for row in pixels_rows[1:]:
+        if len(row) < 8:
+            row = row + [''] * (8 - len(row))
+        if str(row[6]).strip().lower() != target_username:
+            continue
+        transfer_date = parse_sheet_date(str(row[5]).strip())
+        if transfer_date and start_date <= transfer_date < end_date:
+            pixels_count += 1
+
     return (
         f"Статистика accounts {target_username}\n"
         f"Период: {start_date.strftime('%d/%m/%Y')} - {end_date.strftime('%d/%m/%Y')}\n\n"
         f"Кинги: {kings_count}\n"
         f"Лички: {accounts_count}\n"
         f"БМы: {bms_count}\n"
-        f"ФП: {fps_count}"
+        f"ФП: {fps_count}\n"
+        f"Пиксели: {pixels_count}"
     )
 
 def build_manager_stats_text(username):
@@ -3173,6 +3282,7 @@ def build_manager_stats_text(username):
     kings_rows = get_sheet_rows_cached(SHEET_KINGS)
     bms_rows = get_sheet_rows_cached(SHEET_BMS)
     fps_rows = get_sheet_rows_cached(SHEET_FPS)
+    pixels_rows = get_sheet_rows_cached(SHEET_PIXELS)
 
     accounts_lines = []
     for row in accounts_rows[1:]:
@@ -3239,6 +3349,20 @@ def build_manager_stats_text(username):
                 f"{row[0]} | {transfer_date.strftime('%d/%m/%Y')} | {row[6]}"
             )
 
+    pixels_lines = []
+    for row in pixels_rows[1:]:
+        if len(row) < 8:
+            row = row + [''] * (8 - len(row))
+
+        who_took = str(row[6]).strip().lower()
+        transfer_date = parse_sheet_date(row[5])
+
+        if who_took == target_username and transfer_date and start_date <= transfer_date < end_date:
+            pixel_name = extract_pixel_name_from_data(row[7]) if len(row) > 7 else ""
+            pixels_lines.append(
+                f"{pixel_name or 'Pixel'} | {transfer_date.strftime('%d/%m/%Y')} | {row[4]}"
+            )
+
     text_parts = [
         f"Статистика accounts {target_username}",
         f"Период: {start_date.strftime('%d/%m/%Y')} - {end_date.strftime('%d/%m/%Y')}",
@@ -3259,6 +3383,10 @@ def build_manager_stats_text(username):
 
     text_parts.append(f"ФП: {len(fps_lines)}")
     text_parts.extend(fps_lines if fps_lines else ["нет выдач"])
+
+    text_parts.append("")
+    text_parts.append(f"Пиксели: {len(pixels_lines)}")
+    text_parts.extend(pixels_lines if pixels_lines else ["нет выдач"])
 
     return "\n".join(text_parts)
 
@@ -3423,7 +3551,6 @@ def cleanup_processed_updates():
         for update_id in to_delete:
             processed_updates.pop(update_id, None)
 
-
 def is_duplicate_update(update_id):
     if update_id is None:
         return False
@@ -3443,6 +3570,10 @@ def set_state(user_id, data):
     with state_lock:
         user_states[str(user_id)] = data
 
+def update_state(user_id, **kwargs):
+    state = get_state(user_id)
+    state.update(kwargs)
+    set_state(user_id, state)
 
 def clear_state(user_id):
     with state_lock:
@@ -4863,6 +4994,26 @@ def build_stats_text():
         elif status == "taken":
             fps_taken += 1
 
+    # ---------- PIXELS ----------
+    pixels_rows = get_sheet_rows_cached(SHEET_PIXELS)
+
+    pixels_free = 0
+    pixels_taken = 0
+    pixels_ban = 0
+
+    for row in pixels_rows[1:]:
+        if len(row) < 8:
+            row = row + [''] * (8 - len(row))
+
+        status = str(row[3]).strip().lower()
+
+        if status == "free":
+            pixels_free += 1
+        elif status == "taken":
+            pixels_taken += 1
+        elif status == "ban":
+            pixels_ban += 1
+
     # ---------- FARM KINGS ----------
     farm_kings_rows = get_sheet_rows_cached(SHEET_FARM_KINGS)
 
@@ -4953,6 +5104,10 @@ def build_stats_text():
         "ФП:\n\n"
         f"Свободные: {fps_free}\n"
         f"Выдано: {fps_taken}\n\n"
+        "Пиксели:\n\n"
+        f"Свободные: {pixels_free}\n"
+        f"Выдано: {pixels_taken}\n"
+        f"В бане: {pixels_ban}\n\n"
         "Farm kings:\n\n"
         f"Свободные: {farm_kings_free}\n"
         f"Выдано: {farm_kings_taken}\n"
@@ -4972,18 +5127,18 @@ def build_stats_text():
 
 
 def send_free_kings(chat_id):
-    rows = get_sheet_rows_cached(SHEET_KINGS)
-
     free_rows = []
 
-    for row in rows[1:]:
-        if len(row) < 10:
-            row = row + [''] * (10 - len(row))
+    for source_sheet in [SHEET_KINGS, SHEET_CRYPTO_KINGS]:
+        rows = get_sheet_rows_cached(source_sheet)
 
-        status = str(row[4]).strip().lower()
+        for row in rows[1:]:
+            if len(row) < 10:
+                row = row + [''] * (10 - len(row))
 
-        if status == "free":
-            free_rows.append(row)
+            status = str(row[4]).strip().lower()
+            if status == "free":
+                free_rows.append(row)
 
     if not free_rows:
         tg_send_message(chat_id, "Свободных кингов сейчас нет.")
@@ -5394,11 +5549,23 @@ def handle_message(msg):
         chat_id = msg["chat"]["id"]
         user_id = msg["from"]["id"]
 
+        text = str(msg.get("text", "")).strip()
+        is_menu_click = text in {
+            MENU_ACCOUNTS, MENU_FARMERS, MENU_STATS, MENU_ADMIN,
+            SUBMENU_ACCOUNTS_MAIN, SUBMENU_BACK_MAIN, BTN_BACK_TO_MENU,
+            MENU_KINGS, MENU_BMS, MENU_FPS, MENU_PIXELS,
+            FARM_MENU_KING, FARM_MENU_BM, FARM_MENU_FP,
+            BTN_BACK_TO_FARMERS, BTN_BACK_FROM_ADMIN, BTN_BACK_FROM_ACCOUNTANTS,
+            BTN_BACK_FROM_ADMIN_FARMERS, MENU_CANCEL
+        }
+
         now = time.time()
         with user_action_lock:
             last = last_user_action.get(user_id, 0)
-            if now - last < ACTION_COOLDOWN:
+
+            if not is_menu_click and now - last < ACTION_COOLDOWN:
                 return
+
             last_user_action[user_id] = now
 
         username = msg["from"].get("username", "")
@@ -5563,6 +5730,7 @@ def handle_message(msg):
 
         if text == SUBMENU_ACCOUNTS_MAIN:
             clear_state(user_id)
+            set_state(user_id, {"last_accounts_section": "accounts"})
             send_accounts_menu(chat_id)
             return
 
@@ -5604,6 +5772,11 @@ def handle_message(msg):
                 send_kings_menu(chat_id, "Меню кингов:")
                 return
 
+            if last_section == "accounts":
+                set_state(user_id, {"last_accounts_section": "accounts"})
+                send_accounts_menu(chat_id, "Меню личек:")
+                return
+
             if last_section == "bms":
                 set_state(user_id, {"last_accounts_section": "bms"})
                 send_bms_menu(chat_id, "Меню БМов:")
@@ -5619,7 +5792,7 @@ def handle_message(msg):
                 send_pixels_menu(chat_id, "Меню Пикселей:")
                 return
 
-            send_main_menu(chat_id, user_id=user_id)
+            send_accounts_main_menu(chat_id, "Меню Accounts:")
             return
 
         if text == BTN_BACK_TO_FARMERS:
@@ -5757,17 +5930,17 @@ def handle_message(msg):
 
         # ========= ЛИЧКИ =========
         if text == SUBMENU_FREE:
-            set_state(user_id, {"mode": "awaiting_free_accounts_limit"})
+            update_state(user_id, mode="awaiting_free_accounts_limit")
             send_free_accounts_limit_menu(chat_id, "Выбери лимит для показа свободных личек:")
             return
 
         if text == SUBMENU_SEARCH:
-            set_state(user_id, {"mode": "awaiting_search_account"})
+            update_state(user_id, mode="awaiting_search_account")
             tg_send_message(chat_id, "Впиши номер лички для поиска.")
             return
 
         if text == SUBMENU_RETURN:
-            set_state(user_id, {"mode": "awaiting_return_account"})
+            update_state(user_id, mode="awaiting_return_account")
             tg_send_message(chat_id, "Впиши номер лички, которую нужно отправить в ban.")
             return
 
@@ -5874,24 +6047,24 @@ def handle_message(msg):
             return
 
         if text == SUBMENU_SEARCH_KING:
-            set_state(user_id, {"mode": "awaiting_search_king_name"})
+            update_state(user_id, mode="awaiting_search_king_name")
             tg_send_message(chat_id, "Впиши название кинга.")
             return
 
         if text == SUBMENU_RETURN_KING:
-            set_state(user_id, {"mode": "awaiting_return_king_name"})
+            update_state(user_id, mode="awaiting_return_king_name")
             tg_send_message(chat_id, "Впиши название кинга, который нужно перевести в ban.")
             return
 
         if text == SUBMENU_GET_KINGS:
             clear_state(user_id)
-            set_state(user_id, {"mode": "awaiting_king_geo"})
+            update_state(user_id, mode="awaiting_king_geo")
             send_king_geo_options(chat_id)
             return
 
         if text == SUBMENU_CRYPTO_KINGS:
             clear_state(user_id)
-            set_state(user_id, {"mode": "awaiting_crypto_king_geo"})
+            update_state(user_id, mode="awaiting_crypto_king_geo")
             send_crypto_king_geo_options(chat_id)
             return
 
@@ -5962,13 +6135,13 @@ def handle_message(msg):
             return
 
         if text == SUBMENU_SEARCH_BM:
-            set_state(user_id, {"mode": "awaiting_search_bm"})
+            update_state(user_id, mode="awaiting_search_bm")
             tg_send_message(chat_id, "Впиши ID БМа для поиска.")
             return
 
         if text == SUBMENU_GET_BM:
             clear_state(user_id)
-            set_state(user_id, {"mode": "awaiting_bm_department"})
+            update_state(user_id, mode="awaiting_bm_department")
             send_department_menu(chat_id, "Выбери для кого БМ:")
             return
 
@@ -5993,13 +6166,13 @@ def handle_message(msg):
 
         # ========= фп =========
         if text == SUBMENU_SEARCH_FP:
-            set_state(user_id, {"mode": "awaiting_search_fp"})
+            update_state(user_id, mode="awaiting_search_fp")
             tg_send_message(chat_id, "Впиши ссылку ФП для поиска.")
             return
 
         if text == SUBMENU_GET_FP:
             clear_state(user_id)
-            set_state(user_id, {"mode": "awaiting_fp_department"})
+            update_state(user_id, mode="awaiting_fp_department")
             send_department_menu(chat_id, "Выбери для кого ФП:")
             return
 
@@ -6023,18 +6196,18 @@ def handle_message(msg):
             return
 
         if text == SUBMENU_SEARCH_PIXEL:
-            set_state(user_id, {"mode": "awaiting_search_pixel"})
+            update_state(user_id, mode="awaiting_search_pixel")
             tg_send_message(chat_id, "Впиши часть данных Пикселя для поиска.")
             return
 
         if text == SUBMENU_RETURN_PIXEL:
-            set_state(user_id, {"mode": "awaiting_return_pixel"})
+            update_state(user_id, mode="awaiting_return_pixel")
             tg_send_message(chat_id, "Впиши часть данных Пикселя, который нужно перевести в ban.")
             return
 
         if text == SUBMENU_GET_PIXELS:
             clear_state(user_id)
-            set_state(user_id, {"mode": "awaiting_pixel_department"})
+            update_state(user_id, mode="awaiting_pixel_department")
             send_department_menu(chat_id, "Выбери для кого Пиксели:")
             return
 
@@ -7041,6 +7214,7 @@ def handle_message(msg):
 
 def handle_callback_query(callback_query):
     try:
+        touch_request_heartbeat()
         callback_id = callback_query["id"]
         data = callback_query.get("data", "")
         chat_id = callback_query["message"]["chat"]["id"]
@@ -7053,9 +7227,9 @@ def handle_callback_query(callback_query):
 
         if data.startswith("fullstats_accounts:"):
             username = data.split(":", 1)[1]
+            tg_answer_callback_query(callback_id)
             full_text = build_manager_stats_text(username)
 
-            tg_answer_callback_query(callback_id)
             safe_replace_stats_message(
                 chat_id=chat_id,
                 message_id=message_id,
@@ -7066,9 +7240,9 @@ def handle_callback_query(callback_query):
 
         if data.startswith("fullstats_farmers:"):
             username = data.split(":", 1)[1]
+            tg_answer_callback_query(callback_id)
             full_text = build_farmer_stats_text(username)
 
-            tg_answer_callback_query(callback_id)
             safe_replace_stats_message(
                 chat_id=chat_id,
                 message_id=message_id,
