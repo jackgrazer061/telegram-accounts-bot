@@ -2026,7 +2026,6 @@ def show_found_fp(chat_id, user_id, found):
         f"Ссылка: {found['fp_link']}\n"
         f"Дата покупки: {found['purchase_date']}\n"
         f"Цена: {found['price']}\n"
-        f"Склад: {found['warehouse']}\n"
         f"Для кого: {state['fp_for_whom']}"
     )
 
@@ -2049,10 +2048,11 @@ def confirm_fp_issue(chat_id, user_id, username):
 
             row_index = state.get("fp_row")
             if not row_index:
+                clear_state(user_id)
                 send_fps_menu(chat_id, "Не найдено выбранное ФП. Начни заново.")
                 return
 
-            rows = get_sheet_rows_cached(SHEET_FPS)
+            rows = get_sheet_rows_cached(SHEET_FPS, force=True)
 
             if row_index - 1 >= len(rows):
                 clear_state(user_id)
@@ -2071,29 +2071,57 @@ def confirm_fp_issue(chat_id, user_id, username):
                 send_fps_menu(chat_id, "Это ФП уже занято.")
                 return
 
+            if status == "ban":
+                clear_state(user_id)
+                send_fps_menu(chat_id, "Это ФП уже в ban.")
+                return
+
             if status != "free":
                 clear_state(user_id)
                 send_fps_menu(chat_id, "Это ФП недоступно.")
                 return
 
             fp_link = row[0]
+            purchase_date = row[1]
+            price = row[2]
+            supplier = row[3]
             warehouse_name = row[4]
+
             today = datetime.now(MOSCOW_TZ).strftime("%d/%m/%Y")
             who_took_text = f"@{username}" if username else "без username"
+            fp_for_whom = state["fp_for_whom"]
 
-            sheet_update_and_refresh(
+            sheet_update_raw(
                 SHEET_FPS,
                 f"F{row_index}:I{row_index}",
                 [[
                     "taken",
-                    state["fp_for_whom"],
+                    fp_for_whom,
                     who_took_text,
                     today
                 ]]
             )
 
-            remaining_in_warehouse = count_free_fp_in_warehouse(warehouse_name)
+            next_row = get_next_empty_row_in_issues()
+            sheet_update_raw(
+                SHEET_ISSUES,
+                f"A{next_row}:G{next_row}",
+                [[
+                    fp_link,
+                    "FP",
+                    purchase_date,
+                    normalize_numeric_for_sheet(price),
+                    today,
+                    supplier,
+                    fp_for_whom
+                ]]
+            )
 
+            refresh_sheet_cache(SHEET_FPS)
+            refresh_sheet_cache(SHEET_ISSUES)
+            invalidate_stats_cache()
+
+            remaining_in_warehouse = count_free_fp_in_warehouse(warehouse_name)
             if remaining_in_warehouse == 0:
                 try:
                     notify_admin_fp_warehouse_finished(warehouse_name)
@@ -2107,14 +2135,15 @@ def confirm_fp_issue(chat_id, user_id, username):
             f"Готово ✅\n\n"
             f"ФП выдано.\n"
             f"Ссылка: {fp_link}\n"
-            f"Для кого: {state['fp_for_whom']}\n"
+            f"Склад: {warehouse_name}\n"
+            f"Для кого: {fp_for_whom}\n"
             f"Кто взял в боте: {who_took_text}"
         )
 
         tg_send_message(chat_id, f"Ссылка:\n{fp_link}")
         send_accounts_main_menu(chat_id, "Меню Accounts:")
 
-    except Exception as e:
+    except Exception:
         logging.exception("confirm_fp_issue crashed")
         tg_send_message(chat_id, "Ошибка выдачи ФП. Попробуй ещё раз.")
         send_accounts_main_menu(chat_id, "Меню Accounts:")
