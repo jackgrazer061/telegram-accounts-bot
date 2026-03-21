@@ -2639,25 +2639,20 @@ def send_free_farm_kings(chat_id):
         tg_send_message(chat_id, "Свободных фарм кингов сейчас нет.")
         return
 
-    lines = []
-    for i, row in enumerate(free_rows, start=1):
-        lines.append(
-            f"{i}. {row[0] or '(без названия)'}\n"
-            f"Цена: {row[2]} | GEO: {row[7]}\n"
-        )
+    geo_stats = {}
+    for row in free_rows:
+        geo = str(row[7]).strip()
+        if geo:
+            geo_stats[geo] = geo_stats.get(geo, 0) + 1
 
-    header = f"Свободные фарм кинги: {len(free_rows)}\n\n"
-    current_text = header
+    lines = [f"{geo} — {count}" for geo, count in sorted(geo_stats.items())]
 
-    for line in lines:
-        if len(current_text) + len(line) > 3500:
-            tg_send_message(chat_id, current_text.strip())
-            current_text = line + "\n"
-        else:
-            current_text += line + "\n"
+    text = (
+        f"Свободные фарм кинги: {len(free_rows)}\n\n"
+        + "\n".join(lines)
+    )
 
-    if current_text.strip():
-        tg_send_message(chat_id, current_text.strip())
+    tg_send_message(chat_id, text)
 
 def find_free_farm_kings(count_needed, geo=None):
     rows = get_sheet_rows_cached(SHEET_FARM_KINGS)
