@@ -3672,6 +3672,15 @@ def set_last_accounts_section(user_id, section_name):
     state["last_accounts_section"] = section_name
     set_state(user_id, state)
 
+def set_last_farmers_section(user_id, section_name):
+    state = get_state(user_id)
+    state["last_farmers_section"] = section_name
+    set_state(user_id, state)
+
+def get_last_farmers_section(user_id):
+    state = get_state(user_id)
+    return state.get("last_farmers_section", "")
+
 def get_last_accounts_section(user_id):
     state = get_state(user_id)
     return state.get("last_accounts_section", "")
@@ -5902,35 +5911,46 @@ def handle_message(msg):
             return
 
         if text == BTN_BACK_TO_MENU:
-            last_section = state.get("last_accounts_section", "")
+            last_accounts_section = state.get("last_accounts_section", "")
+            last_farmers_section = state.get("last_farmers_section", "")
             clear_state(user_id)
 
-            if last_section == "kings":
+            if last_farmers_section == "kings":
+                set_state(user_id, {"last_farmers_section": "kings"})
+                send_farm_kings_menu(chat_id, "Меню Farm King:")
+                return
+
+            if last_farmers_section == "bms":
+                set_state(user_id, {"last_farmers_section": "bms"})
+                send_farm_bms_menu(chat_id, "Меню Farm BM:")
+                return
+
+            if last_farmers_section == "fps":
+                set_state(user_id, {"last_farmers_section": "fps"})
+                send_farm_fps_menu(chat_id, "Меню Farm FP:")
+                return
+
+            if last_accounts_section == "kings":
                 set_state(user_id, {"last_accounts_section": "kings"})
                 send_kings_menu(chat_id, "Меню кингов:")
                 return
 
-            if last_section == "accounts":
-                set_state(user_id, {"last_accounts_section": "accounts"})
-                send_accounts_menu(chat_id, "Меню личек:")
-                return
-
-            if last_section == "bms":
+            if last_accounts_section == "bms":
                 set_state(user_id, {"last_accounts_section": "bms"})
                 send_bms_menu(chat_id, "Меню БМов:")
                 return
 
-            if last_section == "fps":
+            if last_accounts_section == "fps":
                 set_state(user_id, {"last_accounts_section": "fps"})
                 send_fps_menu(chat_id, "Меню ФП:")
                 return
 
-            if last_section == "pixels":
+            if last_accounts_section == "pixels":
                 set_state(user_id, {"last_accounts_section": "pixels"})
                 send_pixels_menu(chat_id, "Меню Пикселей:")
                 return
 
-            send_accounts_main_menu(chat_id, "Меню Accounts:")
+            send_main_menu(chat_id, user_id=user_id)
             return
 
         if text == BTN_BACK_TO_FARMERS:
@@ -5948,6 +5968,7 @@ def handle_message(msg):
                 return
 
             clear_state(user_id)
+            set_state(user_id, {"last_farmers_section": "kings"})
             send_farm_kings_menu(chat_id)
             return
 
@@ -5957,6 +5978,7 @@ def handle_message(msg):
                 return
 
             clear_state(user_id)
+            set_state(user_id, {"last_farmers_section": "bms"})
             send_farm_bms_menu(chat_id)
             return
 
@@ -5966,6 +5988,7 @@ def handle_message(msg):
                 return
 
             clear_state(user_id)
+            set_state(user_id, {"last_farmers_section": "fps"})
             send_farm_fps_menu(chat_id)
             return
 
@@ -6180,16 +6203,31 @@ def handle_message(msg):
 
         # ========= КИНГИ =========
         if text == SUBMENU_FREE_KINGS:
+            if state.get("last_farmers_section") == "kings":
+                send_free_farm_kings(chat_id)
+                send_farm_kings_menu(chat_id, "Выбери следующее действие:")
+                return
+
             send_free_kings(chat_id)
             send_accounts_main_menu(chat_id, "Меню Accounts:")
             return
 
         if text == SUBMENU_SEARCH_KING:
+            if state.get("last_farmers_section") == "kings":
+                update_state(user_id, mode="awaiting_farm_search_king_name")
+                tg_send_message(chat_id, "Впиши название кинга.")
+                return
+
             update_state(user_id, mode="awaiting_search_king_name")
             tg_send_message(chat_id, "Впиши название кинга.")
             return
 
         if text == SUBMENU_RETURN_KING:
+            if state.get("last_farmers_section") == "kings":
+                update_state(user_id, mode="awaiting_farm_return_king_name")
+                tg_send_message(chat_id, "Впиши название кинга.")
+                return
+
             update_state(user_id, mode="awaiting_return_king_name")
             tg_send_message(chat_id, "Впиши название кинга, который нужно перевести в ban.")
             return
@@ -6272,17 +6310,32 @@ def handle_message(msg):
 
         # ========= БМы =========
         if text == SUBMENU_FREE_BMS:
+            if state.get("last_farmers_section") == "bms":
+                free_count = count_free_farm_bms()
+                tg_send_message(chat_id, f"Свободных фарм BMов: {free_count}")
+                send_farm_bms_menu(chat_id, "Выбери следующее действие:")
+                return
+
             free_count = count_free_bms()
             tg_send_message(chat_id, f"Свободных БМов: {free_count}")
             send_accounts_main_menu(chat_id, "Меню Accounts:")
             return
 
         if text == SUBMENU_SEARCH_BM:
+            if state.get("last_farmers_section") == "bms":
+                update_state(user_id, mode="awaiting_farm_search_bm")
+                tg_send_message(chat_id, "Впиши ID BM.")
+                return
+
             update_state(user_id, mode="awaiting_search_bm")
             tg_send_message(chat_id, "Впиши ID БМа для поиска.")
             return
 
         if text == SUBMENU_GET_BM:
+            if state.get("last_farmers_section") == "bms":
+                issue_farm_bm(chat_id, user_id, username)
+                return
+
             clear_state(user_id)
             update_state(user_id, mode="awaiting_bm_department")
             send_department_menu(chat_id, "Выбери для кого БМ:")
@@ -6309,11 +6362,21 @@ def handle_message(msg):
 
         # ========= фп =========
         if text == SUBMENU_SEARCH_FP:
+            if state.get("last_farmers_section") == "fps":
+                update_state(user_id, mode="awaiting_farm_search_fp")
+                tg_send_message(chat_id, "Впиши ссылку FP.")
+                return
+
             update_state(user_id, mode="awaiting_search_fp")
             tg_send_message(chat_id, "Впиши ссылку ФП для поиска.")
             return
 
         if text == SUBMENU_GET_FP:
+            if state.get("last_farmers_section") == "fps":
+                set_state(user_id, {"mode": "awaiting_farm_fp_count", "last_farmers_section": "fps"})
+                tg_send_message(chat_id, "Сколько FP нужно?")
+                return
+
             clear_state(user_id)
             update_state(user_id, mode="awaiting_fp_department")
             send_department_menu(chat_id, "Выбери для кого ФП:")
