@@ -306,7 +306,7 @@ def invalidate_stats_cache():
 # =========================
 # AUTO CACHE FOR SHEETS
 # =========================
-TABLE_CACHE_TTL = 3  # сек; можно 3-5
+TABLE_CACHE_TTL = 20
 
 table_cache = {
     SHEET_ACCOUNTS: {"rows": None, "updated_at": 0},
@@ -325,9 +325,12 @@ table_cache_lock = threading.Lock()
 
 
 def refresh_sheet_cache(sheet_name):
-    with google_lock:
-        sheet = get_sheet(sheet_name)
-        rows = sheet.get_all_values()
+    def _do():
+        with google_lock:
+            sheet = get_sheet(sheet_name)
+            return sheet.get_all_values()
+
+    rows = google_read_with_retry(_do)
 
     with table_cache_lock:
         table_cache[sheet_name]["rows"] = rows
@@ -410,6 +413,19 @@ def is_google_quota_error(exc):
         or "too many requests" in text
     )
 
+def google_read_with_retry(action, retries=5):
+    delay = 2
+
+    for attempt in range(retries):
+        try:
+            return action()
+        except Exception as e:
+            if not is_google_quota_error(e) or attempt == retries - 1:
+                raise
+
+            logging.warning(f"Google read quota hit, retry in {delay}s: {e}")
+            time.sleep(delay)
+            delay = min(delay * 2, 12)
 
 def google_write_with_retry(action, retries=5):
     delay = 2
@@ -458,15 +474,18 @@ def get_sheet(sheet_name):
     check_google_available()
 
     try:
-        if sheet_name in sheet_cache:
-            return sheet_cache[sheet_name]
+        cached = sheet_cache.get(sheet_name)
+        if cached is not None:
+            return cached
 
-        with google_lock:
+        start_time = time.time()
+
+        def _open_sheet():
             client = get_gspread_client()
             spreadsheet = client.open_by_key(SPREADSHEET_ID)
+            return spreadsheet.worksheet(sheet_name)
 
-            start_time = time.time()
-            sheet = spreadsheet.worksheet(sheet_name)
+        sheet = google_read_with_retry(_open_sheet)
 
         if time.time() - start_time > 10:
             logging.warning(f"Google Sheets slow response for '{sheet_name}'")
@@ -477,8 +496,7 @@ def get_sheet(sheet_name):
         return sheet
 
     except Exception as e:
-        logging.error(f"get_sheet first error for '{sheet_name}': {e}")
-
+        logging.error(f"get_sheet error for '{sheet_name}': {e}")
         google_error_count += 1
 
         if google_error_count >= 5:
@@ -490,33 +508,7 @@ def get_sheet(sheet_name):
 
         google_error_until = time.time() + cooldown
         reset_google_cache()
-        time.sleep(1)
-
-        try:
-            client = get_gspread_client()
-            spreadsheet = client.open_by_key(SPREADSHEET_ID)
-            sheet = spreadsheet.worksheet(sheet_name)
-
-            sheet_cache[sheet_name] = sheet
-            google_error_count = 0
-            google_error_until = 0
-            return sheet
-
-        except Exception as e2:
-            logging.error(f"get_sheet second error for '{sheet_name}': {e2}")
-
-            google_error_count += 1
-
-            if google_error_count >= 5:
-                cooldown = 30
-            elif google_error_count >= 3:
-                cooldown = 15
-            else:
-                cooldown = 5
-
-            google_error_until = time.time() + cooldown
-            reset_google_cache()
-            raise
+        raise
 
 
 # =========================
@@ -2311,7 +2303,7 @@ def issue_pixels_bulk(chat_id, user_id, username, count_needed):
         issue_rows = []
 
         with issue_lock:
-            current_rows = get_sheet_rows_cached(SHEET_PIXELS, force=True)
+            current_rows = get_sheet_rows_cached(SHEET_PIXELS)
 
             for item in found_pixels:
                 row_index = item["row_index"]
@@ -2813,7 +2805,7 @@ def issue_farm_kings(chat_id, user_id, username, king_names):
     messages = []
 
     with issue_lock:
-        current_rows = get_sheet_rows_cached(SHEET_FARM_KINGS, force=True)
+        current_rows = get_sheet_rows_cached(SHEET_FARM_KINGS)
 
         for item, king_name in zip(selected_rows, king_names):
             row_index = item["row_index"]
@@ -2991,7 +2983,7 @@ def issue_farm_bm(chat_id, user_id, username):
             return
 
         row_index = found["row_index"]
-        rows = get_sheet_rows_cached(SHEET_FARM_BMS, force=True)
+        rows = get_sheet_rows_cached(SHEET_FARM_BMS)
 
         if row_index - 1 >= len(rows):
             send_farm_bms_menu(chat_id, "BM не найден в таблице.")
@@ -3119,7 +3111,7 @@ def issue_farm_fps(chat_id, user_id, username, count_needed):
     messages = []
 
     with issue_lock:
-        current_rows = get_sheet_rows_cached(SHEET_FARM_FPS, force=True)
+        current_rows = get_sheet_rows_cached(SHEET_FARM_FPS)
 
         for item in found:
             row_index = item["row_index"]
@@ -4165,7 +4157,7 @@ def issue_accounts_bulk(account_numbers, for_whom, username):
     not_available = []
 
     with issue_lock, accounts_lock:
-        rows = get_sheet_rows_cached(SHEET_ACCOUNTS, force=True)
+        rows = get_sheet_rows_cached(SHEET_ACCOUNTS)
 
         indexed = {}
         for idx, row in enumerate(rows[1:], start=2):
@@ -4250,7 +4242,7 @@ def issue_next_quick_account_for_person(for_whom, username):
     who_took_text = f"@{username}" if username else "без username"
 
     with issue_lock, accounts_lock:
-        rows = get_sheet_rows_cached(SHEET_ACCOUNTS, force=True)
+        rows = get_sheet_rows_cached(SHEET_ACCOUNTS)
 
         candidates = []
         for idx, row in enumerate(rows[1:], start=2):
