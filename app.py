@@ -5760,8 +5760,17 @@ def handle_message(msg):
             return
 
         if text == MENU_MANAGER_STATS:
-            manager_stats_text = build_manager_stats_text(username)
-            tg_send_message(chat_id, manager_stats_text)
+            summary_text = build_manager_stats_summary_text(username)
+
+            tg_send_inline_message(
+                chat_id,
+                summary_text,
+                [[{
+                    "text": "Полная статистика",
+                    "callback_data": f"fullstats_accounts:{username}"
+                }]]
+            )
+
             send_accounts_main_menu(chat_id, "Меню Accounts:")
             return
 
@@ -5770,8 +5779,17 @@ def handle_message(msg):
                 tg_send_message(chat_id, "У вас нет доступа к этой статистике.")
                 return
 
-            farmer_stats_text = build_farmer_stats_text(username)
-            tg_send_message(chat_id, farmer_stats_text)
+            summary_text = build_farmer_stats_summary_text(username)
+
+            tg_send_inline_message(
+                chat_id,
+                summary_text,
+                [[{
+                    "text": "Полная статистика",
+                    "callback_data": f"fullstats_farmers:{username}"
+                }]]
+            )
+
             send_farmers_menu(chat_id, "Меню Farmers:")
             return
 
