@@ -3213,17 +3213,20 @@ def parse_limit_number(value):
     if not text:
         return None
 
-    if text in ["no limit", "unlim", "unlimited"]:
+    text = text.replace("_", " ").replace("-", " ")
+    text = re.sub(r"\s+", " ", text).strip()
+
+    if text in ["no limit", "unlim", "unlimited", "no limits"]:
         return "unlim"
 
-    text = text.replace(" ", "")
+    compact = text.replace(" ", "")
 
-    if "," in text:
-        integer_part = text.split(",")[0]
-    elif "." in text:
-        integer_part = text.split(".")[0]
+    if "," in compact:
+        integer_part = compact.split(",")[0]
+    elif "." in compact:
+        integer_part = compact.split(".")[0]
     else:
-        integer_part = text
+        integer_part = compact
 
     try:
         return int(integer_part)
@@ -4065,11 +4068,11 @@ def find_matching_free_account(limit_val, threshold_val, gmt_val, currency, excl
 
         if status != "free":
             continue
-        if str(row[4]).strip() != limit_val:
+        if parse_limit_number(row[4]) != parse_limit_number(limit_val):
             continue
-        if str(row[5]).strip() != threshold_val:
+        if str(row[5]).strip() != str(threshold_val).strip():
             continue
-        if str(row[6]).strip() != gmt_val:
+        if str(row[6]).strip() != str(gmt_val).strip():
             continue
         if row_currency != currency:
             continue
