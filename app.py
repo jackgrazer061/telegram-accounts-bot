@@ -3741,8 +3741,14 @@ def update_account_from_fastadscheck(account_number, limit_value, threshold_valu
         if len(row) < 14:
             row = row + [''] * (14 - len(row))
 
+        parsed_limit = parse_limit_number(limit_value)
+        if parsed_limit == "unlim":
+            limit_to_store = "unlim"
+        else:
+            limit_to_store = normalize_numeric_for_sheet(limit_value)
+
         values_en = [[
-            normalize_numeric_for_sheet(limit_value),      # E
+            limit_to_store,                                # E
             normalize_numeric_for_sheet(threshold_value),  # F
             str(gmt_value),                                # G
             row[7] if len(row) > 7 else "",                # H
@@ -4058,6 +4064,11 @@ def find_oldest_free_account(exclude_account=None):
 def find_matching_free_account(limit_val, threshold_val, gmt_val, currency, exclude_account=None):
     rows = get_sheet_rows_cached(SHEET_ACCOUNTS)
 
+    wanted_limit = parse_limit_number(limit_val)
+    wanted_threshold = str(threshold_val).strip()
+    wanted_gmt = str(gmt_val).strip()
+    wanted_currency = str(currency).strip()
+
     candidates = []
     for idx, row in enumerate(rows[1:], start=2):
         if len(row) <= ACCOUNT_CURRENCY_COL:
@@ -4068,13 +4079,13 @@ def find_matching_free_account(limit_val, threshold_val, gmt_val, currency, excl
 
         if status != "free":
             continue
-        if parse_limit_number(row[4]) != parse_limit_number(limit_val):
+        if parse_limit_number(row[4]) != wanted_limit:
             continue
-        if str(row[5]).strip() != str(threshold_val).strip():
+        if str(row[5]).strip() != wanted_threshold:
             continue
-        if str(row[6]).strip() != str(gmt_val).strip():
+        if str(row[6]).strip() != wanted_gmt:
             continue
-        if row_currency != currency:
+        if row_currency != wanted_currency:
             continue
         if exclude_account and str(row[0]).strip() == exclude_account:
             continue
@@ -7735,12 +7746,18 @@ def fastadscheck_add():
                     duplicates += 1
                     continue
 
+                parsed_limit = parse_limit_number(limit_value)
+                if parsed_limit == "unlim":
+                    limit_to_store = "unlim"
+                else:
+                    limit_to_store = normalize_numeric_for_sheet(limit_value) if limit_value is not None else ""
+
                 to_append.append([
                     account_id,
                     "",
                     "",
                     "",
-                    normalize_numeric_for_sheet(limit_value) if limit_value is not None else "",
+                    limit_to_store,
                     normalize_numeric_for_sheet(threshold_value) if threshold_value is not None else "",
                     gmt_value,
                     "",
