@@ -2245,11 +2245,9 @@ def confirm_pixel_issue(chat_id, user_id, username):
                 ]]
             )
 
-            next_row = get_next_empty_row_in_issues()
-            sheet_update_and_refresh(
+            sheet_append_row_and_refresh(
                 SHEET_ISSUES,
-                f"A{next_row}:G{next_row}",
-                [[
+                [
                     pixel_name,
                     "PIXEL",
                     row[0],
@@ -2257,7 +2255,8 @@ def confirm_pixel_issue(chat_id, user_id, username):
                     today,
                     row[2],
                     state["pixel_for_whom"]
-                ]]
+                ],
+                value_input_option="USER_ENTERED"
             )
 
             invalidate_stats_cache()
@@ -3017,11 +3016,9 @@ def issue_farm_bm(chat_id, user_id, username):
             ]]
         )
 
-        next_row = get_next_empty_row_in_issues()
-        sheet_update_and_refresh(
+        sheet_append_row_and_refresh(
             SHEET_ISSUES,
-            f"A{next_row}:G{next_row}",
-            [[
+            [
                 row[0],
                 "БМ",
                 row[1],
@@ -3029,7 +3026,8 @@ def issue_farm_bm(chat_id, user_id, username):
                 today,
                 row[3],
                 "farm"
-            ]]
+            ],
+            value_input_option="USER_ENTERED"
         )
 
         invalidate_stats_cache()
@@ -4633,12 +4631,9 @@ def confirm_bm_issue(chat_id, user_id, username):
                 ]]
             )
 
-            next_row = get_next_empty_row_in_issues()
-
-            sheet_update_and_refresh(
+            sheet_append_row_and_refresh(
                 SHEET_ISSUES,
-                f"A{next_row}:G{next_row}",
-                [[
+                [
                     bm_id,
                     "БМ",
                     purchase_date,
@@ -4646,7 +4641,8 @@ def confirm_bm_issue(chat_id, user_id, username):
                     today,
                     supplier,
                     state["bm_for_whom"]
-                ]]
+                ],
+                value_input_option="USER_ENTERED"
             )
 
             data_text = row[8] if len(row) > 8 else ""
@@ -4910,12 +4906,9 @@ def confirm_crypto_king_issue(chat_id, user_id, username):
         send_kings_menu(chat_id, "Меню кингов:")
 
 def append_king_to_issues_sheet(king_name, purchase_date, price, transfer_date, supplier, for_whom):
-    next_row = get_next_empty_row_in_issues()
-
-    sheet_update_and_refresh(
+    sheet_append_row_and_refresh(
         SHEET_ISSUES,
-        f"A{next_row}:G{next_row}",
-        [[
+        [
             king_name,
             "KING",
             purchase_date,
@@ -4923,7 +4916,8 @@ def append_king_to_issues_sheet(king_name, purchase_date, price, transfer_date, 
             transfer_date,
             supplier,
             for_whom
-        ]]
+        ],
+        value_input_option="USER_ENTERED"
     )
 
 def find_last_king_issue_row(king_name):
