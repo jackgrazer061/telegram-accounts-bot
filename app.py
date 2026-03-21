@@ -2527,6 +2527,38 @@ def show_found_pixel(chat_id, user_id, found):
     tg_send_message(chat_id, text, keyboard)
 
 
+def find_last_pixel_issue_row(pixel_name=None, pixel_id=None):
+    rows = get_sheet_rows_cached(SHEET_ISSUES)
+
+    last_match = None
+    target_name = str(pixel_name or "").strip().lower()
+    target_id = str(pixel_id or "").strip()
+
+    for idx, row in enumerate(rows[1:], start=2):
+        if len(row) < 7:
+            row = row + [''] * (7 - len(row))
+
+        issue_name = str(row[0]).strip().lower()
+        issue_type = str(row[1]).strip().lower()
+
+        if issue_type != "pixel":
+            continue
+
+        if target_name and issue_name == target_name:
+            last_match = {
+                "row_index": idx,
+                "row": row
+            }
+
+        elif target_id and target_id in issue_name:
+            last_match = {
+                "row_index": idx,
+                "row": row
+            }
+
+    return last_match
+
+
 def return_pixel_to_ban(pixel_query):
     found = find_pixel_in_base_by_data(pixel_query)
     if not found:
@@ -2540,11 +2572,19 @@ def return_pixel_to_ban(pixel_query):
     if status == "ban":
         return False, "Этот Пиксель уже в ban."
 
+    data_text = row[7]
+    pixel_name = extract_pixel_name_from_data(data_text)
+    pixel_id = extract_pixel_id_from_data(data_text)
+
     sheet_update_and_refresh(
         SHEET_PIXELS,
         f"D{found['row_index']}:E{found['row_index']}",
         [["ban", "ban"]]
     )
+
+    issue_info = find_last_pixel_issue_row(pixel_name=pixel_name, pixel_id=pixel_id)
+    if issue_info:
+        mark_issue_row_as_ban(issue_info["row_index"])
 
     invalidate_stats_cache()
     return True, "Пиксель переведён в ban."
@@ -2716,11 +2756,7 @@ def return_farm_king_to_ban(king_name):
 
     issue_info = find_last_king_issue_row(king_name)
     if issue_info:
-        sheet_update_and_refresh(
-            SHEET_ISSUES,
-            f"G{issue_info['row_index']}",
-            [["ban"]]
-        )
+        mark_issue_row_as_ban(issue_info["row_index"])
 
     invalidate_stats_cache()
     return True, f"Кинг '{king_name}' переведён в ban."
@@ -3704,6 +3740,15 @@ def find_last_issue_row(account_number):
             }
     return last_match
 
+def mark_issue_row_as_ban(issue_row_index):
+    if not issue_row_index:
+        return
+
+    sheet_update_and_refresh(
+        SHEET_ISSUES,
+        f"G{issue_row_index}",
+        [["ban"]]
+    )
 
 def is_banned_account(base_row, issue_row=None):
     base_target = ""
@@ -3740,11 +3785,7 @@ def return_account_to_ban(account_number):
     )
 
     if issue_info:
-        sheet_update_and_refresh(
-            SHEET_ISSUES,
-            f"G{issue_info['row_index']}",
-            [["ban"]]
-        )
+        mark_issue_row_as_ban(issue_info["row_index"])
 
     invalidate_stats_cache()
     return True, "Личка переведена в ban."
@@ -4910,14 +4951,54 @@ def return_king_to_ban(king_name):
 
     issue_info = find_last_king_issue_row(king_name)
     if issue_info:
-        sheet_update_and_refresh(
-            SHEET_ISSUES,
-            f"G{issue_info['row_index']}",
-            [["ban"]]
-        )
+        mark_issue_row_as_ban(issue_info["row_index"])
 
     invalidate_stats_cache()
     return True, f"Кинг '{king_name}' переведён в ban."
+
+def find_crypto_king_in_base_by_name(king_name):
+    rows = get_sheet_rows_cached(SHEET_CRYPTO_KINGS)
+    target = str(king_name).strip().lower()
+
+    for idx, row in enumerate(rows[1:], start=2):
+        if len(row) < 10:
+            row = row + [''] * (10 - len(row))
+
+        existing_name = str(row[0]).strip().lower()
+        if existing_name == target:
+            return {
+                "row_index": idx,
+                "row": row
+            }
+
+    return None
+
+
+def return_crypto_king_to_ban(king_name):
+    base_info = find_crypto_king_in_base_by_name(king_name)
+    if not base_info:
+        return False, "Crypto king не найден в База_крипта_кинги."
+
+    row = base_info["row"]
+    if len(row) < 10:
+        row = row + [''] * (10 - len(row))
+
+    status = str(row[4]).strip().lower()
+    if status == "ban":
+        return False, "Этот crypto king уже в ban."
+
+    sheet_update_and_refresh(
+        SHEET_CRYPTO_KINGS,
+        f"E{base_info['row_index']}:F{base_info['row_index']}",
+        [["ban", "ban"]]
+    )
+
+    issue_info = find_last_king_issue_row(king_name)
+    if issue_info:
+        mark_issue_row_as_ban(issue_info["row_index"])
+
+    invalidate_stats_cache()
+    return True, f"Crypto king '{king_name}' переведён в ban."
     
 def build_king_search_text(king_name):
     king_info = find_king_in_base_by_name(king_name)
@@ -6178,7 +6259,12 @@ def handle_message(msg):
                 return
 
             king_name = state.get("return_king_name", "")
-            ok, message = return_king_to_ban(king_name)
+            source = state.get("return_king_source", "normal")
+
+            if source == "crypto":
+                ok, message = return_crypto_king_to_ban(king_name)
+            else:
+                ok, message = return_king_to_ban(king_name)
 
             clear_state(user_id)
             send_accounts_main_menu(chat_id, message)
@@ -6382,6 +6468,17 @@ def handle_message(msg):
 
             if is_admin(user_id):
                 send_admin_menu(chat_id, "Выбери следующее действие:")
+            else:
+                send_main_menu(chat_id, "Готово. Выбери следующее действие:", user_id=user_id)
+            return
+
+        if state.get("mode") == "awaiting_farm_bms_text":
+            result = add_bms_from_txt_content(text, target_sheet=SHEET_FARM_BMS)
+            clear_state(user_id)
+            tg_send_message(chat_id, result)
+
+            if is_admin(user_id):
+                send_admin_farmers_menu(chat_id, "Выбери следующее действие:")
             else:
                 send_main_menu(chat_id, "Готово. Выбери следующее действие:", user_id=user_id)
             return
@@ -6835,15 +6932,18 @@ def handle_message(msg):
                 tg_send_message(chat_id, "Впиши название кинга.")
                 return
 
-            king_info = find_king_in_base_by_name(king_name)
-            if not king_info:
+            normal_king = find_king_in_base_by_name(king_name)
+            crypto_king = find_crypto_king_in_base_by_name(king_name)
+
+            if not normal_king and not crypto_king:
                 clear_state(user_id)
                 send_kings_menu(chat_id, "Кинг не найден.")
                 return
 
             set_state(user_id, {
                 "mode": "awaiting_return_king_confirm",
-                "return_king_name": king_name
+                "return_king_name": king_name,
+                "return_king_source": "crypto" if crypto_king and not normal_king else "normal"
             })
 
             keyboard = [
