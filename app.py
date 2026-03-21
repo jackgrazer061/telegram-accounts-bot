@@ -352,37 +352,78 @@ def get_sheet_rows_cached(sheet_name, force=False):
     return refresh_sheet_cache(sheet_name)
 
 
-def sheet_update_and_refresh(sheet_name, cell_range, values):
-    with google_lock:
-        sheet = get_sheet(sheet_name)
-        sheet.update(cell_range, values)
+def mark_sheet_cache_stale(sheet_name):
+    with table_cache_lock:
+        if sheet_name in table_cache:
+            table_cache[sheet_name]["updated_at"] = 0
 
-    refresh_sheet_cache(sheet_name)
+
+def sheet_update_and_refresh(sheet_name, cell_range, values):
+    def _do():
+        with google_lock:
+            sheet = get_sheet(sheet_name)
+            sheet.update(cell_range, values)
+
+    google_write_with_retry(_do)
+    mark_sheet_cache_stale(sheet_name)
+
 
 def sheet_update_raw(sheet_name, cell_range, values):
-    with google_lock:
-        sheet = get_sheet(sheet_name)
-        sheet.update(cell_range, values)
+    def _do():
+        with google_lock:
+            sheet = get_sheet(sheet_name)
+            sheet.update(cell_range, values)
+
+    google_write_with_retry(_do)
+    mark_sheet_cache_stale(sheet_name)
+
 
 def sheet_append_row_and_refresh(sheet_name, row, value_input_option="USER_ENTERED"):
-    with google_lock:
-        sheet = get_sheet(sheet_name)
-        sheet.append_row(row, value_input_option=value_input_option)
+    def _do():
+        with google_lock:
+            sheet = get_sheet(sheet_name)
+            sheet.append_row(row, value_input_option=value_input_option)
 
-    refresh_sheet_cache(sheet_name)
+    google_write_with_retry(_do)
+    mark_sheet_cache_stale(sheet_name)
 
 
 def sheet_append_rows_and_refresh(sheet_name, rows, value_input_option="USER_ENTERED"):
-    with google_lock:
-        sheet = get_sheet(sheet_name)
-        sheet.append_rows(rows, value_input_option=value_input_option)
+    def _do():
+        with google_lock:
+            sheet = get_sheet(sheet_name)
+            sheet.append_rows(rows, value_input_option=value_input_option)
 
-    refresh_sheet_cache(sheet_name)
+    google_write_with_retry(_do)
+    mark_sheet_cache_stale(sheet_name)
 
 def get_next_empty_row_in_issues():
     rows = get_sheet_rows_cached(SHEET_ISSUES)
     return len(rows) + 1
 
+def is_google_quota_error(exc):
+    text = str(exc).lower()
+    return (
+        "quota exceeded" in text
+        or "write requests per minute per user" in text
+        or "[429]" in text
+        or "too many requests" in text
+    )
+
+
+def google_write_with_retry(action, retries=5):
+    delay = 2
+
+    for attempt in range(retries):
+        try:
+            return action()
+        except Exception as e:
+            if not is_google_quota_error(e) or attempt == retries - 1:
+                raise
+
+            logging.warning(f"Google write quota hit, retry in {delay}s: {e}")
+            time.sleep(delay)
+            delay = min(delay * 2, 12)
 
 # =========================
 # GOOGLE SHEETS
@@ -4095,12 +4136,9 @@ def show_found_account(chat_id, user_id, found):
 
 
 def append_issue_row(account_number, purchase_date, price, transfer_date, supplier, for_whom):
-    next_row = get_next_empty_row_in_issues()
-
-    sheet_update_and_refresh(
+    sheet_append_row_and_refresh(
         SHEET_ISSUES,
-        f"A{next_row}:G{next_row}",
-        [[
+        [
             account_number,
             "РК",
             purchase_date,
@@ -4108,7 +4146,8 @@ def append_issue_row(account_number, purchase_date, price, transfer_date, suppli
             transfer_date,
             supplier,
             for_whom
-        ]]
+        ],
+        value_input_option="USER_ENTERED"
     )
 
 def issue_accounts_bulk(account_numbers, for_whom, username):
