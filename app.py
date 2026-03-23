@@ -49,6 +49,7 @@ ADMINS = {
 }
 
 FP_WAREHOUSE_NOTIFY_ADMIN_ID = 7573650707
+FARM_FP_WAREHOUSE_NOTIFY_ADMIN_ID = 7573650707
 
 ACCOUNTS_USERS = {
     7953116439: "WillemDafoe_Accmanager",
@@ -2004,6 +2005,90 @@ def notify_admin_fp_warehouse_finished(warehouse_name):
 
     tg_send_message(FP_WAREHOUSE_NOTIFY_ADMIN_ID, text)
 
+def get_next_farm_fp_warehouse_name(current_warehouse):
+    rows = get_sheet_rows_cached(SHEET_FARM_FPS)
+
+    warehouses = set()
+    for row in rows[1:]:
+        if len(row) < 5:
+            row = row + [''] * (5 - len(row))
+
+        warehouse = str(row[4]).strip()
+        if warehouse:
+            warehouses.add(warehouse)
+
+    if not warehouses:
+        return None
+
+    ordered = sorted(warehouses, key=extract_warehouse_sort_key)
+
+    current = str(current_warehouse or "").strip()
+    if current not in ordered:
+        return None
+
+    idx = ordered.index(current)
+    if idx + 1 < len(ordered):
+        return ordered[idx + 1]
+
+    return None
+
+
+def count_free_farm_fp_in_warehouse(warehouse_name):
+    rows = get_sheet_rows_cached(SHEET_FARM_FPS)
+
+    count = 0
+    target = str(warehouse_name or "").strip()
+
+    for row in rows[1:]:
+        if len(row) < 9:
+            row = row + [''] * (9 - len(row))
+
+        warehouse = str(row[4]).strip()
+        status = str(row[5]).strip().lower()
+
+        if warehouse == target and status == "free":
+            count += 1
+
+    return count
+
+
+def get_current_open_farm_fp_warehouse():
+    rows = get_sheet_rows_cached(SHEET_FARM_FPS)
+
+    free_warehouses = set()
+    for row in rows[1:]:
+        if len(row) < 9:
+            row = row + [''] * (9 - len(row))
+
+        warehouse = str(row[4]).strip()
+        status = str(row[5]).strip().lower()
+
+        if warehouse and status == "free":
+            free_warehouses.add(warehouse)
+
+    if not free_warehouses:
+        return None
+
+    ordered = sorted(free_warehouses, key=extract_warehouse_sort_key)
+    return ordered[0]
+
+
+def notify_admin_farm_fp_warehouse_finished(warehouse_name):
+    next_warehouse = get_next_farm_fp_warehouse_name(warehouse_name)
+
+    if next_warehouse:
+        text = (
+            f"Склад {warehouse_name} закончился.\n"
+            f"Нужно открыть доступ к складу {next_warehouse}."
+        )
+    else:
+        text = (
+            f"Склад {warehouse_name} закончился.\n"
+            f"Следующего склада для выдачи не найдено."
+        )
+
+    tg_send_message(FARM_FP_WAREHOUSE_NOTIFY_ADMIN_ID, text)
+
 def find_free_fp(exclude_link=None):
     rows = get_sheet_rows_cached(SHEET_FPS)
 
@@ -3040,12 +3125,22 @@ def issue_farm_bm(chat_id, user_id, username):
 def find_free_farm_fps(count_needed):
     rows = get_sheet_rows_cached(SHEET_FARM_FPS)
 
+    current_warehouse = get_current_open_farm_fp_warehouse()
+    if not current_warehouse:
+        return []
+
     candidates = []
     for idx, row in enumerate(rows[1:], start=2):
         if len(row) < 9:
             row = row + [''] * (9 - len(row))
 
-        if str(row[5]).strip().lower() != "free":
+        status = str(row[5]).strip().lower()
+        warehouse = str(row[4]).strip()
+
+        if status != "free":
+            continue
+
+        if warehouse != current_warehouse:
             continue
 
         purchase_date = parse_date(row[1]) or datetime.max
@@ -3100,8 +3195,20 @@ def build_farm_fp_search_text(fp_link):
 def issue_farm_fps(chat_id, user_id, username, count_needed):
     found = find_free_farm_fps(count_needed)
 
-    if len(found) < count_needed:
-        send_farm_fps_menu(chat_id, f"Недостаточно свободных FP. Доступно: {len(found)}")
+    current_warehouse = get_current_open_farm_fp_warehouse()
+
+    if not current_warehouse:
+        send_farm_fps_menu(chat_id, "Свободных FP сейчас нет.")
+        return
+
+    available_in_current = count_free_farm_fp_in_warehouse(current_warehouse)
+
+    if available_in_current < count_needed:
+        send_farm_fps_menu(
+            chat_id,
+            f"Недостаточно свободных FP на текущем складе {current_warehouse}. "
+            f"Доступно: {available_in_current}"
+        )
         return
 
     today = datetime.now(MOSCOW_TZ).strftime("%d/%m/%Y")
@@ -3111,7 +3218,7 @@ def issue_farm_fps(chat_id, user_id, username, count_needed):
     messages = []
 
     with issue_lock:
-        current_rows = get_sheet_rows_cached(SHEET_FARM_FPS)
+        current_rows = get_sheet_rows_cached(SHEET_FARM_FPS, force=True)
 
         for item in found:
             row_index = item["row_index"]
@@ -3126,6 +3233,10 @@ def issue_farm_fps(chat_id, user_id, username, count_needed):
 
             if str(row[5]).strip().lower() != "free":
                 send_farm_fps_menu(chat_id, "Одна из FP уже не свободна.")
+                return
+
+            if str(row[4]).strip() != current_warehouse:
+                send_farm_fps_menu(chat_id, "Одна из FP уже не из текущего склада.")
                 return
 
         for item in found:
@@ -3155,9 +3266,7 @@ def issue_farm_fps(chat_id, user_id, username, count_needed):
                 "farm"
             ])
 
-            messages.append(
-                f"Ссылка: {row[0]}\nСклад: {row[4]}"
-            )
+            messages.append(f"Ссылка: {row[0]}")
 
         refresh_sheet_cache(SHEET_FARM_FPS)
 
@@ -3170,9 +3279,23 @@ def issue_farm_fps(chat_id, user_id, username, count_needed):
 
         invalidate_stats_cache()
 
+    remaining_in_warehouse = count_free_farm_fp_in_warehouse(current_warehouse)
+
+    if remaining_in_warehouse == 0:
+        try:
+            notify_admin_farm_fp_warehouse_finished(current_warehouse)
+        except Exception:
+            logging.exception("notify_admin_farm_fp_warehouse_finished crashed")
+
     clear_state(user_id)
 
-    tg_send_message(chat_id, f"Готово ✅\n\nВыдано FP: {len(messages)}")
+    tg_send_message(
+        chat_id,
+        f"Готово ✅\n\n"
+        f"Выдано FP: {len(messages)}\n"
+        f"Склад: {current_warehouse}"
+    )
+
     for msg_text in messages:
         tg_send_message(chat_id, msg_text)
 
