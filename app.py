@@ -180,7 +180,7 @@ SUBMENU_GET_BM = 'Получить БМ'
 SUBMENU_FREE_BMS = 'Свободные БМы'
 SUBMENU_SEARCH_BM = 'Поиск БМа'
 SUBMENU_RETURN_BM = 'Вернуть БМ'
-BTN_BM_BAN_CONFIRM = 'Подтвердить ban'
+BTN_BM_BAN_CONFIRM = 'Подтвердить ban bm'
 
 SUBMENU_GET_FP = 'Выдать ФП'
 SUBMENU_SEARCH_FP = 'Поиск ФП'
