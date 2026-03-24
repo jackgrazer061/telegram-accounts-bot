@@ -9021,11 +9021,11 @@ def auto_healthcheck_loop():
         try:
             touch_background_heartbeat()
             run_auto_healthcheck_once()
-            time.sleep(180)  # каждые 3 минуты
+            time.sleep(1800)  # каждые 30 минут
         except Exception as e:
             notify_admin_about_error("auto_healthcheck_loop", str(e))
             logging.exception("auto_healthcheck_loop crashed")
-            time.sleep(30)
+            time.sleep(60)
         
 if __name__ == "__main__":
     # cache_thread = threading.Thread(target=cache_warmer_loop, daemon=True)
