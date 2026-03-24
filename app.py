@@ -122,6 +122,7 @@ BTN_FARM_KINGS_PARTIAL_CANCEL = 'Отмена'
 FARM_SUBMENU_GET_BM = 'Получить BM'
 FARM_SUBMENU_FREE_BMS = 'Свободные BMы'
 FARM_SUBMENU_SEARCH_BM = 'Поиск BMа'
+FARM_SUBMENU_RETURN_BM = 'Вернуть BM'
 
 FARM_SUBMENU_GET_FP = 'Выдать FP'
 FARM_SUBMENU_SEARCH_FP = 'Поиск FP'
@@ -178,6 +179,8 @@ SUBMENU_SEARCH_KING = 'Поиск кинга'
 SUBMENU_GET_BM = 'Получить БМ'
 SUBMENU_FREE_BMS = 'Свободные БМы'
 SUBMENU_SEARCH_BM = 'Поиск БМа'
+SUBMENU_RETURN_BM = 'Вернуть БМ'
+BTN_BM_BAN_CONFIRM = 'Подтвердить ban'
 
 SUBMENU_GET_FP = 'Выдать ФП'
 SUBMENU_SEARCH_FP = 'Поиск ФП'
@@ -690,6 +693,7 @@ def send_farm_bms_menu(chat_id, text="Меню Farm BM:"):
         [{"text": FARM_SUBMENU_GET_BM}],
         [{"text": FARM_SUBMENU_FREE_BMS}],
         [{"text": FARM_SUBMENU_SEARCH_BM}],
+        [{"text": FARM_SUBMENU_RETURN_BM}],
         [{"text": BTN_BACK_TO_FARMERS}]
     ]
     tg_send_message(chat_id, text, keyboard)
@@ -734,6 +738,7 @@ def send_bms_menu(chat_id, text="Меню БМов:"):
         [{"text": SUBMENU_GET_BM}],
         [{"text": SUBMENU_FREE_BMS}],
         [{"text": SUBMENU_SEARCH_BM}],
+        [{"text": SUBMENU_RETURN_BM}],
         [{"text": BTN_BACK_TO_MENU}]
     ]
     tg_send_message(chat_id, text, keyboard)
@@ -3055,6 +3060,36 @@ def build_farm_bm_search_text(bm_id):
         f"Данные:\n{row[8] or 'нет данных'}"
     )
 
+def return_farm_bm_to_ban(bm_id):
+    found = find_farm_bm_in_base(bm_id)
+    if not found:
+        return False, "BM не найден в База фарм бм."
+
+    row = found["row"]
+    if len(row) < 9:
+        row = row + [''] * (9 - len(row))
+
+    status = str(row[4]).strip().lower()
+
+    if status == "ban":
+        return False, "Этот BM уже в ban."
+
+    sheet_update_and_refresh(
+        SHEET_FARM_BMS,
+        f"E{found['row_index']}:F{found['row_index']}",
+        [["ban", "ban"]]
+    )
+
+    issue_info = find_last_bm_issue_row(bm_id)
+    if issue_info:
+        sheet_update_and_refresh(
+            SHEET_ISSUES,
+            f"G{issue_info['row_index']}",
+            [["ban"]]
+        )
+
+    invalidate_stats_cache()
+    return True, f"BM '{bm_id}' переведён в ban."
 
 def issue_farm_bm(chat_id, user_id, username):
     today = datetime.now(MOSCOW_TZ).strftime("%d/%m/%Y")
@@ -4672,6 +4707,36 @@ def build_bm_search_text(bm_id):
 
     return text
 
+def return_bm_to_ban(bm_id):
+    bm_info = find_bm_in_base(bm_id)
+    if not bm_info:
+        return False, "БМ не найден в База_БМ."
+
+    row = bm_info["row"]
+    if len(row) < 9:
+        row = row + [''] * (9 - len(row))
+
+    status = str(row[4]).strip().lower()
+
+    if status == "ban":
+        return False, "Этот БМ уже в ban."
+
+    sheet_update_and_refresh(
+        SHEET_BMS,
+        f"E{bm_info['row_index']}:F{bm_info['row_index']}",
+        [["ban", "ban"]]
+    )
+
+    issue_info = find_last_bm_issue_row(bm_id)
+    if issue_info:
+        sheet_update_and_refresh(
+            SHEET_ISSUES,
+            f"G{issue_info['row_index']}",
+            [["ban"]]
+        )
+
+    invalidate_stats_cache()
+    return True, f"БМ '{bm_id}' переведён в ban."
 
 def show_found_bm(chat_id, user_id, found):
     state = get_state(user_id)
@@ -5080,6 +5145,26 @@ def find_last_king_issue_row(king_name):
 
     return last_match
 
+def find_last_bm_issue_row(bm_id):
+    rows = get_sheet_rows_cached(SHEET_ISSUES)
+
+    last_match = None
+    target = str(bm_id).strip().lower()
+
+    for idx, row in enumerate(rows[1:], start=2):
+        if len(row) < 7:
+            row = row + [''] * (7 - len(row))
+
+        issue_name = str(row[0]).strip().lower()
+        issue_type = str(row[1]).strip().lower()
+
+        if issue_name == target and issue_type in ["бм", "bm"]:
+            last_match = {
+                "row_index": idx,
+                "row": row
+            }
+
+    return last_match
 
 def find_king_in_base_by_name(king_name):
     target = str(king_name).strip().lower()
@@ -6528,6 +6613,11 @@ def handle_message(msg):
             tg_send_message(chat_id, "Впиши ID БМа для поиска.")
             return
 
+        if text == SUBMENU_RETURN_BM:
+            set_state(user_id, {"mode": "awaiting_return_bm"})
+            tg_send_message(chat_id, "Впиши ID БМа, который нужно перевести в ban.")
+            return
+
         if text == SUBMENU_GET_BM:
             if state.get("last_farmers_section") == "bms":
                 issue_farm_bm(chat_id, user_id, username)
@@ -6540,6 +6630,26 @@ def handle_message(msg):
 
         if text == BTN_BM_CONFIRM:
             confirm_bm_issue(chat_id, user_id, username)
+            return
+
+        if text == BTN_BM_BAN_CONFIRM:
+            if state.get("mode") == "awaiting_return_bm_confirm":
+                bm_id = state.get("return_bm_id", "")
+                ok, message = return_bm_to_ban(bm_id)
+
+                clear_state(user_id)
+                send_bms_menu(chat_id, message)
+                return
+
+            if state.get("mode") == "awaiting_farm_return_bm_confirm":
+                bm_id = state.get("return_farm_bm_id", "")
+                ok, message = return_farm_bm_to_ban(bm_id)
+
+                clear_state(user_id)
+                send_farm_bms_menu(chat_id, message)
+                return
+
+            send_main_menu(chat_id, "Сначала выбери действие заново.", user_id=user_id)
             return
 
         if text == BTN_BM_NEXT:
@@ -6678,6 +6788,11 @@ def handle_message(msg):
         if text == FARM_SUBMENU_SEARCH_BM:
             set_state(user_id, {"mode": "awaiting_farm_search_bm"})
             tg_send_message(chat_id, "Впиши ID BM.")
+            return
+
+        if text == FARM_SUBMENU_RETURN_BM:
+            set_state(user_id, {"mode": "awaiting_farm_return_bm"})
+            tg_send_message(chat_id, "Впиши ID BM, который нужно перевести в ban.")
             return
 
         if text == FARM_SUBMENU_GET_FP:
@@ -7274,6 +7389,36 @@ def handle_message(msg):
             send_accounts_main_menu(chat_id, "Меню Accounts:")
             return
 
+        if state.get("mode") == "awaiting_return_bm":
+            bm_id = text.strip()
+
+            if not bm_id:
+                tg_send_message(chat_id, "Впиши ID БМа.")
+                return
+
+            bm_info = find_bm_in_base(bm_id)
+            if not bm_info:
+                clear_state(user_id)
+                send_bms_menu(chat_id, "БМ не найден.")
+                return
+
+            set_state(user_id, {
+                "mode": "awaiting_return_bm_confirm",
+                "return_bm_id": bm_id
+            })
+
+            keyboard = [
+                [{"text": BTN_BM_BAN_CONFIRM}],
+                [{"text": MENU_CANCEL}]
+            ]
+
+            tg_send_message(
+                chat_id,
+                f"Внимание: БМ '{bm_id}' будет перемещён в ban.\nПодтвердить?",
+                keyboard
+            )
+            return
+
         if state.get("mode") == "awaiting_pixels_add":
             result = add_pixels_from_text(text)
             clear_state(user_id)
@@ -7577,6 +7722,36 @@ def handle_message(msg):
 
             tg_send_message(chat_id, result)
             send_farm_bms_menu(chat_id, "Выбери следующее действие:")
+            return
+
+        if state.get("mode") == "awaiting_farm_return_bm":
+            bm_id = text.strip()
+
+            if not bm_id:
+                tg_send_message(chat_id, "Впиши ID BM.")
+                return
+
+            found = find_farm_bm_in_base(bm_id)
+            if not found:
+                clear_state(user_id)
+                send_farm_bms_menu(chat_id, "BM не найден.")
+                return
+
+            set_state(user_id, {
+                "mode": "awaiting_farm_return_bm_confirm",
+                "return_farm_bm_id": bm_id
+            })
+
+            keyboard = [
+                [{"text": BTN_BM_BAN_CONFIRM}],
+                [{"text": MENU_CANCEL}]
+            ]
+
+            tg_send_message(
+                chat_id,
+                f"Внимание: BM '{bm_id}' будет перемещён в ban.\nПодтвердить?",
+                keyboard
+            )
             return
 
         # ========= СОСТОЯНИЯ: FARM FP =========
