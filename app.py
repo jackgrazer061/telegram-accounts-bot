@@ -2515,11 +2515,24 @@ def issue_pixels_bulk(chat_id, user_id, username, count_needed):
             send_pixels_menu(chat_id, "Не найдено для кого выдавать Пиксели. Начни заново.")
             return
 
+        try:
+            count_needed = int(count_needed)
+        except Exception:
+            tg_send_message(chat_id, "Количество Пикселей должно быть числом.")
+            return
+
+        if count_needed <= 0:
+            tg_send_message(chat_id, "Количество должно быть больше нуля.")
+            return
+
         found_pixels = find_free_pixels(count_needed)
 
         if len(found_pixels) < count_needed:
             clear_state(user_id)
-            send_pixels_menu(chat_id, f"Недостаточно свободных Пикселей. Доступно: {len(found_pixels)}")
+            send_pixels_menu(
+                chat_id,
+                f"Недостаточно свободных Пикселей. Доступно: {len(found_pixels)}"
+            )
             return
 
         today = datetime.now(MOSCOW_TZ).strftime("%d/%m/%Y")
@@ -2529,8 +2542,9 @@ def issue_pixels_bulk(chat_id, user_id, username, count_needed):
         issue_rows = []
 
         with issue_lock:
-            current_rows = get_sheet_rows_cached(SHEET_PIXELS)
+            current_rows = get_sheet_rows_cached(SHEET_PIXELS, force=True)
 
+            # повторная проверка перед записью
             for item in found_pixels:
                 row_index = item["row_index"]
 
@@ -2542,6 +2556,7 @@ def issue_pixels_bulk(chat_id, user_id, username, count_needed):
                 row = current_rows[row_index - 1]
                 if len(row) < 8:
                     row = row + [''] * (8 - len(row))
+                    current_rows[row_index - 1] = row
 
                 status = str(row[3]).strip().lower()
                 if status != "free":
@@ -2549,12 +2564,19 @@ def issue_pixels_bulk(chat_id, user_id, username, count_needed):
                     send_pixels_menu(chat_id, "Один из Пикселей уже не свободен. Начни заново.")
                     return
 
+            # обновляем каждый пиксель
             for item in found_pixels:
                 row_index = item["row_index"]
                 row = current_rows[row_index - 1]
+
                 if len(row) < 8:
                     row = row + [''] * (8 - len(row))
+                    current_rows[row_index - 1] = row
 
+                data_text = str(row[7] or "").strip()
+                pixel_name = extract_pixel_name_from_data(data_text)
+
+                # D статус, E кому, F дата, G кто взял
                 sheet_update_raw(
                     SHEET_PIXELS,
                     f"D{row_index}:G{row_index}",
@@ -2566,31 +2588,39 @@ def issue_pixels_bulk(chat_id, user_id, username, count_needed):
                     ]]
                 )
 
-                pixel_name = extract_pixel_name_from_data(row[7])
+                # обновляем локальный кеш-слепок
+                row[3] = "taken"
+                row[4] = pixel_for_whom
+                row[5] = today
+                row[6] = who_took_text
 
                 issue_rows.append([
-                    pixel_name,                          # A
-                    "PIXEL",                            # B
-                    row[0],                             # C дата покупки
-                    normalize_numeric_for_sheet(row[1]),# D цена
-                    today,                              # E дата выдачи
-                    row[2],                             # F поставщик
-                    pixel_for_whom                      # G кому выдали
+                    pixel_name,
+                    "PIXEL",
+                    row[0],
+                    normalize_numeric_for_sheet(row[1]),
+                    today,
+                    row[2],
+                    pixel_for_whom
                 ])
 
                 issued_messages.append({
                     "pixel_name": pixel_name,
-                    "data_text": row[7]
+                    "data_text": data_text
                 })
 
-            refresh_sheet_cache(SHEET_PIXELS)
-
+            # одним добавлением пишем в Простые лички 26
             if issue_rows:
                 sheet_append_rows_and_refresh(
                     SHEET_ISSUES,
                     issue_rows,
                     value_input_option="USER_ENTERED"
                 )
+
+            # после всех изменений обновляем кеш пикселей
+            with table_cache_lock:
+                table_cache[SHEET_PIXELS]["rows"] = current_rows
+                table_cache[SHEET_PIXELS]["updated_at"] = time.time()
 
             invalidate_stats_cache()
 
@@ -2605,16 +2635,17 @@ def issue_pixels_bulk(chat_id, user_id, username, count_needed):
         )
 
         for i, item in enumerate(issued_messages, start=1):
-            tg_send_message(
-                chat_id,
-                f"Пиксель {i}: {item['pixel_name']}\n\n{item['data_text']}"
+            text_to_send = (
+                f"Пиксель {i}: {item['pixel_name']}\n\n"
+                f"{item['data_text']}"
             )
+            tg_send_long_message(chat_id, text_to_send)
 
         send_pixels_menu(chat_id, "Выбери следующее действие:")
 
-    except Exception:
+    except Exception as e:
         logging.exception("issue_pixels_bulk crashed")
-        tg_send_message(chat_id, "Ошибка выдачи Пикселей. Попробуй ещё раз.")
+        tg_send_message(chat_id, f"Ошибка выдачи Пикселей.\n\n{e}")
         send_pixels_menu(chat_id, "Меню Пикселей:")
 
 def extract_pixel_id_from_data(data_text):
