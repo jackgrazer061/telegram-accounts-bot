@@ -4822,7 +4822,6 @@ def show_found_king(chat_id, user_id, found):
     ]
 
     tg_send_message(chat_id, text, keyboard)
-
 def confirm_king_issue(chat_id, user_id, username):
     try:
         with issue_lock:
@@ -4837,7 +4836,7 @@ def confirm_king_issue(chat_id, user_id, username):
                 send_kings_menu(chat_id, "Не найден выбранный кинг. Начни заново.")
                 return
 
-            rows = get_sheet_rows_cached(SHEET_KINGS)
+            rows = get_sheet_rows_cached(SHEET_KINGS, force=True)
 
             if row_index - 1 >= len(rows):
                 clear_state(user_id)
@@ -4866,7 +4865,11 @@ def confirm_king_issue(chat_id, user_id, username):
                 send_kings_menu(chat_id, "Этот кинг недоступен.")
                 return
 
-            king_name = state["king_name"].strip()
+            king_name = str(state.get("king_name", "")).strip()
+            if not king_name:
+                clear_state(user_id)
+                send_kings_menu(chat_id, "Не найдено название кинга. Начни заново.")
+                return
 
             current_name_in_row = str(row[0]).strip()
             if not current_name_in_row and king_name_exists(king_name):
@@ -4877,6 +4880,9 @@ def confirm_king_issue(chat_id, user_id, username):
 
             today = datetime.now(MOSCOW_TZ).strftime("%d/%m/%Y")
             who_took_text = f"@{username}" if username else "без username"
+
+            geo_value = str(row[7]).strip()
+            data_text = str(row[9] if len(row) > 9 else "").strip()
 
             sheet_update_and_refresh(
                 SHEET_KINGS,
@@ -4889,7 +4895,7 @@ def confirm_king_issue(chat_id, user_id, username):
                     "taken",
                     state["king_for_whom"],
                     today,
-                    row[7],
+                    geo_value,
                     who_took_text
                 ]]
             )
@@ -4902,10 +4908,8 @@ def confirm_king_issue(chat_id, user_id, username):
                 supplier=row[3],
                 for_whom=state["king_for_whom"]
             )
+
             invalidate_stats_cache()
-
-            data_text = row[9] if len(row) > 9 else ""
-
             clear_state(user_id)
 
         tg_send_message(
@@ -4914,18 +4918,18 @@ def confirm_king_issue(chat_id, user_id, username):
             f"Кинг выдан.\n"
             f"Название: {king_name}\n"
             f"Для кого: {state['king_for_whom']}\n"
-            f"Гео: {row[7]}"
+            f"Гео: {geo_value}"
         )
 
         if data_text:
-            tg_send_message(chat_id, data_text)
+            tg_send_long_message(chat_id, data_text)
         else:
             tg_send_message(chat_id, "Данные кинга не найдены.")
 
         send_accounts_main_menu(chat_id, "Меню Accounts:")
 
     except Exception as e:
-        logging.error(f"confirm_king_issue error: {e}")
+        logging.exception("confirm_king_issue crashed")
         tg_send_message(chat_id, "Ошибка выдачи кинга. Попробуй ещё раз.")
         send_accounts_main_menu(chat_id, "Меню Accounts:")
 
@@ -4943,7 +4947,7 @@ def confirm_crypto_king_issue(chat_id, user_id, username):
                 send_kings_menu(chat_id, "Не найден выбранный crypto king. Начни заново.")
                 return
 
-            rows = get_sheet_rows_cached(SHEET_CRYPTO_KINGS)
+            rows = get_sheet_rows_cached(SHEET_CRYPTO_KINGS, force=True)
 
             if row_index - 1 >= len(rows):
                 clear_state(user_id)
@@ -4972,7 +4976,11 @@ def confirm_crypto_king_issue(chat_id, user_id, username):
                 send_kings_menu(chat_id, "Этот crypto king недоступен.")
                 return
 
-            king_name = state["king_name"].strip()
+            king_name = str(state.get("king_name", "")).strip()
+            if not king_name:
+                clear_state(user_id)
+                send_kings_menu(chat_id, "Не найдено название crypto king. Начни заново.")
+                return
 
             current_name_in_row = str(row[0]).strip()
             if not current_name_in_row and crypto_king_name_exists(king_name):
@@ -4983,6 +4991,9 @@ def confirm_crypto_king_issue(chat_id, user_id, username):
 
             today = datetime.now(MOSCOW_TZ).strftime("%d/%m/%Y")
             who_took_text = f"@{username}" if username else "без username"
+
+            geo_value = str(row[7]).strip()
+            data_text = str(row[9] if len(row) > 9 else "").strip()
 
             sheet_update_and_refresh(
                 SHEET_CRYPTO_KINGS,
@@ -4995,7 +5006,7 @@ def confirm_crypto_king_issue(chat_id, user_id, username):
                     "taken",
                     state["king_for_whom"],
                     today,
-                    row[7],
+                    geo_value,
                     who_took_text
                 ]]
             )
@@ -5009,7 +5020,6 @@ def confirm_crypto_king_issue(chat_id, user_id, username):
                 for_whom=state["king_for_whom"]
             )
 
-            data_text = row[9] if len(row) > 9 else ""
             invalidate_stats_cache()
             clear_state(user_id)
 
@@ -5019,18 +5029,18 @@ def confirm_crypto_king_issue(chat_id, user_id, username):
             f"Crypto king выдан.\n"
             f"Название: {king_name}\n"
             f"Для кого: {state['king_for_whom']}\n"
-            f"Гео: {row[7]}"
+            f"Гео: {geo_value}"
         )
 
         if data_text:
-            tg_send_message(chat_id, data_text)
+            tg_send_long_message(chat_id, data_text)
         else:
             tg_send_message(chat_id, "Данные crypto king не найдены.")
 
         send_kings_menu(chat_id, "Выбери следующее действие:")
 
     except Exception as e:
-        logging.error(f"confirm_crypto_king_issue error: {e}")
+        logging.exception("confirm_crypto_king_issue crashed")
         tg_send_message(chat_id, "Ошибка выдачи crypto king. Попробуй ещё раз.")
         send_kings_menu(chat_id, "Меню кингов:")
 
