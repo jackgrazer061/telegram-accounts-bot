@@ -5177,47 +5177,59 @@ def return_crypto_king_to_ban(king_name):
     return True, f"Crypto king '{king_name}' переведён в ban."
     
 def build_king_search_text(king_name):
-    king_info = find_king_in_base_by_name(king_name)
-
-    if not king_info:
+    target = str(king_name).strip().lower()
+    if not target:
         return None
 
-    row = king_info["row"]
-    sheet_name = king_info["sheet_name"]
+    found = None
+    source_title = "Кинг"
+
+    # сначала ищем в обычных кингах
+    king_info = find_king_in_base_by_name(target)
+    if king_info:
+        found = king_info
+        source_title = "Кинг"
+    else:
+        # потом ищем в crypto kings
+        rows = get_sheet_rows_cached(SHEET_CRYPTO_KINGS)
+
+        for idx, row in enumerate(rows[1:], start=2):
+            if len(row) < 10:
+                row = row + [''] * (10 - len(row))
+
+            existing_name = str(row[0]).strip().lower()
+
+            if existing_name == target:
+                found = {
+                    "row_index": idx,
+                    "row": row
+                }
+                source_title = "Crypto king"
+                break
+
+    if not found:
+        return None
+
+    row = found["row"]
 
     if len(row) < 10:
         row = row + [''] * (10 - len(row))
 
-    base_label = "Crypto king" if sheet_name == SHEET_CRYPTO_KINGS else "King"
-
-    name = row[0]
-    price = row[2]
-    status = row[4]
-    for_whom = row[5]
-    taken_date = row[6]
-    who_took = row[8]
-    data_text = row[9]
-
-    if not who_took:
-        who_took = "не указано"
-
-    if not for_whom:
-        for_whom = "не указано"
-
-    if not taken_date:
-        taken_date = "не указана"
-
-    if not status:
-        status = "не указан"
-
-    if not data_text:
-        data_text = "нет данных"
+    name = row[0] or "без названия"
+    price = row[2] or "не указана"
+    status = row[4] or "не указан"
+    for_whom = row[5] or "не указано"
+    taken_date = row[6] or "не указана"
+    geo = row[7] or "не указано"
+    who_took = row[8] or "не указано"
+    data_text = row[9] or "нет данных"
 
     text = (
-        f"Тип: {base_label}\n"
+        f"{source_title}:\n"
         f"Название: {name}\n"
         f"Статус: {status}\n"
         f"Цена: {price}\n"
+        f"Гео: {geo}\n"
         f"Дата взятия: {taken_date}\n"
         f"Кто взял: {who_took}\n"
         f"Для кого взял: {for_whom}\n\n"
@@ -7169,8 +7181,8 @@ def handle_message(msg):
                 send_kings_menu(chat_id, "Кинг не найден.")
                 return
 
-            tg_send_message(chat_id, result)
-            send_accounts_main_menu(chat_id, "Меню Accounts:")
+            tg_send_long_message(chat_id, result)
+            send_kings_menu(chat_id, "Меню кингов:")
             return
 
         if state.get("mode") == "awaiting_return_king_name":
