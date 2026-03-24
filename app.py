@@ -51,6 +51,13 @@ ADMINS = {
 FP_WAREHOUSE_NOTIFY_ADMIN_ID = 7573650707
 FARM_FP_WAREHOUSE_NOTIFY_ADMIN_ID = 7573650707
 
+BOT_ERROR_NOTIFY_ADMIN_ID = 7573650707
+BOT_ERROR_NOTIFY_ADMIN_NAME = "JackGrazer_Deputy_Head_Account"
+
+last_error_notifications = {}
+error_notify_lock = threading.Lock()
+ERROR_NOTIFY_COOLDOWN = 300  # 5 минут на одинаковую ошибку
+
 ACCOUNTS_USERS = {
     7953116439: "WillemDafoe_Accmanager",
     8334712952: "Ariana_Grande_Account_manager",
@@ -614,6 +621,41 @@ def tg_answer_callback_query(callback_query_id, text=""):
         )
     except Exception as e:
         logging.error(f"tg_answer_callback_query error: {e}")
+
+def tg_send_message_safe(chat_id, text, keyboard=None):
+    try:
+        tg_send_message(chat_id, text, keyboard)
+    except Exception:
+        logging.exception("tg_send_message_safe crashed")
+
+
+def notify_admin_about_error(source, error_text, extra_text=""):
+    try:
+        source_key = str(source or "unknown")
+        err_key = str(error_text or "unknown").strip()[:300]
+        dedupe_key = f"{source_key}|{err_key}"
+
+        now = time.time()
+
+        with error_notify_lock:
+            last_ts = last_error_notifications.get(dedupe_key, 0)
+            if now - last_ts < ERROR_NOTIFY_COOLDOWN:
+                return
+            last_error_notifications[dedupe_key] = now
+
+        message = (
+            "🚨 Ошибка в боте\n\n"
+            f"Источник: {source_key}\n"
+            f"Ошибка: {error_text}"
+        )
+
+        if extra_text:
+            message += f"\n\nДетали:\n{extra_text}"
+
+        tg_send_long_message(BOT_ERROR_NOTIFY_ADMIN_ID, message)
+
+    except Exception:
+        logging.exception("notify_admin_about_error crashed")
 
 def send_main_menu(chat_id, text="Главное меню:", user_id=None):
     if user_id is not None and is_admin(user_id):
@@ -1618,6 +1660,11 @@ def handle_document_message(msg):
 
     except Exception as e:
         logging.exception("handle_document_message crashed")
+        notify_admin_about_error(
+            "handle_document_message",
+            str(e),
+            extra_text=f"user_id={msg.get('from', {}).get('id')}, chat_id={msg.get('chat', {}).get('id')}"
+        )
         try:
             error_text = str(e)
 
@@ -2730,6 +2777,16 @@ def extract_pixel_name_from_data(data_text):
 
     return "PIXEL"
 
+def extract_pixel_id_from_data(data_text):
+    text = str(data_text or "").strip()
+    if not text:
+        return ""
+
+    match = re.search(r'ID\s*пикселя\s*:\s*([0-9]+)', text, re.IGNORECASE)
+    if match:
+        return match.group(1).strip()
+
+    return ""
 
 def find_free_pixels(count_needed, exclude_rows=None):
     rows = get_sheet_rows_cached(SHEET_PIXELS)
@@ -6161,7 +6218,7 @@ def run_bot_diagnostics():
     except Exception as e:
         add_result("Основная таблица открывается", False, str(e))
 
-    # 4. Проверка всех рабочих листов
+    # 4. Проверка всех листов
     sheets_to_check = [
         SHEET_ACCOUNTS,
         SHEET_ISSUES,
@@ -6191,10 +6248,18 @@ def run_bot_diagnostics():
     except Exception as e:
         add_result("Бэкап таблица открывается", False, str(e))
 
-    # 6. Проверка обновления кеша
+    # 6. Проверка кеша
     try:
         refresh_sheet_cache(SHEET_ACCOUNTS)
         refresh_sheet_cache(SHEET_ISSUES)
+        refresh_sheet_cache(SHEET_KINGS)
+        refresh_sheet_cache(SHEET_CRYPTO_KINGS)
+        refresh_sheet_cache(SHEET_BMS)
+        refresh_sheet_cache(SHEET_FPS)
+        refresh_sheet_cache(SHEET_PIXELS)
+        refresh_sheet_cache(SHEET_FARM_KINGS)
+        refresh_sheet_cache(SHEET_FARM_BMS)
+        refresh_sheet_cache(SHEET_FARM_FPS)
         add_result("Кеш таблиц обновляется", True)
     except Exception as e:
         add_result("Кеш таблиц обновляется", False, str(e))
@@ -6204,30 +6269,91 @@ def run_bot_diagnostics():
         parse_date("15/02/2026")
         parse_price("123.45")
         normalize_numeric_for_sheet("100")
+        normalize_gmt_value("GMT +3")
+        normalize_currency_value("GBP_GB")
+        extract_digits("ID пикселя: 2426379717814486")
+        extract_pixel_name_from_data("Имя пикселя: px6\nID пикселя: 123")
         add_result("Базовые функции работают", True)
     except Exception as e:
         add_result("Базовые функции работают", False, str(e))
 
-    # 8. Проверка общей статистики
+    # 8. Проверка логики поиска
+    try:
+        get_free_king_geos()
+        get_free_crypto_king_geos()
+        count_free_bms()
+        count_free_farm_bms()
+        count_free_fp_in_warehouse("Выдать фп 95 бот")
+        add_result("Поисковые функции работают", True)
+    except Exception as e:
+        add_result("Поисковые функции работают", False, str(e))
+
+    # 9. Проверка общей статистики
     try:
         build_stats_text()
         add_result("Общая статистика собирается", True)
     except Exception as e:
         add_result("Общая статистика собирается", False, str(e))
 
-    # 9. Проверка статистики accounts
+    # 10. Проверка статистики accounts
     try:
+        build_manager_stats_summary_text("test_user")
         build_manager_stats_text("test_user")
         add_result("Статистика accounts собирается", True)
     except Exception as e:
         add_result("Статистика accounts собирается", False, str(e))
 
-    # 10. Проверка статистики farmers
+    # 11. Проверка статистики farmers
     try:
+        build_farmer_stats_summary_text("test_user")
         build_farmer_stats_text("test_user")
         add_result("Статистика farmers собирается", True)
     except Exception as e:
         add_result("Статистика farmers собирается", False, str(e))
+
+    # 12. Проверка структуры таблиц
+    try:
+        structure_result = run_sheet_structure_checks()
+        report.extend(structure_result["report"])
+        ok_count += structure_result["ok_count"]
+        fail_count += structure_result["fail_count"]
+    except Exception as e:
+        add_result("Проверка структуры таблиц", False, str(e))
+
+    # 13. Проверка дублей ID / BM / pixel ID
+    try:
+        duplicates_result = run_duplicates_checks()
+        report.extend(duplicates_result["report"])
+        ok_count += duplicates_result["ok_count"]
+        fail_count += duplicates_result["fail_count"]
+    except Exception as e:
+        add_result("Проверка дублей ID / BM / pixel ID", False, str(e))
+        
+    # 13. Проверка складов ФП
+    try:
+        rows = get_sheet_rows_cached(SHEET_FPS)
+        warehouses = sorted({
+            str(row[4]).strip()
+            for row in rows[1:]
+            if len(row) > 4 and str(row[4]).strip()
+        }, key=extract_warehouse_sort_key)
+
+        add_result("Склады accounts ФП читаются", True, f"Найдено складов: {len(warehouses)}")
+    except Exception as e:
+        add_result("Склады accounts ФП читаются", False, str(e))
+
+    # 14. Проверка складов farm ФП
+    try:
+        rows = get_sheet_rows_cached(SHEET_FARM_FPS)
+        warehouses = sorted({
+            str(row[4]).strip()
+            for row in rows[1:]
+            if len(row) > 4 and str(row[4]).strip()
+        }, key=extract_warehouse_sort_key)
+
+        add_result("Склады farm ФП читаются", True, f"Найдено складов: {len(warehouses)}")
+    except Exception as e:
+        add_result("Склады farm ФП читаются", False, str(e))
 
     summary = (
         "Проверка бота завершена\n\n"
@@ -6238,6 +6364,220 @@ def run_bot_diagnostics():
     )
 
     return summary
+
+def run_sheet_structure_checks():
+    report = []
+    ok_count = 0
+    fail_count = 0
+
+    def add_result(name, ok, details=""):
+        nonlocal ok_count, fail_count
+        mark = "✅" if ok else "❌"
+        line = f"{mark} {name}"
+        if details:
+            line += f" — {details}"
+        report.append(line)
+        if ok:
+            ok_count += 1
+        else:
+            fail_count += 1
+
+    checks = [
+        (SHEET_ACCOUNTS, 14, "Лички"),
+        (SHEET_ISSUES, 7, "Простые лички 26"),
+        (SHEET_KINGS, 10, "Кинги"),
+        (SHEET_CRYPTO_KINGS, 10, "Крипта кинги"),
+        (SHEET_BMS, 9, "БМы"),
+        (SHEET_FPS, 9, "ФП"),
+        (SHEET_PIXELS, 8, "Пиксели"),
+        (SHEET_FARM_KINGS, 10, "Фарм кинги"),
+        (SHEET_FARM_BMS, 9, "Фарм БМ"),
+        (SHEET_FARM_FPS, 9, "Фарм ФП"),
+    ]
+
+    for sheet_name, min_cols, title in checks:
+        try:
+            rows = get_sheet_rows_cached(sheet_name, force=True)
+
+            if not rows:
+                add_result(f"{title}: лист не пустой", False, "Лист пустой")
+                continue
+
+            header = rows[0]
+            if len(header) < min_cols:
+                add_result(
+                    f"{title}: структура колонок",
+                    False,
+                    f"Ожидалось минимум {min_cols} колонок, сейчас {len(header)}"
+                )
+            else:
+                add_result(
+                    f"{title}: структура колонок",
+                    True,
+                    f"Колонок: {len(header)}"
+                )
+
+            bad_rows = 0
+            for row in rows[1:]:
+                if len(row) > 0 and len(row) < min_cols:
+                    bad_rows += 1
+
+            if bad_rows > 0:
+                add_result(
+                    f"{title}: короткие строки",
+                    False,
+                    f"Найдено строк с нехваткой колонок: {bad_rows}"
+                )
+            else:
+                add_result(f"{title}: короткие строки", True)
+
+        except Exception as e:
+            add_result(f"{title}: проверка структуры", False, str(e))
+
+    return {
+        "ok_count": ok_count,
+        "fail_count": fail_count,
+        "report": report
+    }
+
+def run_duplicates_checks():
+    report = []
+    ok_count = 0
+    fail_count = 0
+
+    def add_result(name, ok, details=""):
+        nonlocal ok_count, fail_count
+        mark = "✅" if ok else "❌"
+        line = f"{mark} {name}"
+        if details:
+            line += f" — {details}"
+        report.append(line)
+
+        if ok:
+            ok_count += 1
+        else:
+            fail_count += 1
+
+    # 1. Дубли ID личек (База_личек, колонка A = индекс 0)
+    try:
+        acc_dupes = find_duplicate_values_in_sheet(
+            sheet_name=SHEET_ACCOUNTS,
+            value_index=0,
+            min_cols=14
+        )
+
+        if acc_dupes:
+            preview = []
+            for value, rows in list(acc_dupes.items())[:10]:
+                preview.append(f"{value} (строки: {', '.join(map(str, rows[:10]))})")
+
+            add_result(
+                "Проверка дублей ID личек",
+                False,
+                f"Найдено дублей: {len(acc_dupes)}; " + " | ".join(preview)
+            )
+        else:
+            add_result("Проверка дублей ID личек", True)
+    except Exception as e:
+        add_result("Проверка дублей ID личек", False, str(e))
+
+    # 2. Дубли BM ID (База_БМ, колонка A = индекс 0)
+    try:
+        bm_dupes = find_duplicate_values_in_sheet(
+            sheet_name=SHEET_BMS,
+            value_index=0,
+            min_cols=9
+        )
+
+        if bm_dupes:
+            preview = []
+            for value, rows in list(bm_dupes.items())[:10]:
+                preview.append(f"{value} (строки: {', '.join(map(str, rows[:10]))})")
+
+            add_result(
+                "Проверка дублей BM ID",
+                False,
+                f"Найдено дублей: {len(bm_dupes)}; " + " | ".join(preview)
+            )
+        else:
+            add_result("Проверка дублей BM ID", True)
+    except Exception as e:
+        add_result("Проверка дублей BM ID", False, str(e))
+
+    # 3. Дубли pixel ID (База_пикселей, ID берется из H колонки / data_text)
+    try:
+        rows = get_sheet_rows_cached(SHEET_PIXELS, force=True)
+
+        seen = {}
+        pixel_dupes = {}
+
+        for row_index, row in enumerate(rows[1:], start=2):
+            if len(row) < 8:
+                row = row + [''] * (8 - len(row))
+
+            pixel_id = extract_pixel_id_from_data(row[7])
+
+            if not pixel_id:
+                continue
+
+            if pixel_id in seen:
+                if pixel_id not in pixel_dupes:
+                    pixel_dupes[pixel_id] = [seen[pixel_id]]
+                pixel_dupes[pixel_id].append(row_index)
+            else:
+                seen[pixel_id] = row_index
+
+        if pixel_dupes:
+            preview = []
+            for value, rows_list in list(pixel_dupes.items())[:10]:
+                preview.append(f"{value} (строки: {', '.join(map(str, rows_list[:10]))})")
+
+            add_result(
+                "Проверка дублей pixel ID",
+                False,
+                f"Найдено дублей: {len(pixel_dupes)}; " + " | ".join(preview)
+            )
+        else:
+            add_result("Проверка дублей pixel ID", True)
+    except Exception as e:
+        add_result("Проверка дублей pixel ID", False, str(e))
+
+    return {
+        "ok_count": ok_count,
+        "fail_count": fail_count,
+        "report": report
+    }
+
+def find_duplicate_values_in_sheet(sheet_name, value_index, min_cols=1, normalize_func=None, skip_header=True):
+    rows = get_sheet_rows_cached(sheet_name, force=True)
+
+    seen = {}
+    duplicates = {}
+
+    start_row_index = 2 if skip_header else 1
+    data_rows = rows[1:] if skip_header else rows
+
+    for offset, row in enumerate(data_rows, start=start_row_index):
+        if len(row) < min_cols:
+            row = row + [''] * (min_cols - len(row))
+
+        raw_value = row[value_index] if len(row) > value_index else ""
+        value = str(raw_value).strip()
+
+        if normalize_func:
+            value = normalize_func(value)
+
+        if not value:
+            continue
+
+        if value in seen:
+            if value not in duplicates:
+                duplicates[value] = [seen[value]]
+            duplicates[value].append(offset)
+        else:
+            seen[value] = offset
+
+    return duplicates
 
 def tg_send_long_message(chat_id, text, chunk_size=3500):
     text = str(text or "").strip()
@@ -8287,6 +8627,11 @@ def handle_message(msg):
 
     except Exception as e:
         logging.exception("handle_message crashed")
+        notify_admin_about_error(
+            "handle_message",
+            str(e),
+            extra_text=f"user_id={user_id}, chat_id={chat_id}, text={text}"
+        )
         try:
             error_text = str(e)
 
@@ -8374,6 +8719,11 @@ def handle_callback_query(callback_query):
 
     except Exception as e:
         logging.exception("handle_callback_query crashed")
+        notify_admin_about_error(
+            "handle_callback_query",
+            str(e),
+            extra_text=f"user_id={callback_query.get('from', {}).get('id')}, data={callback_query.get('data', '')}"
+        )
         try:
             tg_answer_callback_query(callback_query["id"], "Ошибка")
         except Exception:
@@ -8427,6 +8777,7 @@ def webhook():
 
     except Exception as e:
         logging.exception(f"webhook error: {e}")
+        notify_admin_about_error("webhook", str(e))
         return jsonify({"ok": True})
 
 @app.route("/fastadscheck-import", methods=["POST"])
@@ -8500,6 +8851,7 @@ def fastadscheck_import():
 
     except Exception as e:
         logging.exception("fastadscheck_import crashed")
+        notify_admin_about_error("fastadscheck_import", str(e))
         return jsonify({
             "ok": False,
             "error": str(e)
@@ -8604,10 +8956,76 @@ def fastadscheck_add():
 
     except Exception as e:
         logging.exception("fastadscheck_add crashed")
+        notify_admin_about_error("fastadscheck_add", str(e))
         return jsonify({
             "ok": False,
             "error": str(e)
         }), 500
+
+def run_auto_healthcheck_once():
+    try:
+        rows_accounts = get_sheet_rows_cached(SHEET_ACCOUNTS, force=True)
+        rows_issues = get_sheet_rows_cached(SHEET_ISSUES, force=True)
+        rows_kings = get_sheet_rows_cached(SHEET_KINGS, force=True)
+        rows_crypto = get_sheet_rows_cached(SHEET_CRYPTO_KINGS, force=True)
+        rows_bms = get_sheet_rows_cached(SHEET_BMS, force=True)
+        rows_fps = get_sheet_rows_cached(SHEET_FPS, force=True)
+        rows_pixels = get_sheet_rows_cached(SHEET_PIXELS, force=True)
+        rows_farm_kings = get_sheet_rows_cached(SHEET_FARM_KINGS, force=True)
+        rows_farm_bms = get_sheet_rows_cached(SHEET_FARM_BMS, force=True)
+        rows_farm_fps = get_sheet_rows_cached(SHEET_FARM_FPS, force=True)
+
+        all_checks = [
+            ("База_личек", rows_accounts, 14),
+            ("Простые лички 26", rows_issues, 7),
+            ("База_кингов", rows_kings, 10),
+            ("База_крипта_кинги", rows_crypto, 10),
+            ("База_БМ", rows_bms, 9),
+            ("База_ФП", rows_fps, 9),
+            ("База_пикселей", rows_pixels, 8),
+            ("База фарм кинги", rows_farm_kings, 10),
+            ("База фарм бм", rows_farm_bms, 9),
+            ("База фарм фп", rows_farm_fps, 9),
+        ]
+
+        for title, rows, min_cols in all_checks:
+            if not rows:
+                raise RuntimeError(f"Лист '{title}' пустой или не читается")
+
+            header = rows[0]
+            if len(header) < min_cols:
+                raise RuntimeError(
+                    f"Лист '{title}' сломан: колонок меньше нормы ({len(header)} < {min_cols})"
+                )
+
+        # Доп. проверка статистики
+        build_stats_text()
+        build_manager_stats_summary_text("test_user")
+        build_farmer_stats_summary_text("test_user")
+        duplicates_result = run_duplicates_checks()
+        if duplicates_result["fail_count"] > 0:
+            raise RuntimeError(
+                "Найдены дубли в таблицах: " + " | ".join(duplicates_result["report"][:10])
+            )
+
+        return True
+
+    except Exception as e:
+        notify_admin_about_error("auto_healthcheck", str(e))
+        logging.exception("run_auto_healthcheck_once crashed")
+        return False
+
+
+def auto_healthcheck_loop():
+    while True:
+        try:
+            touch_background_heartbeat()
+            run_auto_healthcheck_once()
+            time.sleep(180)  # каждые 3 минуты
+        except Exception as e:
+            notify_admin_about_error("auto_healthcheck_loop", str(e))
+            logging.exception("auto_healthcheck_loop crashed")
+            time.sleep(30)
         
 if __name__ == "__main__":
     # cache_thread = threading.Thread(target=cache_warmer_loop, daemon=True)
@@ -8618,6 +9036,9 @@ if __name__ == "__main__":
 
     watchdog_thread = threading.Thread(target=watchdog_loop, daemon=True)
     watchdog_thread.start()
+
+    auto_health_thread = threading.Thread(target=auto_healthcheck_loop, daemon=True)
+    auto_health_thread.start()
 
     port = int(os.environ.get("PORT", 10000))
     app.run(host="0.0.0.0", port=port)
