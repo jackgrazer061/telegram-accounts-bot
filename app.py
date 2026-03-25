@@ -3628,15 +3628,15 @@ def limit_matches_filter(limit_value, selected_filter):
         return parsed != "unlim" and 301 <= parsed <= 800
 
     if selected_filter == FREE_LIMIT_1200:
-        return parsed != "unlim" and 801 <= parsed <= 1200
+        return parsed != "unlim" and 801 <= parsed <= 1300
 
     if selected_filter == FREE_LIMIT_1500:
-        return parsed != "unlim" and 1201 <= parsed <= 1500
+        return parsed != "unlim" and 1301 <= parsed <= 1600
 
     if selected_filter == FREE_LIMIT_UNLIM:
         if parsed == "unlim":
             return True
-        return parsed != "unlim" and parsed >= 1501
+        return parsed != "unlim" and parsed >= 1601
 
     return False
 
