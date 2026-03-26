@@ -1121,6 +1121,20 @@ def tg_send_king_data_as_txt(chat_id, king_name, data_text, caption=None):
         caption=caption
     )
 
+def tg_send_king_search_result_as_txt(chat_id, title, king_name, meta_text, data_text):
+    meta_text = str(meta_text or "").strip()
+    data_text = str(data_text or "").strip()
+
+    full_text = meta_text
+    if data_text:
+        full_text += f"\n\nДанные:\n{data_text}"
+
+    tg_send_king_data_as_txt(
+        chat_id=chat_id,
+        king_name=king_name or title or "king_search",
+        data_text=full_text
+    )
+
 def extract_digits(text):
     return re.sub(r"\D", "", str(text or ""))
 
@@ -3179,17 +3193,24 @@ def build_farm_king_search_text(king_name):
     if len(row) < 12:
         row = row + [''] * (12 - len(row))
 
-    full_data_text = get_full_king_data_from_row(row)
+    full_data_text = get_full_king_data_from_row(row) or ""
 
-    return (
+    meta_text = (
+        f"Farm king:\n"
         f"Название: {row[0]}\n"
         f"Статус: {row[4] or 'не указан'}\n"
         f"Цена: {row[2] or 'не указана'}\n"
         f"Дата взятия: {row[6] or 'не указана'}\n"
         f"Кто взял: {row[8] or 'не указано'}\n"
-        f"Для кого: {row[5] or 'не указано'}\n\n"
-        f"Данные:\n{full_data_text or 'нет данных'}"
+        f"Для кого: {row[5] or 'не указано'}"
     )
+
+    return {
+        "title": "Farm king",
+        "king_name": row[0] or king_name,
+        "meta_text": meta_text,
+        "data_text": full_data_text
+    }
 
 
 def return_farm_king_to_ban(king_name):
@@ -5896,9 +5917,9 @@ def build_king_search_text(king_name):
     taken_date = row[6] or "не указана"
     geo = row[7] or "не указано"
     who_took = row[8] or "не указано"
-    data_text = get_full_king_data_from_row(row) or "нет данных"
+    data_text = get_full_king_data_from_row(row) or ""
 
-    text = (
+    meta_text = (
         f"{source_title}:\n"
         f"Название: {name}\n"
         f"Статус: {status}\n"
@@ -5906,12 +5927,16 @@ def build_king_search_text(king_name):
         f"Гео: {geo}\n"
         f"Дата взятия: {taken_date}\n"
         f"Кто взял: {who_took}\n"
-        f"Для кого взял: {for_whom}\n\n"
-        f"Данные:\n{data_text}"
+        f"Для кого взял: {for_whom}"
     )
 
-    return text
-
+    return {
+        "title": source_title,
+        "king_name": name,
+        "meta_text": meta_text,
+        "data_text": data_text
+    }
+    
 def build_stats_text():
 
     # ---------- КИНГИ ----------
@@ -8252,10 +8277,17 @@ def handle_message(msg):
                 send_kings_menu(chat_id, "Кинг не найден.")
                 return
 
-            tg_send_long_message(chat_id, result)
+            tg_send_king_search_result_as_txt(
+                chat_id=chat_id,
+                title=result["title"],
+                king_name=result["king_name"],
+                meta_text=result["meta_text"],
+                data_text=result["data_text"]
+            )
+
             send_kings_menu(chat_id, "Меню кингов:")
             return
-
+            
         if state.get("mode") == "awaiting_return_king_name":
             king_name = text.strip()
 
@@ -8661,7 +8693,14 @@ def handle_message(msg):
                 send_farm_kings_menu(chat_id, "Кинг не найден.")
                 return
 
-            tg_send_message(chat_id, result)
+            tg_send_king_search_result_as_txt(
+                chat_id=chat_id,
+                title=result["title"],
+                king_name=result["king_name"],
+                meta_text=result["meta_text"],
+                data_text=result["data_text"]
+            )
+
             send_farm_kings_menu(chat_id, "Выбери следующее действие:")
             return
 
