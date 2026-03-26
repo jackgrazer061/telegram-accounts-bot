@@ -3252,7 +3252,7 @@ def issue_farm_kings(chat_id, user_id, username, king_names):
 
     tg_send_message(chat_id, f"Готово ✅\n\nВыдано кингов: {len(king_names)}")
     for msg_text in messages:
-        tg_send_message(chat_id, msg_text)
+        tg_send_long_message(chat_id, msg_text)
 
     send_farm_kings_menu(chat_id, "Выбери следующее действие:")
 
