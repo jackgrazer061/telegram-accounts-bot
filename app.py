@@ -110,9 +110,6 @@ LIMIT_OPTIONS = ['-250', '250-500', '500-1200', '1200-1500', 'unlim']
 THRESHOLD_OPTIONS = ['0-49', '50-99', '100-199', '200-499', '500+']
 GMT_OPTIONS = ['-10', '-9', '-8', '-7', '-6', '-5', '-4', '-3', '-2', '-1', '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', '10']
 ACCOUNT_CURRENCY_COL = 12  # M колонка в База_личек
-MAX_SHEET_CELL_CHARS = 50000
-KING_DATA_PART1_LIMIT = 49000
-KING_DATA_PART2_LIMIT = 49000
 
 MENU_ACCOUNTS = 'Accounts'
 MENU_PIXELS = 'Пиксели'
@@ -885,8 +882,8 @@ def get_free_king_geos():
     seen = set()
 
     for row in rows[1:]:
-        if len(row) < 11:
-            row = row + [''] * (11 - len(row))
+        if len(row) < 12:
+            row = row + [''] * (12 - len(row))
 
         status = str(row[4]).strip().lower()
         geo = str(row[7]).strip()
@@ -904,8 +901,8 @@ def get_free_crypto_king_geos():
     seen = set()
 
     for row in rows[1:]:
-        if len(row) < 11:
-            row = row + [''] * (11 - len(row))
+        if len(row) < 12:
+            row = row + [''] * (12 - len(row))
 
         status = str(row[4]).strip().lower()
         geo = str(row[7]).strip()
@@ -954,8 +951,8 @@ def find_free_crypto_king_by_geo(geo, exclude_row=None):
     candidates = []
 
     for idx, row in enumerate(rows[1:], start=2):
-        if len(row) < 11:
-            row = row + [''] * (11 - len(row))
+        if len(row) < 12:
+            row = row + [''] * (12 - len(row))
 
         status = str(row[4]).strip().lower()
         row_geo = str(row[7]).strip()
@@ -978,7 +975,7 @@ def find_free_crypto_king_by_geo(geo, exclude_row=None):
             "price": row[2],
             "supplier": row[3],
             "geo": row[7],
-            "data_text": row[9]
+            "data_text": get_full_king_data_from_row(row)
         })
 
     if not candidates:
@@ -1488,6 +1485,33 @@ def parse_bms_txt(text):
 
     return parsed, errors
 
+def split_text_for_three_cells(text, max_len=50000):
+    text = str(text or "")
+
+    if len(text) <= max_len:
+        return text, "", ""
+
+    if len(text) <= max_len * 2:
+        return text[:max_len], text[max_len:], ""
+
+    if len(text) <= max_len * 3:
+        return text[:max_len], text[max_len:max_len * 2], text[max_len * 2:]
+
+    return None, None, None
+
+
+def get_full_king_data_from_row(row):
+    row = list(row or [])
+
+    if len(row) < 12:
+        row = row + [''] * (12 - len(row))
+
+    part_j = str(row[9] or "")
+    part_k = str(row[10] or "")
+    part_l = str(row[11] or "")
+
+    return part_j + part_k + part_l
+
 def add_kings_from_txt_content(file_text, target_sheet=SHEET_KINGS):
     rows, errors = parse_kings_txt(file_text)
 
@@ -1497,13 +1521,14 @@ def add_kings_from_txt_content(file_text, target_sheet=SHEET_KINGS):
         return "Ничего не добавил. Не удалось разобрать файл."
 
     to_append = []
-    too_long_errors = []
 
     for idx, item in enumerate(rows, start=1):
-        try:
-            data_part1, data_part2 = split_king_data_for_sheet(item["data_text"])
-        except Exception as e:
-            too_long_errors.append(f"Блок {idx}: {e}")
+        part_j, part_k, part_l = split_text_for_three_cells(item["data_text"], max_len=50000)
+
+        if part_j is None:
+            errors.append(
+                f"Блок {idx}: Данные кинга слишком большие даже для трёх ячеек: {len(item['data_text'])} символов"
+            )
             continue
 
         to_append.append([
@@ -1516,29 +1541,25 @@ def add_kings_from_txt_content(file_text, target_sheet=SHEET_KINGS):
             "",                     # G дата взятия
             item["geo"],            # H гео
             "",                     # I кто взял
-            data_part1,             # J данные часть 1
-            data_part2              # K данные часть 2
+            part_j,                 # J данные часть 1
+            part_k,                 # K данные часть 2
+            part_l                  # L данные часть 3
         ])
 
-    if not to_append:
-        all_errors = errors + too_long_errors
-        return "Ничего не добавил.\n\nОшибки:\n" + "\n".join(all_errors[:10])
-
-    sheet_append_rows_and_refresh(target_sheet, to_append)
-    invalidate_stats_cache()
-
-    all_errors = errors + too_long_errors
+    if to_append:
+        sheet_append_rows_and_refresh(target_sheet, to_append)
+        invalidate_stats_cache()
 
     message = (
         f"Готово ✅\n"
         f"Добавлено king: {len(to_append)}\n"
-        f"Ошибок: {len(all_errors)}"
+        f"Ошибок: {len(errors)}"
     )
 
-    if all_errors:
-        message += "\n\nОшибки:\n" + "\n".join(all_errors[:10])
-        if len(all_errors) > 10:
-            message += f"\n... и ещё {len(all_errors) - 10}"
+    if errors:
+        message += "\n\nОшибки:\n" + "\n".join(errors[:10])
+        if len(errors) > 10:
+            message += f"\n... и ещё {len(errors) - 10}"
 
     return message
 
@@ -2977,8 +2998,8 @@ def get_free_farm_king_geos():
     seen = set()
 
     for row in rows[1:]:
-        if len(row) < 11:
-            row = row + [''] * (11 - len(row))
+        if len(row) < 12:
+            row = row + [''] * (12 - len(row))
 
         status = str(row[4]).strip().lower()
         geo = str(row[7]).strip()
@@ -3010,8 +3031,8 @@ def send_free_farm_kings(chat_id):
 
     free_rows = []
     for row in rows[1:]:
-        if len(row) < 11:
-            row = row + [''] * (11 - len(row))
+        if len(row) < 12:
+            row = row + [''] * (12 - len(row))
 
         if str(row[4]).strip().lower() == "free":
             free_rows.append(row)
@@ -3040,8 +3061,8 @@ def find_free_farm_kings(count_needed, geo=None):
 
     candidates = []
     for idx, row in enumerate(rows[1:], start=2):
-        if len(row) < 11:
-            row = row + [''] * (11 - len(row))
+        if len(row) < 12:
+            row = row + [''] * (12 - len(row))
 
         if str(row[4]).strip().lower() != "free":
             continue
@@ -3080,8 +3101,8 @@ def find_farm_king_in_base_by_name(king_name):
     target = str(king_name).strip().lower()
 
     for idx, row in enumerate(rows[1:], start=2):
-        if len(row) < 11:
-            row = row + [''] * (11 - len(row))
+        if len(row) < 12:
+            row = row + [''] * (12 - len(row))
 
         if str(row[0]).strip().lower() == target:
             return {
@@ -3098,8 +3119,8 @@ def build_farm_king_search_text(king_name):
         return None
 
     row = found["row"]
-    if len(row) < 11:
-        row = row + [''] * (11 - len(row))
+    if len(row) < 12:
+        row = row + [''] * (12 - len(row))
 
     full_data_text = get_full_king_data_from_row(row)
 
@@ -3120,8 +3141,8 @@ def return_farm_king_to_ban(king_name):
         return False, "Кинг не найден в База фарм кинги."
 
     row = found["row"]
-    if len(row) < 11:
-        row = row + [''] * (11 - len(row))
+    if len(row) < 12:
+        row = row + [''] * (12 - len(row))
 
     if str(row[4]).strip().lower() == "ban":
         return False, "Этот кинг уже в ban."
@@ -3167,8 +3188,8 @@ def issue_farm_kings(chat_id, user_id, username, king_names):
                 return
 
             row = current_rows[row_index - 1]
-            if len(row) < 11:
-                row = row + [''] * (11 - len(row))
+            if len(row) < 12:
+                row = row + [''] * (12 - len(row))
 
             if str(row[4]).strip().lower() != "free":
                 clear_state(user_id)
@@ -3178,12 +3199,12 @@ def issue_farm_kings(chat_id, user_id, username, king_names):
         for item, king_name in zip(selected_rows, king_names):
             row_index = item["row_index"]
             row = current_rows[row_index - 1]
-            if len(row) < 10:
-                row = row + [''] * (10 - len(row))
+            if len(row) < 12:
+                row = row + [''] * (12 - len(row))
 
             sheet_update_raw(
                 SHEET_FARM_KINGS,
-                f"A{row_index}:I{row_index}",
+                f"A{row_index}:L{row_index}",
                 [[
                     king_name,
                     row[1],
@@ -3193,7 +3214,10 @@ def issue_farm_kings(chat_id, user_id, username, king_names):
                     "farm",
                     today,
                     row[7],
-                    who_took_text
+                    who_took_text,
+                    row[9],
+                    row[10],
+                    row[11]
                 ]]
             )
 
@@ -3610,31 +3634,6 @@ def parse_date(value):
             pass
     return None
 
-def split_king_data_for_sheet(data_text):
-    text = str(data_text or "")
-
-    if len(text) <= KING_DATA_PART1_LIMIT:
-        return text, ""
-
-    part1 = text[:KING_DATA_PART1_LIMIT]
-    part2 = text[KING_DATA_PART1_LIMIT:]
-
-    if len(part2) > KING_DATA_PART2_LIMIT:
-        raise RuntimeError(
-            f"Данные кинга слишком большие даже для двух ячеек: {len(text)} символов"
-        )
-
-    return part1, part2
-
-
-def get_full_king_data_from_row(row):
-    if len(row) < 11:
-        row = row + [''] * (11 - len(row))
-
-    part1 = str(row[9] or "")
-    part2 = str(row[10] or "")
-    return (part1 + part2).strip()
-
 def format_date_for_user(value):
     if isinstance(value, datetime):
         return value.strftime("%d/%m/%Y")
@@ -3773,8 +3772,8 @@ def build_manager_stats_summary_text(username):
 
     kings_rows = get_sheet_rows_cached(SHEET_KINGS)
     for row in kings_rows[1:]:
-        if len(row) < 11:
-            row = row + [''] * (11 - len(row))
+        if len(row) < 12:
+            row = row + [''] * (12 - len(row))
         if str(row[8]).strip().lower() != target_username:
             continue
         transfer_date = parse_sheet_date(str(row[6]).strip())
@@ -3783,8 +3782,8 @@ def build_manager_stats_summary_text(username):
 
     crypto_kings_rows = get_sheet_rows_cached(SHEET_CRYPTO_KINGS)
     for row in crypto_kings_rows[1:]:
-        if len(row) < 11:
-            row = row + [''] * (11 - len(row))
+        if len(row) < 12:
+            row = row + [''] * (12 - len(row))
         if str(row[8]).strip().lower() != target_username:
             continue
         transfer_date = parse_sheet_date(str(row[6]).strip())
@@ -3861,8 +3860,8 @@ def build_manager_stats_text(username):
 
     kings_lines = []
     for row in kings_rows[1:]:
-        if len(row) < 11:
-            row = row + [''] * (11 - len(row))
+        if len(row) < 12:
+            row = row + [''] * (12 - len(row))
 
         who_took = str(row[8]).strip().lower()
         transfer_date = parse_sheet_date(row[6])
@@ -3874,8 +3873,8 @@ def build_manager_stats_text(username):
 
     crypto_kings_rows = get_sheet_rows_cached(SHEET_CRYPTO_KINGS)
     for row in crypto_kings_rows[1:]:
-        if len(row) < 11:
-            row = row + [''] * (11 - len(row))
+        if len(row) < 12:
+            row = row + [''] * (12 - len(row))
 
         who_took = str(row[8]).strip().lower()
         transfer_date = parse_sheet_date(row[6])
@@ -3967,8 +3966,8 @@ def build_farmer_stats_summary_text(username):
 
     farm_kings_rows = get_sheet_rows_cached(SHEET_FARM_KINGS)
     for row in farm_kings_rows[1:]:
-        if len(row) < 11:
-            row = row + [''] * (11 - len(row))
+        if len(row) < 12:
+            row = row + [''] * (12 - len(row))
         if str(row[8]).strip().lower() != target_username:
             continue
         transfer_date = parse_sheet_date(str(row[6]).strip())
@@ -4018,8 +4017,8 @@ def build_farmer_stats_text(username):
 
     farm_kings_lines = []
     for row in farm_kings_rows[1:]:
-        if len(row) < 11:
-            row = row + [''] * (11 - len(row))
+        if len(row) < 12:
+            row = row + [''] * (12 - len(row))
 
         who_took = str(row[8]).strip().lower()
         transfer_date = parse_sheet_date(row[6])
@@ -4860,8 +4859,8 @@ def find_free_king_by_geo(geo, exclude_row=None):
 
     for idx, row in enumerate(rows[1:], start=2):
 
-        if len(row) < 11:
-            row = row + [''] * (11 - len(row))
+        if len(row) < 12:
+            row = row + [''] * (12 - len(row))
 
         status = str(row[4]).strip().lower()
         row_geo = str(row[7]).strip()
@@ -4884,7 +4883,7 @@ def find_free_king_by_geo(geo, exclude_row=None):
             "price": row[2],
             "supplier": row[3],
             "geo": row[7],
-            "data_text": row[9]
+            "data_text": get_full_king_data_from_row(row)
         })
 
     if not candidates:
@@ -5298,6 +5297,7 @@ def show_found_king(chat_id, user_id, found):
     ]
 
     tg_send_message(chat_id, text, keyboard)
+    
 def confirm_king_issue(chat_id, user_id, username):
     try:
         with issue_lock:
@@ -5321,8 +5321,8 @@ def confirm_king_issue(chat_id, user_id, username):
 
             row = rows[row_index - 1]
 
-            if len(row) < 10:
-                row = row + [''] * (10 - len(row))
+            if len(row) < 12:
+                row = row + [''] * (12 - len(row))
 
             status = str(row[4]).strip().lower()
 
@@ -5362,7 +5362,7 @@ def confirm_king_issue(chat_id, user_id, username):
 
             sheet_update_and_refresh(
                 SHEET_KINGS,
-                f"A{row_index}:I{row_index}",
+                f"A{row_index}:L{row_index}",
                 [[
                     king_name,
                     row[1],
@@ -5372,7 +5372,10 @@ def confirm_king_issue(chat_id, user_id, username):
                     state["king_for_whom"],
                     today,
                     geo_value,
-                    who_took_text
+                    who_took_text,
+                    row[9],
+                    row[10],
+                    row[11]
                 ]]
             )
 
@@ -5436,8 +5439,8 @@ def issue_kings_bulk(chat_id, user_id, username, king_names):
                     return
 
                 row = current_rows[row_index - 1]
-                if len(row) < 10:
-                    row = row + [''] * (10 - len(row))
+                if len(row) < 12:
+                    row = row + [''] * (12 - len(row))
 
                 if str(row[4]).strip().lower() != "free":
                     clear_state(user_id)
@@ -5447,12 +5450,12 @@ def issue_kings_bulk(chat_id, user_id, username, king_names):
             for item, king_name in zip(selected_rows, king_names):
                 row_index = item["row_index"]
                 row = current_rows[row_index - 1]
-                if len(row) < 10:
-                    row = row + [''] * (10 - len(row))
+                if len(row) < 12:
+                    row = row + [''] * (12 - len(row))
 
                 sheet_update_raw(
                     SHEET_KINGS,
-                    f"A{row_index}:I{row_index}",
+                    f"A{row_index}:L{row_index}",
                     [[
                         king_name,
                         row[1],
@@ -5462,7 +5465,10 @@ def issue_kings_bulk(chat_id, user_id, username, king_names):
                         state["king_for_whom"],
                         today,
                         row[7],
-                        who_took_text
+                        who_took_text,
+                        row[9],
+                        row[10],
+                        row[11]
                     ]]
                 )
 
@@ -5472,7 +5478,7 @@ def issue_kings_bulk(chat_id, user_id, username, king_names):
                     "price": row[2],
                     "supplier": row[3],
                     "geo": row[7],
-                    "data_text": row[9] if len(row) > 9 else ""
+                    "data_text": get_full_king_data_from_row(row)
                 })
 
             refresh_sheet_cache(SHEET_KINGS)
@@ -5536,8 +5542,8 @@ def confirm_crypto_king_issue(chat_id, user_id, username):
 
             row = rows[row_index - 1]
 
-            if len(row) < 10:
-                row = row + [''] * (10 - len(row))
+            if len(row) < 12:
+                row = row + [''] * (12 - len(row))
 
             status = str(row[4]).strip().lower()
 
@@ -5577,7 +5583,7 @@ def confirm_crypto_king_issue(chat_id, user_id, username):
 
             sheet_update_and_refresh(
                 SHEET_CRYPTO_KINGS,
-                f"A{row_index}:I{row_index}",
+                f"A{row_index}:L{row_index}",
                 [[
                     king_name,
                     row[1],
@@ -5587,7 +5593,10 @@ def confirm_crypto_king_issue(chat_id, user_id, username):
                     state["king_for_whom"],
                     today,
                     geo_value,
-                    who_took_text
+                    who_took_text,
+                    row[9],
+                    row[10],
+                    row[11]
                 ]]
             )
 
@@ -5688,8 +5697,8 @@ def find_king_in_base_by_name(king_name):
         rows = get_sheet_rows_cached(sheet_name)
 
         for idx, row in enumerate(rows[1:], start=2):
-            if len(row) < 11:
-                row = row + [''] * (11 - len(row))
+            if len(row) < 12:
+                row = row + [''] * (12 - len(row))
 
             existing_name = str(row[0]).strip().lower()
 
@@ -5711,8 +5720,8 @@ def return_king_to_ban(king_name):
     row = base_info["row"]
     sheet_name = base_info["sheet_name"]
 
-    if len(row) < 11:
-        row = row + [''] * (11 - len(row))
+    if len(row) < 12:
+        row = row + [''] * (12 - len(row))
 
     status = str(row[4]).strip().lower()
 
@@ -5737,8 +5746,8 @@ def find_crypto_king_in_base_by_name(king_name):
     target = str(king_name).strip().lower()
 
     for idx, row in enumerate(rows[1:], start=2):
-        if len(row) < 10:
-            row = row + [''] * (10 - len(row))
+        if len(row) < 12:
+            row = row + [''] * (12 - len(row))
 
         existing_name = str(row[0]).strip().lower()
         if existing_name == target:
@@ -5794,8 +5803,8 @@ def build_king_search_text(king_name):
         rows = get_sheet_rows_cached(SHEET_CRYPTO_KINGS)
 
         for idx, row in enumerate(rows[1:], start=2):
-            if len(row) < 11:
-                row = row + [''] * (11 - len(row))
+            if len(row) < 12:
+                row = row + [''] * (12 - len(row))
 
             existing_name = str(row[0]).strip().lower()
 
@@ -5812,8 +5821,8 @@ def build_king_search_text(king_name):
 
     row = found["row"]
 
-    if len(row) < 10:
-        row = row + [''] * (10 - len(row))
+    if len(row) < 12:
+        row = row + [''] * (12 - len(row))
 
     name = row[0] or "без названия"
     price = row[2] or "не указана"
@@ -5850,8 +5859,8 @@ def build_stats_text():
         kings_rows = get_sheet_rows_cached(source_sheet)
 
         for row in kings_rows[1:]:
-            if len(row) < 11:
-                row = row + [''] * (11 - len(row))
+            if len(row) < 12:
+                row = row + [''] * (12 - len(row))
 
             status = str(row[4]).strip().lower()
             geo = str(row[7]).strip()
@@ -5949,8 +5958,8 @@ def build_stats_text():
     farm_kings_geo_stats = {}
 
     for row in farm_kings_rows[1:]:
-        if len(row) < 10:
-            row = row + [''] * (10 - len(row))
+        if len(row) < 12:
+            row = row + [''] * (12 - len(row))
 
         status = str(row[4]).strip().lower()
         geo = str(row[7]).strip()
@@ -6059,8 +6068,8 @@ def send_free_kings(chat_id):
         rows = get_sheet_rows_cached(source_sheet)
 
         for row in rows[1:]:
-            if len(row) < 11:
-                row = row + [''] * (11 - len(row))
+            if len(row) < 12:
+                row = row + [''] * (12 - len(row))
 
             status = str(row[4]).strip().lower()
             if status == "free":
@@ -6448,12 +6457,12 @@ def run_sheet_structure_checks():
     checks = [
         (SHEET_ACCOUNTS, 14, "Лички"),
         (SHEET_ISSUES, 7, "Простые лички 26"),
-        (SHEET_KINGS, 10, "Кинги"),
-        (SHEET_CRYPTO_KINGS, 10, "Крипта кинги"),
+        (SHEET_KINGS, 12, "Кинги"),
+        (SHEET_CRYPTO_KINGS, 12, "Крипта кинги"),
         (SHEET_BMS, 9, "БМы"),
         (SHEET_FPS, 9, "ФП"),
         (SHEET_PIXELS, 8, "Пиксели"),
-        (SHEET_FARM_KINGS, 10, "Фарм кинги"),
+        (SHEET_FARM_KINGS, 12, "Фарм кинги"),
         (SHEET_FARM_BMS, 9, "Фарм БМ"),
         (SHEET_FARM_FPS, 9, "Фарм ФП"),
     ]
@@ -9041,12 +9050,12 @@ def run_auto_healthcheck_once():
         all_checks = [
             ("База_личек", rows_accounts, 14),
             ("Простые лички 26", rows_issues, 7),
-            ("База_кингов", rows_kings, 10),
-            ("База_крипта_кинги", rows_crypto, 10),
+            ("База_кингов", rows_kings, 12),
+            ("База_крипта_кинги", rows_crypto, 12),
             ("База_БМ", rows_bms, 9),
             ("База_ФП", rows_fps, 9),
             ("База_пикселей", rows_pixels, 8),
-            ("База фарм кинги", rows_farm_kings, 10),
+            ("База фарм кинги", rows_farm_kings, 12),
             ("База фарм бм", rows_farm_bms, 9),
             ("База фарм фп", rows_farm_fps, 9),
         ]
