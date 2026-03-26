@@ -1353,13 +1353,12 @@ def parse_kings_txt(text):
                 current_data_lines.append("")
             continue
 
-        if is_king_header_line(line):
+        if re.match(r'^\d+[.)]\s+', line.strip()):
             if current_header is not None:
                 blocks.append((current_header, current_data_lines))
 
             current_header = line.strip()
             current_data_lines = []
-
         else:
             if current_header is not None:
                 current_data_lines.append(line)
@@ -1371,8 +1370,7 @@ def parse_kings_txt(text):
     errors = []
 
     for idx, (header, data_lines) in enumerate(blocks, start=1):
-        header_clean = clean_text_for_parsing(header)
-        header_clean = re.sub(r'^\d+[.)]\s*', '', header_clean).strip()
+        header_clean = re.sub(r'^\d+[.)]\s*', '', header).strip()
         parts = [x.strip() for x in header_clean.split(';')]
 
         if len(parts) != 4:
@@ -1633,16 +1631,22 @@ def handle_document_message(msg):
             file_text = content.decode("utf-8-sig")
         except UnicodeDecodeError:
             try:
-                file_text = content.decode("utf-8")
+                file_text = content.decode("utf-16")
             except UnicodeDecodeError:
                 try:
-                    file_text = content.decode("cp1251")
+                    file_text = content.decode("utf-16-le")
                 except UnicodeDecodeError:
-                    tg_send_message(
-                        chat_id,
-                        "Не удалось прочитать txt файл. Сохрани его в UTF-8 или ANSI."
-                    )
-                    return
+                    try:
+                        file_text = content.decode("utf-8")
+                    except UnicodeDecodeError:
+                        try:
+                            file_text = content.decode("cp1251")
+                        except UnicodeDecodeError:
+                            tg_send_message(
+                                chat_id,
+                                "Не удалось прочитать txt файл. Поддерживаются UTF-8, UTF-16, ANSI."
+                            )
+                            return
 
         file_text = clean_text_for_parsing(file_text)
 
