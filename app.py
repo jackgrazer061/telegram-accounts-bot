@@ -1067,6 +1067,18 @@ def tg_download_photo_content(photo_list):
 def extract_digits(text):
     return re.sub(r"\D", "", str(text or ""))
 
+def clean_text_for_parsing(text):
+    text = str(text or "")
+
+    # BOM / zero-width / неразрывный пробел
+    text = text.replace("\ufeff", "")
+    text = text.replace("\u200b", "")
+    text = text.replace("\u200c", "")
+    text = text.replace("\u200d", "")
+    text = text.replace("\xa0", " ")
+
+    return text
+
 def extract_account_ids_from_lines(lines):
     result = []
 
@@ -1322,11 +1334,11 @@ def convert_amount_to_usd(amount_value, currency_code):
     return round(float(amount_value) * rate, 2)
 
 def is_king_header_line(line):
-    line = line.strip()
+    line = clean_text_for_parsing(line).strip()
     return re.match(r'^\d+[.)]\s+', line) is not None
 
-
 def parse_kings_txt(text):
+    text = clean_text_for_parsing(text)
     lines = text.splitlines()
 
     blocks = []
@@ -1334,7 +1346,7 @@ def parse_kings_txt(text):
     current_data_lines = []
 
     for raw_line in lines:
-        line = raw_line.rstrip()
+        line = clean_text_for_parsing(raw_line).rstrip()
 
         if not line.strip():
             if current_header is not None:
@@ -1359,14 +1371,12 @@ def parse_kings_txt(text):
     errors = []
 
     for idx, (header, data_lines) in enumerate(blocks, start=1):
-
-        header_clean = re.sub(r'^\d+[.)]\s*', '', header).strip()
+        header_clean = clean_text_for_parsing(header)
+        header_clean = re.sub(r'^\d+[.)]\s*', '', header_clean).strip()
         parts = [x.strip() for x in header_clean.split(';')]
 
         if len(parts) != 4:
-            errors.append(
-                f"Блок {idx}: нужно 4 поля: дата; цена; поставщик; гео"
-            )
+            errors.append(f"Блок {idx}: нужно 4 поля: дата; цена; поставщик; гео")
             continue
 
         purchase_date_raw, price_raw, supplier, geo = parts
@@ -1620,10 +1630,10 @@ def handle_document_message(msg):
             return
 
         try:
-            file_text = content.decode("utf-8")
+            file_text = content.decode("utf-8-sig")
         except UnicodeDecodeError:
             try:
-                file_text = content.decode("utf-8-sig")
+                file_text = content.decode("utf-8")
             except UnicodeDecodeError:
                 try:
                     file_text = content.decode("cp1251")
@@ -1633,6 +1643,8 @@ def handle_document_message(msg):
                         "Не удалось прочитать txt файл. Сохрани его в UTF-8 или ANSI."
                     )
                     return
+
+        file_text = clean_text_for_parsing(file_text)
 
         if mode == "awaiting_kings_txt":
             result_message = add_kings_from_txt_content(file_text, target_sheet=SHEET_KINGS)
