@@ -1063,6 +1063,63 @@ def tg_download_photo_content(photo_list):
 
     return tg_download_file_content(file_id)
 
+def tg_send_document_bytes(chat_id, filename, content_bytes, caption=None):
+    try:
+        data = {
+            "chat_id": str(chat_id)
+        }
+
+        if caption:
+            data["caption"] = str(caption)
+
+        files = {
+            "document": (filename, content_bytes, "text/plain")
+        }
+
+        resp = requests.post(
+            f"{BASE_URL}/sendDocument",
+            data=data,
+            files=files,
+            timeout=60
+        )
+
+        if resp.status_code != 200:
+            logging.warning(f"Telegram sendDocument failed: {resp.status_code} {resp.text}")
+
+    except Exception as e:
+        logging.error(f"tg_send_document_bytes error: {e}")
+
+def make_safe_txt_filename(name, default_name="king"):
+    raw = str(name or "").strip()
+    if not raw:
+        raw = default_name
+
+    safe = re.sub(r'[^A-Za-z0-9._-]+', '_', raw)
+    safe = safe.strip("._")
+
+    if not safe:
+        safe = default_name
+
+    if not safe.lower().endswith(".txt"):
+        safe += ".txt"
+
+    return safe[:120]
+
+
+def tg_send_king_data_as_txt(chat_id, king_name, data_text, caption=None):
+    text = str(data_text or "").strip()
+
+    if not text:
+        tg_send_message(chat_id, "Данные кинга не найдены.")
+        return
+
+    filename = make_safe_txt_filename(king_name or "king", default_name="king")
+    tg_send_document_bytes(
+        chat_id=chat_id,
+        filename=filename,
+        content_bytes=text.encode("utf-8"),
+        caption=caption
+    )
 
 def extract_digits(text):
     return re.sub(r"\D", "", str(text or ""))
@@ -3233,9 +3290,10 @@ def issue_farm_kings(chat_id, user_id, username, king_names):
 
             full_data_text = get_full_king_data_from_row(row)
 
-            messages.append(
-                f"{king_name}\n\n{full_data_text if full_data_text else 'нет данных'}"
-            )
+            messages.append({
+                "king_name": king_name,
+                "data_text": full_data_text
+            })
 
         refresh_sheet_cache(SHEET_FARM_KINGS)
 
@@ -3251,8 +3309,12 @@ def issue_farm_kings(chat_id, user_id, username, king_names):
     clear_state(user_id)
 
     tg_send_message(chat_id, f"Готово ✅\n\nВыдано кингов: {len(king_names)}")
-    for msg_text in messages:
-        tg_send_long_message(chat_id, msg_text)
+    for item in messages:
+        tg_send_king_data_as_txt(
+            chat_id=chat_id,
+            king_name=item["king_name"],
+            data_text=item["data_text"]
+        )
 
     send_farm_kings_menu(chat_id, "Выбери следующее действие:")
 
@@ -5400,10 +5462,11 @@ def confirm_king_issue(chat_id, user_id, username):
             f"Гео: {geo_value}"
         )
 
-        if data_text:
-            tg_send_long_message(chat_id, data_text)
-        else:
-            tg_send_message(chat_id, "Данные кинга не найдены.")
+        tg_send_king_data_as_txt(
+            chat_id=chat_id,
+            king_name=king_name,
+            data_text=data_text
+        )
 
         send_accounts_main_menu(chat_id, "Меню Accounts:")
 
@@ -5507,10 +5570,11 @@ def issue_kings_bulk(chat_id, user_id, username, king_names):
                 f"Гео: {item['geo']}"
             )
 
-            if item["data_text"]:
-                tg_send_split_text(chat_id, item["data_text"])
-            else:
-                tg_send_message(chat_id, "Данные кинга не найдены.")
+            tg_send_king_data_as_txt(
+                chat_id=chat_id,
+                king_name=item["king_name"],
+                data_text=item["data_text"]
+            )
 
         send_accounts_main_menu(chat_id, "Меню Accounts:")
 
@@ -5621,10 +5685,11 @@ def confirm_crypto_king_issue(chat_id, user_id, username):
             f"Гео: {geo_value}"
         )
 
-        if data_text:
-            tg_send_long_message(chat_id, data_text)
-        else:
-            tg_send_message(chat_id, "Данные crypto king не найдены.")
+        tg_send_king_data_as_txt(
+            chat_id=chat_id,
+            king_name=king_name,
+            data_text=data_text
+        )
 
         send_kings_menu(chat_id, "Выбери следующее действие:")
 
