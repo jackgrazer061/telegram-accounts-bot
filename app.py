@@ -67,7 +67,6 @@ ACCOUNTS_USERS = {
 
 FARMERS_USERS = {
     8482380951: "josephgordonlevitt_farmer",
-    8554652263: "leesungkyoung_farmer",
     8389730381: "JaimeMurray_farmer",
     8589105033: "owenwilson_farmer",
     8503147017: "zendaya_farmer",
@@ -154,17 +153,17 @@ DEPT_CRYPTO = 'Крипта'
 DEPT_GAMBLA = 'Гембла'
 
 CRYPTO_NAMES = [
-    'dasha', 'mark', 'misha', 'vladimir1', 'andrey',
-    'alex', 'anton', 'vladimir2', 'danilacc', 'aleksandr2',
-    'maksim3', 'nikita3', 'anton2', 'yan', 'nikita'
+    '№3 dasha', '№5 mark', '№20 misha',
+    '№32 alex', '№34 anton', '№37 vladimir2', '№333 danilacc', '№42 aleksandr2',
+    '№43 maksim3', '№44 nikita3', '№45 anton2', '№46 yan', '№4 nikita', '№57 vladimir4'
 ]
 
 GAMBLA_NAMES = [
-    'artem', 'ivan', 'sergei', 'ilya', 'maksim1',
-    'denis', 'kirill', 'ivansh', 'evgen', 'asim',
-    'maksim2', 'alex_gambl', 'daniil', 'semen', 'ivan2',
-    'andrey2', 'vitaliy', 'gleb', 'dasha2', 'vladimir3',
-    'richard', 'artem2', '56', '57'
+    '№8 artem', '№13 ivan', '№16 sergei', '№19 ilya', '№26 maksim1',
+    '№27 denis', '№29 ivansh', '№14 evgen', '№777 asim',
+    '№30 maksim2', '№39 alex_gambl', '№47 daniil', '№48 semen', '№49 ivan2',
+    '№50 andrey2', '№51 vitaliy', '№21 vladimir1', '№22 andrey', '№52 gleb', '№53 dasha2', '№54 vladimir3',
+    '№000 richard', '№55 artem2', '№56 ilya2'
 ]
 
 SUBMENU_GET = 'Выдать лички'
@@ -3724,6 +3723,10 @@ def format_date_for_user(value):
         return value.strftime("%d/%m/%Y")
     return str(value)
 
+def normalize_person_name(value):
+    text = str(value or "").strip()
+    text = re.sub(r'^(?:№|N|No|N°)\s*\d+\s*', '', text, flags=re.IGNORECASE).strip()
+    return text
 
 def parse_price(value):
     s = str(value).strip().replace(",", ".")
@@ -7881,9 +7884,11 @@ def handle_message(msg):
                 send_person_menu(chat_id, state.get("issue_department"))
                 return
 
+            clean_name = normalize_person_name(text)
+
             set_state(user_id, {
                 "mode": "awaiting_issue_account_number",
-                "for_whom": text,
+                "for_whom": clean_name,
                 "issue_department": state.get("issue_department")
             })
 
@@ -8033,8 +8038,10 @@ def handle_message(msg):
                 send_person_menu(chat_id, state.get("issue_department"))
                 return
 
+            clean_name = normalize_person_name(text)
+
             state["mode"] = "quick_account_found"
-            state["for_whom"] = text
+            state["for_whom"] = clean_name
             set_state(user_id, state)
 
             found = find_oldest_free_account()
@@ -8090,8 +8097,10 @@ def handle_message(msg):
                 send_person_menu(chat_id, DEPT_CRYPTO)
                 return
 
+            clean_name = normalize_person_name(text)
+
             state["mode"] = "awaiting_crypto_king_name"
-            state["king_for_whom"] = text
+            state["king_for_whom"] = clean_name
             set_state(user_id, state)
 
             tg_send_message(chat_id, "Какое название будет у crypto king?")
@@ -8162,8 +8171,10 @@ def handle_message(msg):
                 send_person_menu(chat_id, state.get("king_department"))
                 return
 
+            clean_name = normalize_person_name(text)
+
             state["mode"] = "awaiting_kings_count"
-            state["king_for_whom"] = text
+            state["king_for_whom"] = clean_name
             set_state(user_id, state)
 
             tg_send_message(chat_id, "Сколько кингов нужно?")
@@ -8346,8 +8357,10 @@ def handle_message(msg):
                 send_person_menu(chat_id, state.get("bm_department"))
                 return
 
+            clean_name = normalize_person_name(text)
+
             state["mode"] = "awaiting_bm_count"
-            state["bm_for_whom"] = text
+            state["bm_for_whom"] = clean_name
             set_state(user_id, state)
 
             tg_send_message(chat_id, "Сколько БМов нужно?")
@@ -8501,10 +8514,12 @@ def handle_message(msg):
                 send_person_menu(chat_id, state.get("pixel_department"))
                 return
 
+            clean_name = normalize_person_name(text)
+
             set_state(user_id, {
                 "mode": "awaiting_pixel_count",
                 "pixel_department": state.get("pixel_department"),
-                "pixel_for_whom": text
+                "pixel_for_whom": clean_name
             })
 
             tg_send_message(chat_id, "Сколько Пикселей нужно?")
@@ -8567,8 +8582,10 @@ def handle_message(msg):
                 send_person_menu(chat_id, state.get("fp_department"))
                 return
 
+            clean_name = normalize_person_name(text)
+
             state["mode"] = "awaiting_fp_count"
-            state["fp_for_whom"] = text
+            state["fp_for_whom"] = clean_name
             set_state(user_id, state)
 
             tg_send_message(chat_id, "Сколько ФП нужно?")
