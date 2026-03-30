@@ -414,6 +414,14 @@ def sheet_append_row_and_refresh(sheet_name, row, value_input_option="USER_ENTER
     google_write_with_retry(_do)
     mark_sheet_cache_stale(sheet_name)
 
+def sheet_delete_row_and_refresh(sheet_name, row_index):
+    def _do():
+        with google_lock:
+            sheet = get_sheet(sheet_name)
+            sheet.delete_rows(row_index)
+
+    google_write_with_retry(_do)
+    mark_sheet_cache_stale(sheet_name)
 
 def sheet_append_rows_and_refresh(sheet_name, rows, value_input_option="USER_ENTERED"):
     def _do():
@@ -3319,11 +3327,26 @@ def return_farm_king_to_free(king_name):
     if status == "free":
         return False, "Этот farm king уже free."
 
+    old_king_name = str(row[0]).strip()
+
     sheet_update_and_refresh(
         SHEET_FARM_KINGS,
-        f"E{found['row_index']}:I{found['row_index']}",
-        [["free", "", "", row[7], ""]]
+        f"A{found['row_index']}:I{found['row_index']}",
+        [[
+            "",          # A название очищаем
+            row[1],
+            row[2],
+            row[3],
+            "free",
+            "",
+            "",
+            row[7],
+            ""
+        ]]
     )
+
+    if old_king_name:
+        delete_last_king_issue_row(old_king_name)
 
     invalidate_stats_cache()
     return True, f"Farm king '{king_name}' возвращён в free."
@@ -4538,6 +4561,30 @@ def return_account_to_ban(account_number, comment_text=""):
     invalidate_stats_cache()
     return True, "Личка переведена в ban."
 
+def return_account_to_free(account_number):
+    base_info = find_account_in_base(account_number)
+
+    if not base_info:
+        return False, "Личка не найдена в базе."
+
+    row = base_info["row"]
+
+    if len(row) < 12:
+        row = row + [''] * (12 - len(row))
+
+    status = str(row[8]).strip().lower()
+
+    if status == "free":
+        return False, "Эта личка уже free."
+
+    sheet_update_and_refresh(
+        SHEET_ACCOUNTS,
+        f"I{base_info['row_index']}:L{base_info['row_index']}",
+        [["free", "", "", ""]]
+    )
+
+    invalidate_stats_cache()
+    return True, "Личка возвращена в free."
 
 def build_account_search_text(account_number):
     base_info = find_account_in_base(account_number)
@@ -5928,6 +5975,14 @@ def find_last_king_issue_row(king_name):
 
     return last_match
 
+def delete_last_king_issue_row(king_name):
+    issue_info = find_last_king_issue_row(king_name)
+    if not issue_info:
+        return False
+
+    sheet_delete_row_and_refresh(SHEET_ISSUES, issue_info["row_index"])
+    return True
+
 def find_last_bm_issue_row(bm_id):
     rows = get_sheet_rows_cached(SHEET_ISSUES)
 
@@ -6037,11 +6092,26 @@ def return_king_to_free(king_name):
     if status == "free":
         return False, "Этот кинг уже free."
 
+    old_king_name = str(row[0]).strip()
+
     sheet_update_and_refresh(
         sheet_name,
-        f"E{base_info['row_index']}:I{base_info['row_index']}",
-        [["free", "", "", row[7], ""]]
+        f"A{base_info['row_index']}:I{base_info['row_index']}",
+        [[
+            "",          # A название очищаем
+            row[1],      # B дата покупки
+            row[2],      # C цена
+            row[3],      # D поставщик
+            "free",      # E статус
+            "",          # F для кого
+            "",          # G дата взятия
+            row[7],      # H geo
+            ""           # I кто взял
+        ]]
     )
+
+    if old_king_name:
+        delete_last_king_issue_row(old_king_name)
 
     invalidate_stats_cache()
     return True, f"Кинг '{king_name}' возвращён в free."
@@ -8508,6 +8578,24 @@ def handle_message(msg):
                 "Внимание: farm FP будет возвращено в free.\nПодтвердить?",
                 keyboard
             )
+            return
+
+        if state.get("mode") == "awaiting_return_account_free":
+            account_number = text.strip()
+
+            if not account_number:
+                tg_send_message(chat_id, "Впиши номер лички.")
+                return
+
+            found = find_account_in_base(account_number)
+            if not found:
+                clear_state(user_id)
+                send_accounts_menu(chat_id, "Личка не найдена.")
+                return
+
+            ok, message = return_account_to_free(account_number)
+            clear_state(user_id)
+            send_accounts_main_menu(chat_id, message)
             return
 
         # ========= СОСТОЯНИЯ: ВЫДАЧА ЛИЧЕК =========
