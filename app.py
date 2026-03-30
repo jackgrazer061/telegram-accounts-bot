@@ -117,21 +117,21 @@ FARM_MENU_KING = 'King'
 FARM_MENU_BM = 'BM'
 FARM_MENU_FP = 'FP'
 
-FARM_SUBMENU_GET_KINGS = 'Взять кинги'
-FARM_SUBMENU_FREE_KINGS = 'Cвободныe кинги'
-FARM_SUBMENU_RETURN_KING = 'Beрнуть кинг'
-FARM_SUBMENU_SEARCH_KING = 'Пoиск кингa'
+FARM_SUBMENU_GET_KINGS = '➡️Взять кинги'
+FARM_SUBMENU_FREE_KINGS = '🆓Cвободныe кинги'
+FARM_SUBMENU_RETURN_KING = '↩️Beрнуть кинг'
+FARM_SUBMENU_SEARCH_KING = '🔎Пoиск кингa'
 
 BTN_FARM_KINGS_PARTIAL_CONFIRM = 'Выдать'
 BTN_FARM_KINGS_PARTIAL_CANCEL = 'Отмена'
 
-FARM_SUBMENU_GET_BM = 'Получить BM'
-FARM_SUBMENU_FREE_BMS = 'Свободные BMы'
-FARM_SUBMENU_SEARCH_BM = 'Поиск BMа'
-FARM_SUBMENU_RETURN_BM = 'Вернуть BM'
+FARM_SUBMENU_GET_BM = '➡️Получить BM'
+FARM_SUBMENU_FREE_BMS = '🆓Свободные BMы'
+FARM_SUBMENU_SEARCH_BM = '🔎Поиск BMа'
+FARM_SUBMENU_RETURN_BM = '↩️Вернуть BM'
 
-FARM_SUBMENU_GET_FP = 'Выдать FP'
-FARM_SUBMENU_SEARCH_FP = 'Поиск FP'
+FARM_SUBMENU_GET_FP = '➡️Выдать FP'
+FARM_SUBMENU_SEARCH_FP = '🔎Поиск FP'
 
 BTN_BACK_TO_FARMERS = 'Назад в Farmers'
 MENU_KINGS = 'Кинги'
@@ -143,9 +143,9 @@ MENU_FARMER_STATS = 'Статистика фармера'
 MENU_ADMIN = 'Admin'
 MENU_CANCEL = 'Отмена'
 
-SUBMENU_GET_PIXELS = 'Получить Пиксели'
-SUBMENU_SEARCH_PIXEL = 'Найти Пиксель'
-SUBMENU_RETURN_PIXEL = 'Вернуть Пиксель'
+SUBMENU_GET_PIXELS = '➡️Получить Пиксели'
+SUBMENU_SEARCH_PIXEL = '🔎Найти Пиксель'
+SUBMENU_RETURN_PIXEL = '↩️Вернуть Пиксель'
 SUBMENU_ACCOUNTS_MAIN = 'Лички'
 SUBMENU_BACK_MAIN = 'В меню'
 
@@ -166,11 +166,11 @@ GAMBLA_NAMES = [
     '№000 richard', '№55 artem2', '№56 ilya2'
 ]
 
-SUBMENU_GET = 'Выдать лички'
-SUBMENU_QUICK_GET = 'Быстро выдать личку'
-SUBMENU_FREE = 'Свободные лички'
-SUBMENU_RETURN = 'Вернуть личку'
-SUBMENU_SEARCH = 'Поиск лички'
+SUBMENU_GET = '➡️Выдать лички'
+SUBMENU_QUICK_GET = '⏭️Быстро выдать личку'
+SUBMENU_FREE = '🆓Свободные лички'
+SUBMENU_RETURN = '↩️Вернуть личку'
+SUBMENU_SEARCH = '🔎Поиск лички'
 
 FREE_LIMIT_250 = '250'
 FREE_LIMIT_500 = '500'
@@ -178,19 +178,19 @@ FREE_LIMIT_1200 = '1200'
 FREE_LIMIT_1500 = '1500'
 FREE_LIMIT_UNLIM = 'unlim'
 
-SUBMENU_FREE_KINGS = 'Свободные кинги'
-SUBMENU_GET_KINGS = 'Получить кинг'
-SUBMENU_RETURN_KING = 'Вернуть кинг'
-SUBMENU_SEARCH_KING = 'Поиск кинга'
+SUBMENU_FREE_KINGS = '🆓Свободные кинги'
+SUBMENU_GET_KINGS = '➡️Получить кинг'
+SUBMENU_RETURN_KING = '↩️Вернуть кинг'
+SUBMENU_SEARCH_KING = '🔎Поиск кинга'
 
-SUBMENU_GET_BM = 'Получить БМ'
-SUBMENU_FREE_BMS = 'Свободные БМы'
-SUBMENU_SEARCH_BM = 'Поиск БМа'
-SUBMENU_RETURN_BM = 'Вернуть БМ'
+SUBMENU_GET_BM = '➡️Получить БМ'
+SUBMENU_FREE_BMS = '🆓Свободные БМы'
+SUBMENU_SEARCH_BM = '🔎Поиск БМа'
+SUBMENU_RETURN_BM = '↩️Вернуть БМ'
 BTN_BM_BAN_CONFIRM = 'Подтвердить ban bm'
 
-SUBMENU_GET_FP = 'Выдать ФП'
-SUBMENU_SEARCH_FP = 'Поиск ФП'
+SUBMENU_GET_FP = '➡️Выдать ФП'
+SUBMENU_SEARCH_FP = '🔎Поиск ФП'
 
 ADMIN_ACCOUNTANTS = 'Акаунтеры'
 ADMIN_FARMERS = 'Фармеры'
@@ -218,7 +218,8 @@ BTN_BM_NEXT = 'Другой БМ'
 BTN_BACK_FROM_ADMIN = 'Назад из Admin'
 BTN_BACK_FROM_ACCOUNTANTS = 'Назад из Акаунтеры'
 
-BTN_BACK_TO_MENU = 'В меню'
+BTN_BACK_TO_MENU = '📘В меню'
+BTN_BACK_STEP = "⬅️ Назад"
 
 # кнопки выдачи личек
 BTN_ISSUE_CONFIRM = 'Выдать личку'
@@ -235,8 +236,20 @@ BTN_KING_BAN_CONFIRM = 'Подтвердить ban'
 BTN_FP_CONFIRM = 'Подтвердить выдачу'
 BTN_FP_NEXT = 'Другое ФП'
 
+BTN_RETURN_TO_BAN = '🚫В бан'
+BTN_RETURN_TO_FREE = '↩️Вернуть'
+
+BTN_KING_RETURN_FREE_CONFIRM = 'Подтвердить возврат кинга'
+BTN_FARM_KING_RETURN_FREE_CONFIRM = 'Подтвердить возврат farm king'
+BTN_FP_RETURN_FREE_CONFIRM = 'Подтвердить возврат ФП'
+BTN_FARM_FP_RETURN_FREE_CONFIRM = 'Подтвердить возврат farm FP'
+
+SUBMENU_RETURN_FP = '↩️Вернуть ФП'
+FARM_SUBMENU_RETURN_FP = '↩️Вернуть FP'
+
 # Память состояний пользователей (для старта хватит)
 user_states = {}
+user_state_history = {}
 state_lock = threading.Lock()
 user_action_lock = threading.Lock()
 issue_lock = threading.Lock()
@@ -684,6 +697,19 @@ def send_main_menu(chat_id, text="Главное меню:", user_id=None):
 
     tg_send_message(chat_id, text, keyboard)
 
+def send_text_input_prompt(chat_id, text):
+    keyboard = [
+        [{"text": BTN_BACK_STEP}, {"text": MENU_CANCEL}]
+    ]
+    tg_send_message(chat_id, text, keyboard)
+
+def send_return_action_menu(chat_id, what_text):
+    keyboard = [
+        [{"text": BTN_RETURN_TO_BAN}, {"text": BTN_RETURN_TO_FREE}],
+        [{"text": BTN_BACK_STEP}, {"text": MENU_CANCEL}]
+    ]
+    tg_send_message(chat_id, f"Что сделать с {what_text}?", keyboard)
+
 def send_accounts_main_menu(chat_id, text="Меню Accounts:"):
     keyboard = [
         [{"text": SUBMENU_ACCOUNTS_MAIN}, {"text": MENU_KINGS}],
@@ -698,6 +724,7 @@ def send_fps_menu(chat_id, text="Меню ФП:"):
     keyboard = [
         [{"text": SUBMENU_GET_FP}],
         [{"text": SUBMENU_SEARCH_FP}],
+        [{"text": SUBMENU_RETURN_FP}],
         [{"text": BTN_BACK_TO_MENU}]
     ]
     tg_send_message(chat_id, text, keyboard)
@@ -744,6 +771,7 @@ def send_farm_fps_menu(chat_id, text="Меню Farm FP:"):
     keyboard = [
         [{"text": FARM_SUBMENU_GET_FP}],
         [{"text": FARM_SUBMENU_SEARCH_FP}],
+        [{"text": FARM_SUBMENU_RETURN_FP}],
         [{"text": BTN_BACK_TO_FARMERS}]
     ]
     tg_send_message(chat_id, text, keyboard)
@@ -924,7 +952,7 @@ def send_crypto_king_geo_options(chat_id):
     for geo in geos:
         keyboard.append([{"text": geo}])
 
-    keyboard.append([{"text": MENU_CANCEL}])
+    keyboard.append([{"text": BTN_BACK_STEP}, {"text": MENU_CANCEL}])
 
     tg_send_message(chat_id, "Какое нужно гео?", keyboard)
 
@@ -1018,7 +1046,7 @@ def send_king_geo_options(chat_id):
     for geo in geos:
         keyboard.append([{"text": geo}])
 
-    keyboard.append([{"text": MENU_CANCEL}])
+    keyboard.append([{"text": BTN_BACK_STEP}, {"text": MENU_CANCEL}])
 
     tg_send_message(chat_id, "Какое нужно гео?", keyboard)
 
@@ -1861,7 +1889,7 @@ def send_currency_options(chat_id, currencies):
 def send_department_menu(chat_id, title="Выбери отдел:"):
     keyboard = [
         [{"text": DEPT_CRYPTO}, {"text": DEPT_GAMBLA}],
-        [{"text": MENU_CANCEL}]
+        [{"text": BTN_BACK_STEP}, {"text": MENU_CANCEL}]
     ]
     tg_send_message(chat_id, title, keyboard)
 
@@ -1888,7 +1916,7 @@ def send_person_menu(chat_id, department):
     if row:
         keyboard.append(row)
 
-    keyboard.append([{"text": MENU_CANCEL}])
+    keyboard.append([{"text": BTN_BACK_STEP}, {"text": MENU_CANCEL}])
 
     tg_send_message(chat_id, title, keyboard)
 
@@ -2107,6 +2135,57 @@ def build_fp_search_text(fp_link):
     )
 
     return text
+
+def return_fp_to_ban(fp_link, comment_text=""):
+    found = find_fp_in_base(fp_link)
+    if not found:
+        return False, "ФП не найдено."
+
+    row = found["row"]
+    if len(row) < 9:
+        row = row + [''] * (9 - len(row))
+
+    status = str(row[5]).strip().lower()
+
+    if status == "ban":
+        return False, "Это ФП уже в ban."
+
+    sheet_update_and_refresh(
+        SHEET_FPS,
+        f"F{found['row_index']}:G{found['row_index']}",
+        [["ban", "ban"]]
+    )
+
+    issue_info = find_last_fp_issue_row(fp_link)
+    if issue_info:
+        mark_issue_row_as_ban(issue_info["row_index"], comment_text)
+
+    invalidate_stats_cache()
+    return True, "ФП переведено в ban."
+
+
+def return_fp_to_free(fp_link):
+    found = find_fp_in_base(fp_link)
+    if not found:
+        return False, "ФП не найдено."
+
+    row = found["row"]
+    if len(row) < 9:
+        row = row + [''] * (9 - len(row))
+
+    status = str(row[5]).strip().lower()
+
+    if status == "free":
+        return False, "Это ФП уже free."
+
+    sheet_update_and_refresh(
+        SHEET_FPS,
+        f"F{found['row_index']}:I{found['row_index']}",
+        [["free", "", "", ""]]
+    )
+
+    invalidate_stats_cache()
+    return True, "ФП возвращено в free."
 
 def extract_warehouse_sort_key(warehouse_name):
     text = str(warehouse_name or "").strip().lower()
@@ -2903,17 +2982,6 @@ def extract_pixel_name_from_data(data_text):
 
     return "PIXEL"
 
-def extract_pixel_id_from_data(data_text):
-    text = str(data_text or "").strip()
-    if not text:
-        return ""
-
-    match = re.search(r'ID\s*пикселя\s*:\s*([0-9]+)', text, re.IGNORECASE)
-    if match:
-        return match.group(1).strip()
-
-    return ""
-
 def find_free_pixels(count_needed, exclude_rows=None):
     rows = get_sheet_rows_cached(SHEET_PIXELS)
 
@@ -3031,7 +3099,7 @@ def find_last_pixel_issue_row(pixel_name=None, pixel_id=None):
     return last_match
 
 
-def return_pixel_to_ban(pixel_query):
+def return_pixel_to_ban(pixel_query, comment_text=""):
     found = find_pixel_in_base_by_data(pixel_query)
     if not found:
         return False, "Пиксель не найден."
@@ -3056,7 +3124,7 @@ def return_pixel_to_ban(pixel_query):
 
     issue_info = find_last_pixel_issue_row(pixel_name=pixel_name, pixel_id=pixel_id)
     if issue_info:
-        mark_issue_row_as_ban(issue_info["row_index"])
+        mark_issue_row_as_ban(issue_info["row_index"], comment_text)
 
     invalidate_stats_cache()
     return True, "Пиксель переведён в ban."
@@ -3092,7 +3160,7 @@ def send_farm_king_geo_options(chat_id):
     for geo in geos:
         keyboard.append([{"text": geo}])
 
-    keyboard.append([{"text": MENU_CANCEL}])
+    keyboard.append([{"text": BTN_BACK_STEP}, {"text": MENU_CANCEL}])
 
     tg_send_message(chat_id, "Какое GEO нужно?", keyboard)
 
@@ -3212,7 +3280,7 @@ def build_farm_king_search_text(king_name):
     }
 
 
-def return_farm_king_to_ban(king_name):
+def return_farm_king_to_ban(king_name, comment_text=""):
     found = find_farm_king_in_base_by_name(king_name)
     if not found:
         return False, "Кинг не найден в База фарм кинги."
@@ -3232,10 +3300,33 @@ def return_farm_king_to_ban(king_name):
 
     issue_info = find_last_king_issue_row(king_name)
     if issue_info:
-        mark_issue_row_as_ban(issue_info["row_index"])
+        mark_issue_row_as_ban(issue_info["row_index"], comment_text)
 
     invalidate_stats_cache()
     return True, f"Кинг '{king_name}' переведён в ban."
+
+def return_farm_king_to_free(king_name):
+    found = find_farm_king_in_base_by_name(king_name)
+    if not found:
+        return False, "Кинг не найден в База фарм кинги."
+
+    row = found["row"]
+    if len(row) < 12:
+        row = row + [''] * (12 - len(row))
+
+    status = str(row[4]).strip().lower()
+
+    if status == "free":
+        return False, "Этот farm king уже free."
+
+    sheet_update_and_refresh(
+        SHEET_FARM_KINGS,
+        f"E{found['row_index']}:I{found['row_index']}",
+        [["free", "", "", row[7], ""]]
+    )
+
+    invalidate_stats_cache()
+    return True, f"Farm king '{king_name}' возвращён в free."
 
 
 def issue_farm_kings(chat_id, user_id, username, king_names):
@@ -3429,7 +3520,7 @@ def build_farm_bm_search_text(bm_id):
         f"Данные:\n{row[8] or 'нет данных'}"
     )
 
-def return_farm_bm_to_ban(bm_id):
+def return_farm_bm_to_ban(bm_id, comment_text=""):
     found = find_farm_bm_in_base(bm_id)
     if not found:
         return False, "BM не найден в База фарм бм."
@@ -3451,11 +3542,7 @@ def return_farm_bm_to_ban(bm_id):
 
     issue_info = find_last_bm_issue_row(bm_id)
     if issue_info:
-        sheet_update_and_refresh(
-            SHEET_ISSUES,
-            f"G{issue_info['row_index']}",
-            [["ban"]]
-        )
+        mark_issue_row_as_ban(issue_info["row_index"], comment_text)
 
     invalidate_stats_cache()
     return True, f"BM '{bm_id}' переведён в ban."
@@ -3595,6 +3682,56 @@ def build_farm_fp_search_text(fp_link):
         f"Дата выдачи: {row[8] or 'не указана'}"
     )
 
+def return_farm_fp_to_ban(fp_link, comment_text=""):
+    found = find_farm_fp_in_base(fp_link)
+    if not found:
+        return False, "Farm FP не найдено."
+
+    row = found["row"]
+    if len(row) < 9:
+        row = row + [''] * (9 - len(row))
+
+    status = str(row[5]).strip().lower()
+
+    if status == "ban":
+        return False, "Это farm FP уже в ban."
+
+    sheet_update_and_refresh(
+        SHEET_FARM_FPS,
+        f"F{found['row_index']}:G{found['row_index']}",
+        [["ban", "ban"]]
+    )
+
+    issue_info = find_last_fp_issue_row(fp_link)
+    if issue_info:
+        mark_issue_row_as_ban(issue_info["row_index"], comment_text)
+
+    invalidate_stats_cache()
+    return True, "Farm FP переведено в ban."
+
+
+def return_farm_fp_to_free(fp_link):
+    found = find_farm_fp_in_base(fp_link)
+    if not found:
+        return False, "Farm FP не найдено."
+
+    row = found["row"]
+    if len(row) < 9:
+        row = row + [''] * (9 - len(row))
+
+    status = str(row[5]).strip().lower()
+
+    if status == "free":
+        return False, "Это farm FP уже free."
+
+    sheet_update_and_refresh(
+        SHEET_FARM_FPS,
+        f"F{found['row_index']}:I{found['row_index']}",
+        [["free", "", "", ""]]
+    )
+
+    invalidate_stats_cache()
+    return True, "Farm FP возвращено в free."
 
 def issue_farm_fps(chat_id, user_id, username, count_needed):
     found = find_free_farm_fps(count_needed)
@@ -4213,9 +4350,35 @@ def is_duplicate_update(update_id):
         return False
 
 def set_state(user_id, data):
+    data = dict(data)
     data["_time"] = time.time()
+
     with state_lock:
+        current = user_states.get(str(user_id))
+        if current:
+            history = user_state_history.get(str(user_id), [])
+            history.append(dict(current))
+            user_state_history[str(user_id)] = history[-30:]
+
         user_states[str(user_id)] = data
+
+def push_state_to_history(user_id, state):
+    with state_lock:
+        history = user_state_history.get(str(user_id), [])
+        history.append(dict(state))
+        user_state_history[str(user_id)] = history[-30:]  # храним последние 30 шагов
+
+def go_back_state(user_id):
+    with state_lock:
+        history = user_state_history.get(str(user_id), [])
+        if not history:
+            return None
+
+        prev_state = history.pop()
+        user_state_history[str(user_id)] = history
+        user_states[str(user_id)] = dict(prev_state)
+        user_states[str(user_id)]["_time"] = time.time()
+        return dict(prev_state)
 
 def update_state(user_id, **kwargs):
     state = get_state(user_id)
@@ -4225,6 +4388,7 @@ def update_state(user_id, **kwargs):
 def clear_state(user_id):
     with state_lock:
         user_states.pop(str(user_id), None)
+        user_state_history.pop(str(user_id), None)
 
 def set_last_accounts_section(user_id, section_name):
     state = get_state(user_id)
@@ -4314,14 +4478,24 @@ def find_last_issue_row(account_number):
             }
     return last_match
 
-def mark_issue_row_as_ban(issue_row_index):
+def mark_issue_row_as_ban(issue_row_index, comment_text=""):
     if not issue_row_index:
         return
 
     sheet_update_and_refresh(
         SHEET_ISSUES,
-        f"G{issue_row_index}",
-        [["ban"]]
+        f"G{issue_row_index}:I{issue_row_index}",
+        [["ban", "", str(comment_text or "").strip()]]
+    )
+
+def set_issue_comment(issue_row_index, comment_text):
+    if not issue_row_index:
+        return
+
+    sheet_update_and_refresh(
+        SHEET_ISSUES,
+        f"I{issue_row_index}",
+        [[str(comment_text or "").strip()]]
     )
 
 def is_banned_account(base_row, issue_row=None):
@@ -4335,7 +4509,7 @@ def is_banned_account(base_row, issue_row=None):
 
     return base_target == "ban" or issue_target == "ban"
 
-def return_account_to_ban(account_number):
+def return_account_to_ban(account_number, comment_text=""):
     base_info = find_account_in_base(account_number)
     issue_info = find_last_issue_row(account_number)
 
@@ -4359,7 +4533,7 @@ def return_account_to_ban(account_number):
     )
 
     if issue_info:
-        mark_issue_row_as_ban(issue_info["row_index"])
+        mark_issue_row_as_ban(issue_info["row_index"], comment_text)
 
     invalidate_stats_cache()
     return True, "Личка переведена в ban."
@@ -5079,7 +5253,7 @@ def build_bm_search_text(bm_id):
 
     return text
 
-def return_bm_to_ban(bm_id):
+def return_bm_to_ban(bm_id, comment_text=""):
     bm_info = find_bm_in_base(bm_id)
     if not bm_info:
         return False, "БМ не найден в База_БМ."
@@ -5101,11 +5275,7 @@ def return_bm_to_ban(bm_id):
 
     issue_info = find_last_bm_issue_row(bm_id)
     if issue_info:
-        sheet_update_and_refresh(
-            SHEET_ISSUES,
-            f"G{issue_info['row_index']}",
-            [["ban"]]
-        )
+        mark_issue_row_as_ban(issue_info["row_index"], comment_text)
 
     invalidate_stats_cache()
     return True, f"БМ '{bm_id}' переведён в ban."
@@ -5779,6 +5949,27 @@ def find_last_bm_issue_row(bm_id):
 
     return last_match
 
+def find_last_fp_issue_row(fp_link):
+    rows = get_sheet_rows_cached(SHEET_ISSUES)
+
+    last_match = None
+    target = str(fp_link).strip().lower()
+
+    for idx, row in enumerate(rows[1:], start=2):
+        if len(row) < 7:
+            row = row + [''] * (7 - len(row))
+
+        issue_name = str(row[0]).strip().lower()
+        issue_type = str(row[1]).strip().lower()
+
+        if issue_name == target and issue_type == "fp":
+            last_match = {
+                "row_index": idx,
+                "row": row
+            }
+
+    return last_match
+
 def find_king_in_base_by_name(king_name):
     target = str(king_name).strip().lower()
 
@@ -5801,7 +5992,7 @@ def find_king_in_base_by_name(king_name):
     return None
 
 
-def return_king_to_ban(king_name):
+def return_king_to_ban(king_name, comment_text=""):
     base_info = find_king_in_base_by_name(king_name)
     if not base_info:
         return False, "Кинг не найден в базах."
@@ -5825,10 +6016,35 @@ def return_king_to_ban(king_name):
 
     issue_info = find_last_king_issue_row(king_name)
     if issue_info:
-        mark_issue_row_as_ban(issue_info["row_index"])
+        mark_issue_row_as_ban(issue_info["row_index"], comment_text)
 
     invalidate_stats_cache()
     return True, f"Кинг '{king_name}' переведён в ban."
+
+def return_king_to_free(king_name):
+    base_info = find_king_in_base_by_name(king_name)
+    if not base_info:
+        return False, "Кинг не найден в базах."
+
+    row = base_info["row"]
+    sheet_name = base_info["sheet_name"]
+
+    if len(row) < 12:
+        row = row + [''] * (12 - len(row))
+
+    status = str(row[4]).strip().lower()
+
+    if status == "free":
+        return False, "Этот кинг уже free."
+
+    sheet_update_and_refresh(
+        sheet_name,
+        f"E{base_info['row_index']}:I{base_info['row_index']}",
+        [["free", "", "", row[7], ""]]
+    )
+
+    invalidate_stats_cache()
+    return True, f"Кинг '{king_name}' возвращён в free."
 
 def find_crypto_king_in_base_by_name(king_name):
     rows = get_sheet_rows_cached(SHEET_CRYPTO_KINGS)
@@ -5848,7 +6064,7 @@ def find_crypto_king_in_base_by_name(king_name):
     return None
 
 
-def return_crypto_king_to_ban(king_name):
+def return_crypto_king_to_ban(king_name, comment_text=""):
     base_info = find_crypto_king_in_base_by_name(king_name)
     if not base_info:
         return False, "Crypto king не найден в База_крипта_кинги."
@@ -5869,7 +6085,7 @@ def return_crypto_king_to_ban(king_name):
 
     issue_info = find_last_king_issue_row(king_name)
     if issue_info:
-        mark_issue_row_as_ban(issue_info["row_index"])
+        mark_issue_row_as_ban(issue_info["row_index"], comment_text)
 
     invalidate_stats_cache()
     return True, f"Crypto king '{king_name}' переведён в ban."
@@ -5879,36 +6095,14 @@ def build_king_search_text(king_name):
     if not target:
         return None
 
-    found = None
-    source_title = "Кинг"
-
-    # сначала ищем в обычных кингах
-    king_info = find_king_in_base_by_name(target)
-    if king_info:
-        found = king_info
-        source_title = "Кинг"
-    else:
-        # потом ищем в crypto kings
-        rows = get_sheet_rows_cached(SHEET_CRYPTO_KINGS)
-
-        for idx, row in enumerate(rows[1:], start=2):
-            if len(row) < 12:
-                row = row + [''] * (12 - len(row))
-
-            existing_name = str(row[0]).strip().lower()
-
-            if existing_name == target:
-                found = {
-                    "row_index": idx,
-                    "row": row
-                }
-                source_title = "Crypto king"
-                break
-
+    found = find_king_in_base_by_name(target)
     if not found:
         return None
 
     row = found["row"]
+    sheet_name = found["sheet_name"]
+
+    source_title = "Crypto king" if sheet_name == SHEET_CRYPTO_KINGS else "Кинг"
 
     if len(row) < 12:
         row = row + [''] * (12 - len(row))
@@ -6549,7 +6743,7 @@ def run_sheet_structure_checks():
 
     checks = [
         (SHEET_ACCOUNTS, 14, "Лички"),
-        (SHEET_ISSUES, 7, "Простые лички 26"),
+        (SHEET_ISSUES, 9, "Простые лички 26"),
         (SHEET_KINGS, 12, "Кинги"),
         (SHEET_CRYPTO_KINGS, 12, "Крипта кинги"),
         (SHEET_BMS, 9, "БМы"),
@@ -6936,6 +7130,142 @@ def handle_message(msg):
             send_main_menu(chat_id, "Действие отменено.", user_id=user_id)
             return
 
+        if text == BTN_BACK_STEP:
+            prev_state = go_back_state(user_id)
+
+            if not prev_state:
+                send_main_menu(chat_id, "Назад идти некуда.", user_id=user_id)
+                return
+
+            mode = prev_state.get("mode", "")
+
+            if mode == "awaiting_issue_department":
+                send_department_menu(chat_id, "Выбери для кого личка:")
+                return
+
+            if mode == "awaiting_issue_for_whom":
+                send_person_menu(chat_id, prev_state.get("issue_department"))
+                return
+
+            if mode == "awaiting_issue_account_number":
+                send_text_input_prompt(chat_id, "Теперь напиши номер лички или несколько номеров, каждый с новой строки.")
+                return
+
+            if mode == "awaiting_quick_issue_department":
+                send_department_menu(chat_id, "Выбери для кого быстро выдать личку:")
+                return
+
+            if mode == "awaiting_quick_issue_for_whom":
+                send_person_menu(chat_id, prev_state.get("issue_department"))
+                return
+
+            if mode == "awaiting_king_geo":
+                send_king_geo_options(chat_id)
+                return
+
+            if mode == "awaiting_king_department":
+                send_department_menu(chat_id, "Выбери для кого кинг:")
+                return
+
+            if mode == "awaiting_king_for_whom":
+                send_person_menu(chat_id, prev_state.get("king_department"))
+                return
+
+            if mode == "awaiting_kings_count":
+                tg_send_message(chat_id, "Сколько кингов нужно?", [
+                    [{"text": BTN_BACK_STEP}, {"text": MENU_CANCEL}]
+                ])
+                return
+
+            if mode == "awaiting_king_names_bulk":
+                tg_send_message(chat_id, f"Пришли {prev_state.get('kings_count', 0)} названий для кингов.\nКаждое название с новой строки.")
+                return
+
+            if mode == "awaiting_crypto_king_geo":
+                send_crypto_king_geo_options(chat_id)
+                return
+
+            if mode == "awaiting_crypto_king_department":
+                keyboard = [
+                    [{"text": DEPT_CRYPTO}],
+                    [{"text": BTN_BACK_STEP}, {"text": MENU_CANCEL}]
+                ]
+                tg_send_message(chat_id, "Выбери для кого crypto king:", keyboard)
+                return
+
+            if mode == "awaiting_crypto_king_for_whom":
+                send_person_menu(chat_id, DEPT_CRYPTO)
+                return
+
+            if mode == "awaiting_crypto_king_name":
+                send_text_input_prompt(chat_id, "Какое название будет у crypto king?")
+                return
+
+            if mode == "awaiting_bm_department":
+                send_department_menu(chat_id, "Выбери для кого БМ:")
+                return
+
+            if mode == "awaiting_bm_for_whom":
+                send_person_menu(chat_id, prev_state.get("bm_department"))
+                return
+
+            if mode == "awaiting_bm_count":
+                tg_send_message(chat_id, "Сколько БМов нужно?", [
+                    [{"text": BTN_BACK_STEP}, {"text": MENU_CANCEL}]
+                ])
+                return
+
+            if mode == "awaiting_fp_department":
+                send_department_menu(chat_id, "Выбери для кого ФП:")
+                return
+
+            if mode == "awaiting_return_fp_ban":
+                send_text_input_prompt(chat_id, "Впиши ссылку ФП, которую нужно перевести в ban.")
+                return
+
+            if mode == "awaiting_farm_return_fp_ban":
+                send_text_input_prompt(chat_id, "Впиши ссылку farm FP, которую нужно перевести в ban.")
+                return
+
+            if mode == "awaiting_fp_for_whom":
+                send_person_menu(chat_id, prev_state.get("fp_department"))
+                return
+
+            if mode == "awaiting_fp_count":
+                send_text_input_prompt(chat_id, "Сколько ФП нужно?")
+                return
+
+            if mode == "awaiting_pixel_department":
+                send_department_menu(chat_id, "Выбери для кого Пиксели:")
+                return
+
+            if mode == "awaiting_pixel_for_whom":
+                send_person_menu(chat_id, prev_state.get("pixel_department"))
+                return
+
+            if mode == "awaiting_pixel_count":
+                send_text_input_prompt(chat_id, "Сколько Пикселей нужно?")
+                return
+
+            if mode == "awaiting_farm_king_geo":
+                send_farm_king_geo_options(chat_id)
+                return
+
+            if mode == "awaiting_farm_kings_count":
+                tg_send_message(chat_id, f"Сколько кингов нужно для GEO {prev_state.get('farm_king_geo', '')}?")
+                return
+
+            if mode == "awaiting_farm_king_names":
+                tg_send_message(chat_id, f"Пришли {prev_state.get('farm_kings_count', 0)} названий для кингов.\nКаждое название с новой строки.")
+                return
+
+            if mode == "awaiting_farm_fp_count":
+                send_text_input_prompt(chat_id, "Сколько FP нужно?")
+                return
+
+            send_main_menu(chat_id, "Возврат выполнен.", user_id=user_id)
+            return
+
         # ========= ГЛАВНОЕ МЕНЮ =========
         if text == MENU_STATS:
             stats_text = build_stats_text()
@@ -7294,12 +7624,12 @@ def handle_message(msg):
 
         if text == SUBMENU_SEARCH:
             update_state(user_id, mode="awaiting_search_account")
-            tg_send_message(chat_id, "Впиши номер лички для поиска.")
+            send_text_input_prompt(chat_id, "Впиши номер лички для поиска.")
             return
 
         if text == SUBMENU_RETURN:
-            update_state(user_id, mode="awaiting_return_account")
-            tg_send_message(chat_id, "Впиши номер лички, которую нужно отправить в ban.")
+            update_state(user_id, mode="awaiting_account_return_action")
+            send_return_action_menu(chat_id, "личкой")
             return
 
         if text == SUBMENU_GET:
@@ -7388,14 +7718,64 @@ def handle_message(msg):
             return
 
         if text == BTN_RETURN_CONFIRM:
-            if state.get("mode") != "awaiting_return_confirm":
-                send_accounts_menu(chat_id, "Сначала выбери действие заново.")
+            if state.get("mode") == "awaiting_return_confirm":
+                set_state(user_id, {
+                    "mode": "awaiting_ban_reason_account",
+                    "return_account_number": state.get("return_account_number", "")
+                })
+                send_text_input_prompt(chat_id, "Напиши причину бана для лички.")
                 return
 
-            account_number = state.get("return_account_number", "")
-            ok, message = return_account_to_ban(account_number)
-            clear_state(user_id)
-            send_accounts_main_menu(chat_id, message)
+            if state.get("mode") == "awaiting_return_king_confirm":
+                set_state(user_id, {
+                    "mode": "awaiting_ban_reason_king",
+                    "return_king_name": state.get("return_king_name", ""),
+                    "return_king_source": state.get("return_king_source", "normal")
+                })
+                send_text_input_prompt(chat_id, "Напиши причину бана для кинга.")
+                return
+
+            if state.get("mode") == "awaiting_return_bm_confirm":
+                set_state(user_id, {
+                    "mode": "awaiting_ban_reason_bm",
+                    "return_bm_id": state.get("return_bm_id", "")
+                })
+                send_text_input_prompt(chat_id, "Напиши причину бана для БМа.")
+                return
+
+            if state.get("mode") == "awaiting_return_pixel_confirm":
+                set_state(user_id, {
+                    "mode": "awaiting_ban_reason_pixel",
+                    "return_pixel_query": state.get("return_pixel_query", "")
+                })
+                send_text_input_prompt(chat_id, "Напиши причину бана для Пикселя.")
+                return
+
+            if state.get("mode") == "awaiting_farm_return_bm_confirm":
+                set_state(user_id, {
+                    "mode": "awaiting_ban_reason_farm_bm",
+                    "return_farm_bm_id": state.get("return_farm_bm_id", "")
+                })
+                send_text_input_prompt(chat_id, "Напиши причину бана для farm BM.")
+                return
+
+            if state.get("mode") == "awaiting_return_fp_ban_confirm":
+                set_state(user_id, {
+                    "mode": "awaiting_ban_reason_fp",
+                    "return_fp_link": state.get("return_fp_link", "")
+                })
+                send_text_input_prompt(chat_id, "Напиши причину бана для ФП.")
+                return
+
+            if state.get("mode") == "awaiting_farm_return_fp_ban_confirm":
+                set_state(user_id, {
+                    "mode": "awaiting_ban_reason_farm_fp",
+                    "return_fp_link": state.get("return_fp_link", "")
+                })
+                send_text_input_prompt(chat_id, "Напиши причину бана для farm FP.")
+                return
+
+            send_accounts_menu(chat_id, "Сначала выбери действие заново.")
             return
 
         # ========= КИНГИ =========
@@ -7412,21 +7792,21 @@ def handle_message(msg):
         if text == SUBMENU_SEARCH_KING:
             if state.get("last_farmers_section") == "kings":
                 update_state(user_id, mode="awaiting_farm_search_king_name")
-                tg_send_message(chat_id, "Впиши название кинга.")
+                send_text_input_prompt(chat_id, "Впиши название кинга.")
                 return
 
             update_state(user_id, mode="awaiting_search_king_name")
-            tg_send_message(chat_id, "Впиши название кинга.")
+            send_text_input_prompt(chat_id, "Впиши название кинга.")
             return
 
         if text == SUBMENU_RETURN_KING:
             if state.get("last_farmers_section") == "kings":
-                update_state(user_id, mode="awaiting_farm_return_king_name")
-                tg_send_message(chat_id, "Впиши название кинга.")
+                update_state(user_id, mode="awaiting_farm_king_return_action")
+                send_return_action_menu(chat_id, "фарм кингом")
                 return
 
-            update_state(user_id, mode="awaiting_return_king_name")
-            tg_send_message(chat_id, "Впиши название кинга, который нужно перевести в ban.")
+            update_state(user_id, mode="awaiting_king_return_action")
+            send_return_action_menu(chat_id, "кингом")
             return
 
         if text == SUBMENU_GET_KINGS:
@@ -7493,16 +7873,81 @@ def handle_message(msg):
                 send_kings_menu(chat_id, "Сначала выбери действие заново.")
                 return
 
+            set_state(user_id, {
+                "mode": "awaiting_ban_reason_king",
+                "return_king_name": state.get("return_king_name", ""),
+                "return_king_source": state.get("return_king_source", "normal")
+            })
+            send_text_input_prompt(chat_id, "Напиши причину бана для кинга.")
+            return
+
+        if text == BTN_KING_RETURN_FREE_CONFIRM:
+            if state.get("mode") != "awaiting_return_king_free_confirm":
+                send_kings_menu(chat_id, "Сначала выбери действие заново.")
+                return
+
             king_name = state.get("return_king_name", "")
-            source = state.get("return_king_source", "normal")
-
-            if source == "crypto":
-                ok, message = return_crypto_king_to_ban(king_name)
-            else:
-                ok, message = return_king_to_ban(king_name)
-
+            ok, message = return_king_to_free(king_name)
             clear_state(user_id)
             send_accounts_main_menu(chat_id, message)
+            return
+
+
+        if text == BTN_FARM_KING_RETURN_FREE_CONFIRM:
+            if state.get("mode") != "awaiting_farm_return_king_free_confirm":
+                send_farm_kings_menu(chat_id, "Сначала выбери действие заново.")
+                return
+
+            king_name = state.get("return_king_name", "")
+            ok, message = return_farm_king_to_free(king_name)
+            clear_state(user_id)
+            send_farm_kings_menu(chat_id, message)
+            return
+
+        if text == BTN_FP_RETURN_FREE_CONFIRM:
+            if state.get("mode") != "awaiting_return_fp_free_confirm":
+                send_fps_menu(chat_id, "Сначала выбери действие заново.")
+                return
+
+            fp_link = state.get("return_fp_link", "")
+            ok, message = return_fp_to_free(fp_link)
+            clear_state(user_id)
+            send_fps_menu(chat_id, message)
+            return
+
+
+        if text == BTN_FARM_FP_RETURN_FREE_CONFIRM:
+            if state.get("mode") != "awaiting_farm_return_fp_free_confirm":
+                send_farm_fps_menu(chat_id, "Сначала выбери действие заново.")
+                return
+
+            fp_link = state.get("return_fp_link", "")
+            ok, message = return_farm_fp_to_free(fp_link)
+            clear_state(user_id)
+            send_farm_fps_menu(chat_id, message)
+            return
+
+        if text == BTN_FP_RETURN_FREE_CONFIRM:
+            if state.get("mode") != "awaiting_return_fp_free_confirm":
+                send_fps_menu(chat_id, "Сначала выбери действие заново.")
+                return
+
+            fp_link = state.get("return_fp_link", "")
+            ok, message = return_fp_to_free(fp_link)
+            clear_state(user_id)
+            send_fps_menu(chat_id, message)
+            return
+
+
+        if text == BTN_FARM_FP_RETURN_FREE_CONFIRM:
+            if state.get("mode") != "awaiting_farm_return_fp_free_confirm":
+                send_farm_fps_menu(chat_id, "Сначала выбери действие заново.")
+                return
+
+            fp_link = state.get("return_fp_link", "")
+            ok, message = return_farm_fp_to_free(fp_link)
+            clear_state(user_id)
+            send_farm_fps_menu(chat_id, message)
             return
 
         # ========= БМы =========
@@ -7525,12 +7970,12 @@ def handle_message(msg):
                 return
 
             update_state(user_id, mode="awaiting_search_bm")
-            tg_send_message(chat_id, "Впиши ID БМа для поиска.")
+            send_text_input_prompt(chat_id, "Впиши ID БМа для поиска.")
             return
 
         if text == SUBMENU_RETURN_BM:
             set_state(user_id, {"mode": "awaiting_return_bm"})
-            tg_send_message(chat_id, "Впиши ID БМа, который нужно перевести в ban.")
+            send_text_input_prompt(chat_id, "Впиши ID БМа, который нужно перевести в ban.")
             return
 
         if text == SUBMENU_GET_BM:
@@ -7549,19 +7994,19 @@ def handle_message(msg):
 
         if text == BTN_BM_BAN_CONFIRM:
             if state.get("mode") == "awaiting_return_bm_confirm":
-                bm_id = state.get("return_bm_id", "")
-                ok, message = return_bm_to_ban(bm_id)
-
-                clear_state(user_id)
-                send_bms_menu(chat_id, message)
+                set_state(user_id, {
+                    "mode": "awaiting_ban_reason_bm",
+                    "return_bm_id": state.get("return_bm_id", "")
+                })
+                send_text_input_prompt(chat_id, "Напиши причину бана для БМа.")
                 return
 
             if state.get("mode") == "awaiting_farm_return_bm_confirm":
-                bm_id = state.get("return_farm_bm_id", "")
-                ok, message = return_farm_bm_to_ban(bm_id)
-
-                clear_state(user_id)
-                send_farm_bms_menu(chat_id, message)
+                set_state(user_id, {
+                    "mode": "awaiting_ban_reason_farm_bm",
+                    "return_farm_bm_id": state.get("return_farm_bm_id", "")
+                })
+                send_text_input_prompt(chat_id, "Напиши причину бана для farm BM.")
                 return
 
             send_main_menu(chat_id, "Сначала выбери действие заново.", user_id=user_id)
@@ -7586,17 +8031,22 @@ def handle_message(msg):
         if text == SUBMENU_SEARCH_FP:
             if state.get("last_farmers_section") == "fps":
                 update_state(user_id, mode="awaiting_farm_search_fp")
-                tg_send_message(chat_id, "Впиши ссылку FP.")
+                send_text_input_prompt(chat_id, "Впиши ссылку FP.")
                 return
 
             update_state(user_id, mode="awaiting_search_fp")
-            tg_send_message(chat_id, "Впиши ссылку ФП для поиска.")
+            send_text_input_prompt(chat_id, "Впиши ссылку ФП для поиска.")
+            return
+
+        if text == SUBMENU_RETURN_FP:
+            update_state(user_id, mode="awaiting_fp_return_action")
+            send_return_action_menu(chat_id, "ФП")
             return
 
         if text == SUBMENU_GET_FP:
             if state.get("last_farmers_section") == "fps":
                 set_state(user_id, {"mode": "awaiting_farm_fp_count", "last_farmers_section": "fps"})
-                tg_send_message(chat_id, "Сколько FP нужно?")
+                send_text_input_prompt(chat_id, "Сколько FP нужно?")
                 return
 
             clear_state(user_id)
@@ -7625,12 +8075,12 @@ def handle_message(msg):
 
         if text == SUBMENU_SEARCH_PIXEL:
             update_state(user_id, mode="awaiting_search_pixel")
-            tg_send_message(chat_id, "Впиши ID пикселя или часть данных Пикселя для поиска.")
+            send_text_input_prompt(chat_id, "Впиши ID пикселя или часть данных Пикселя для поиска.")
             return
 
         if text == SUBMENU_RETURN_PIXEL:
             update_state(user_id, mode="awaiting_return_pixel")
-            tg_send_message(chat_id, "Впиши ID пикселя или часть данных Пикселя, который нужно перевести в ban.")
+            send_text_input_prompt(chat_id, "Впиши ID пикселя или часть данных Пикселя, который нужно перевести в ban.")
             return
 
         if text == SUBMENU_GET_PIXELS:
@@ -7663,10 +8113,11 @@ def handle_message(msg):
                 send_pixels_menu(chat_id, "Сначала выбери действие заново.")
                 return
 
-            pixel_query = state.get("return_pixel_query", "")
-            ok, message = return_pixel_to_ban(pixel_query)
-            clear_state(user_id)
-            send_pixels_menu(chat_id, message)
+            set_state(user_id, {
+                "mode": "awaiting_ban_reason_pixel",
+                "return_pixel_query": state.get("return_pixel_query", "")
+            })
+            send_text_input_prompt(chat_id, "Напиши причину бана для Пикселя.")
             return
         
         # ========= FARMERS =========
@@ -7681,13 +8132,13 @@ def handle_message(msg):
             return
 
         if text == FARM_SUBMENU_RETURN_KING:
-            set_state(user_id, {"mode": "awaiting_farm_return_king_name"})
-            tg_send_message(chat_id, "Впиши название кинга.")
+            update_state(user_id, mode="awaiting_farm_king_return_action")
+            send_return_action_menu(chat_id, "фарм кингом")
             return
 
         if text == FARM_SUBMENU_SEARCH_KING:
             set_state(user_id, {"mode": "awaiting_farm_search_king_name"})
-            tg_send_message(chat_id, "Впиши название кинга.")
+            send_text_input_prompt(chat_id, "Впиши название кинга.")
             return
 
         if text == FARM_SUBMENU_FREE_BMS:
@@ -7707,17 +8158,22 @@ def handle_message(msg):
 
         if text == FARM_SUBMENU_RETURN_BM:
             set_state(user_id, {"mode": "awaiting_farm_return_bm"})
-            tg_send_message(chat_id, "Впиши ID BM, который нужно перевести в ban.")
+            send_text_input_prompt(chat_id, "Впиши ID BM, который нужно перевести в ban.")
             return
 
         if text == FARM_SUBMENU_GET_FP:
             set_state(user_id, {"mode": "awaiting_farm_fp_count"})
-            tg_send_message(chat_id, "Сколько FP нужно?")
+            send_text_input_prompt(chat_id, "Сколько FP нужно?")
             return
 
         if text == FARM_SUBMENU_SEARCH_FP:
             set_state(user_id, {"mode": "awaiting_farm_search_fp"})
-            tg_send_message(chat_id, "Впиши ссылку FP.")
+            send_text_input_prompt(chat_id, "Впиши ссылку FP.")
+            return
+
+        if text == FARM_SUBMENU_RETURN_FP:
+            update_state(user_id, mode="awaiting_farm_fp_return_action")
+            send_return_action_menu(chat_id, "farm FP")
             return
 
         if text == BTN_FARM_KINGS_PARTIAL_CONFIRM:
@@ -7725,12 +8181,14 @@ def handle_message(msg):
                 send_farm_kings_menu(chat_id, "Начни заново.")
                 return
 
+            count_needed = state.get("farm_kings_count", 0)
+
             state["mode"] = "awaiting_farm_king_names"
             set_state(user_id, state)
 
-            tg_send_message(
+            send_text_input_prompt(
                 chat_id,
-                f"Пришли {state['farm_kings_count']} названий для кингов.\nКаждое название с новой строки."
+                f"Пришли {count_needed} названий для кингов.\nКаждое название с новой строки."
             )
             return
 
@@ -7811,6 +8269,80 @@ def handle_message(msg):
             send_accounts_main_menu(chat_id, "Меню Accounts:")
             return
 
+        if state.get("mode") == "awaiting_account_return_action":
+            if text == BTN_RETURN_TO_BAN:
+                update_state(user_id, mode="awaiting_return_account")
+                send_text_input_prompt(chat_id, "Впиши номер лички, которую нужно отправить в ban.")
+                return
+
+            if text == BTN_RETURN_TO_FREE:
+                update_state(user_id, mode="awaiting_return_account_free")
+                send_text_input_prompt(chat_id, "Впиши номер лички, которую нужно вернуть.")
+                return
+
+            send_return_action_menu(chat_id, "личкой")
+            return
+
+
+        if state.get("mode") == "awaiting_king_return_action":
+            if text == BTN_RETURN_TO_BAN:
+                update_state(user_id, mode="awaiting_return_king_name")
+                send_text_input_prompt(chat_id, "Впиши название кинга, который нужно перевести в ban.")
+                return
+
+            if text == BTN_RETURN_TO_FREE:
+                update_state(user_id, mode="awaiting_return_king_free_name")
+                send_text_input_prompt(chat_id, "Впиши название кинга, который нужно вернуть.")
+                return
+
+            send_return_action_menu(chat_id, "кингом")
+            return
+
+
+        if state.get("mode") == "awaiting_farm_king_return_action":
+            if text == BTN_RETURN_TO_BAN:
+                update_state(user_id, mode="awaiting_farm_return_king_name")
+                send_text_input_prompt(chat_id, "Впиши название кинга.")
+                return
+
+            if text == BTN_RETURN_TO_FREE:
+                update_state(user_id, mode="awaiting_farm_return_king_free_name")
+                send_text_input_prompt(chat_id, "Впиши название кинга, который нужно вернуть.")
+                return
+
+            send_return_action_menu(chat_id, "фарм кингом")
+            return
+
+
+        if state.get("mode") == "awaiting_fp_return_action":
+            if text == BTN_RETURN_TO_BAN:
+                update_state(user_id, mode="awaiting_return_fp_ban")
+                send_text_input_prompt(chat_id, "Впиши ссылку ФП, которую нужно перевести в ban.")
+                return
+
+            if text == BTN_RETURN_TO_FREE:
+                update_state(user_id, mode="awaiting_return_fp_free")
+                send_text_input_prompt(chat_id, "Впиши ссылку ФП, которую нужно вернуть.")
+                return
+
+            send_return_action_menu(chat_id, "ФП")
+            return
+
+
+        if state.get("mode") == "awaiting_farm_fp_return_action":
+            if text == BTN_RETURN_TO_BAN:
+                update_state(user_id, mode="awaiting_farm_return_fp_ban")
+                send_text_input_prompt(chat_id, "Впиши ссылку farm FP, которую нужно перевести в ban.")
+                return
+
+            if text == BTN_RETURN_TO_FREE:
+                update_state(user_id, mode="awaiting_farm_return_fp_free")
+                send_text_input_prompt(chat_id, "Впиши ссылку farm FP, которую нужно вернуть.")
+                return
+
+            send_return_action_menu(chat_id, "farm FP")
+            return
+
         # ========= СОСТОЯНИЯ: ПОИСК / ВОЗВРАТ ЛИЧЕК =========
         if state.get("mode") == "awaiting_search_account":
             account_number = text.strip()
@@ -7859,6 +8391,125 @@ def handle_message(msg):
             )
             return
 
+        if state.get("mode") == "awaiting_return_fp_ban":
+            fp_link = text.strip()
+
+            if not fp_link:
+                tg_send_message(chat_id, "Впиши ссылку ФП.")
+                return
+
+            found = find_fp_in_base(fp_link)
+            if not found:
+                clear_state(user_id)
+                send_fps_menu(chat_id, "ФП не найдено.")
+                return
+
+            set_state(user_id, {
+                "mode": "awaiting_return_fp_ban_confirm",
+                "return_fp_link": fp_link
+            })
+
+            keyboard = [
+                [{"text": BTN_RETURN_CONFIRM}, {"text": MENU_CANCEL}]
+            ]
+
+            tg_send_message(
+                chat_id,
+                "Внимание: ФП будет переведено в ban.\nПодтвердить?",
+                keyboard
+            )
+            return
+
+
+        if state.get("mode") == "awaiting_return_fp_free":
+            fp_link = text.strip()
+
+            if not fp_link:
+                tg_send_message(chat_id, "Впиши ссылку ФП.")
+                return
+
+            found = find_fp_in_base(fp_link)
+            if not found:
+                clear_state(user_id)
+                send_fps_menu(chat_id, "ФП не найдено.")
+                return
+
+            set_state(user_id, {
+                "mode": "awaiting_return_fp_free_confirm",
+                "return_fp_link": fp_link
+            })
+
+            keyboard = [
+                [{"text": BTN_FP_RETURN_FREE_CONFIRM}, {"text": MENU_CANCEL}]
+            ]
+
+            tg_send_message(
+                chat_id,
+                "Внимание: ФП будет возвращено в free.\nПодтвердить?",
+                keyboard
+            )
+            return
+
+
+        if state.get("mode") == "awaiting_farm_return_fp_ban":
+            fp_link = text.strip()
+
+            if not fp_link:
+                tg_send_message(chat_id, "Впиши ссылку FP.")
+                return
+
+            found = find_farm_fp_in_base(fp_link)
+            if not found:
+                clear_state(user_id)
+                send_farm_fps_menu(chat_id, "FP не найдено.")
+                return
+
+            set_state(user_id, {
+                "mode": "awaiting_farm_return_fp_ban_confirm",
+                "return_fp_link": fp_link
+            })
+
+            keyboard = [
+                [{"text": BTN_RETURN_CONFIRM}, {"text": MENU_CANCEL}]
+            ]
+
+            tg_send_message(
+                chat_id,
+                "Внимание: farm FP будет переведено в ban.\nПодтвердить?",
+                keyboard
+            )
+            return
+
+
+        if state.get("mode") == "awaiting_farm_return_fp_free":
+            fp_link = text.strip()
+
+            if not fp_link:
+                tg_send_message(chat_id, "Впиши ссылку FP.")
+                return
+
+            found = find_farm_fp_in_base(fp_link)
+            if not found:
+                clear_state(user_id)
+                send_farm_fps_menu(chat_id, "FP не найдено.")
+                return
+
+            set_state(user_id, {
+                "mode": "awaiting_farm_return_fp_free_confirm",
+                "return_fp_link": fp_link
+            })
+
+            keyboard = [
+                [{"text": BTN_FARM_FP_RETURN_FREE_CONFIRM}, {"text": MENU_CANCEL}]
+            ]
+
+            tg_send_message(
+                chat_id,
+                "Внимание: farm FP будет возвращено в free.\nПодтвердить?",
+                keyboard
+            )
+            return
+
         # ========= СОСТОЯНИЯ: ВЫДАЧА ЛИЧЕК =========
         if state.get("mode") == "awaiting_issue_department":
             if text not in [DEPT_CRYPTO, DEPT_GAMBLA]:
@@ -7892,7 +8543,7 @@ def handle_message(msg):
                 "issue_department": state.get("issue_department")
             })
 
-            tg_send_message(chat_id, "Теперь напиши номер лички или несколько номеров, каждый с новой строки.")
+            send_text_input_prompt(chat_id, "Теперь напиши номер лички или несколько номеров, каждый с новой строки.")
             return
 
         if state.get("mode") == "awaiting_issue_account_number":
@@ -8103,7 +8754,7 @@ def handle_message(msg):
             state["king_for_whom"] = clean_name
             set_state(user_id, state)
 
-            tg_send_message(chat_id, "Какое название будет у crypto king?")
+            send_text_input_prompt(chat_id, "Какое название будет у crypto king?")
             return
 
 
@@ -8177,7 +8828,9 @@ def handle_message(msg):
             state["king_for_whom"] = clean_name
             set_state(user_id, state)
 
-            tg_send_message(chat_id, "Сколько кингов нужно?")
+            tg_send_message(chat_id, "Сколько кингов нужно?", [
+                [{"text": BTN_BACK_STEP}, {"text": MENU_CANCEL}]
+            ])
             return
 
         if state.get("mode") == "awaiting_kings_count":
@@ -8253,7 +8906,7 @@ def handle_message(msg):
             king_name = text.strip()
 
             if not king_name:
-                tg_send_message(chat_id, "Напиши название кинга.")
+                send_text_input_prompt(chat_id, "Напиши название кинга.")
                 return
 
             if king_name_exists(king_name):
@@ -8278,7 +8931,7 @@ def handle_message(msg):
             king_name = text.strip()
 
             if not king_name:
-                tg_send_message(chat_id, "Впиши название кинга.")
+                send_text_input_prompt(chat_id, "Впиши название кинга.")
                 return
 
             result = build_king_search_text(king_name)
@@ -8303,7 +8956,7 @@ def handle_message(msg):
             king_name = text.strip()
 
             if not king_name:
-                tg_send_message(chat_id, "Впиши название кинга.")
+                send_text_input_prompt(chat_id, "Впиши название кинга.")
                 return
 
             normal_king = find_king_in_base_by_name(king_name)
@@ -8328,6 +8981,65 @@ def handle_message(msg):
             tg_send_message(
                 chat_id,
                 f"Внимание: кинг '{king_name}' будет перемещён в ban.\nПодтвердить?",
+                keyboard
+            )
+            return
+
+        if state.get("mode") == "awaiting_return_king_free_name":
+            king_name = text.strip()
+
+            if not king_name:
+                send_text_input_prompt(chat_id, "Впиши название кинга.")
+                return
+
+            found = find_king_in_base_by_name(king_name)
+            if not found:
+                clear_state(user_id)
+                send_kings_menu(chat_id, "Кинг не найден.")
+                return
+
+            set_state(user_id, {
+                "mode": "awaiting_return_king_free_confirm",
+                "return_king_name": king_name
+            })
+
+            keyboard = [
+                [{"text": BTN_KING_RETURN_FREE_CONFIRM}, {"text": MENU_CANCEL}]
+            ]
+
+            tg_send_message(
+                chat_id,
+                f"Внимание: кинг '{king_name}' будет возвращён в free.\nПодтвердить?",
+                keyboard
+            )
+            return
+
+
+        if state.get("mode") == "awaiting_farm_return_king_free_name":
+            king_name = text.strip()
+
+            if not king_name:
+                send_text_input_prompt(chat_id, "Впиши название кинга.")
+                return
+
+            found = find_farm_king_in_base_by_name(king_name)
+            if not found:
+                clear_state(user_id)
+                send_farm_kings_menu(chat_id, "Кинг не найден.")
+                return
+
+            set_state(user_id, {
+                "mode": "awaiting_farm_return_king_free_confirm",
+                "return_king_name": king_name
+            })
+
+            keyboard = [
+                [{"text": BTN_FARM_KING_RETURN_FREE_CONFIRM}, {"text": MENU_CANCEL}]
+            ]
+
+            tg_send_message(
+                chat_id,
+                f"Внимание: farm king '{king_name}' будет возвращён в free.\nПодтвердить?",
                 keyboard
             )
             return
@@ -8363,7 +9075,7 @@ def handle_message(msg):
             state["bm_for_whom"] = clean_name
             set_state(user_id, state)
 
-            tg_send_message(chat_id, "Сколько БМов нужно?")
+            send_text_input_prompt(chat_id, "Сколько БМов нужно?")
             return
 
         if state.get("mode") == "awaiting_bm_count":
@@ -8522,7 +9234,7 @@ def handle_message(msg):
                 "pixel_for_whom": clean_name
             })
 
-            tg_send_message(chat_id, "Сколько Пикселей нужно?")
+            send_text_input_prompt(chat_id, "Сколько Пикселей нужно?")
             return
 
         if state.get("mode") == "awaiting_pixel_count":
@@ -8588,7 +9300,7 @@ def handle_message(msg):
             state["fp_for_whom"] = clean_name
             set_state(user_id, state)
 
-            tg_send_message(chat_id, "Сколько ФП нужно?")
+            send_text_input_prompt(chat_id, "Сколько ФП нужно?")
             return
 
         if state.get("mode") == "awaiting_fp_count":
@@ -8618,7 +9330,7 @@ def handle_message(msg):
                 "farm_king_geo": text
             })
 
-            tg_send_message(chat_id, f"Сколько кингов нужно для GEO {text}?")
+            send_text_input_prompt(chat_id, f"Сколько кингов нужно для GEO {text}?")
             return
 
         if state.get("mode") == "awaiting_farm_kings_count":
@@ -8669,9 +9381,9 @@ def handle_message(msg):
                 "farm_king_rows": found
             })
 
-            tg_send_message(
+            send_text_input_prompt(
                 chat_id,
-                f"Пришли {count_needed} названий для кингов GEO {selected_geo}.\nКаждое название с новой строки."
+                f"Пришли {state['farm_kings_count']} названий для кингов.\nКаждое название с новой строки."
             )
             return
 
@@ -8700,7 +9412,7 @@ def handle_message(msg):
             king_name = text.strip()
 
             if not king_name:
-                tg_send_message(chat_id, "Впиши название кинга.")
+                send_text_input_prompt(chat_id, "Впиши название кинга.")
                 return
 
             result = build_farm_king_search_text(king_name)
@@ -8725,10 +9437,32 @@ def handle_message(msg):
             king_name = text.strip()
 
             if not king_name:
-                tg_send_message(chat_id, "Впиши название кинга.")
+                send_text_input_prompt(chat_id, "Впиши название кинга.")
                 return
 
-            ok, message = return_farm_king_to_ban(king_name)
+            found = find_farm_king_in_base_by_name(king_name)
+            if not found:
+                clear_state(user_id)
+                send_farm_kings_menu(chat_id, "Кинг не найден.")
+                return
+
+            set_state(user_id, {
+                "mode": "awaiting_ban_reason_farm_king",
+                "return_king_name": king_name
+            })
+            send_text_input_prompt(chat_id, "Напиши причину бана для farm king.")
+            return
+
+
+        if state.get("mode") == "awaiting_ban_reason_farm_king":
+            comment_text = text.strip()
+
+            if not comment_text:
+                send_text_input_prompt(chat_id, "Напиши причину бана для farm king.")
+                return
+
+            king_name = state.get("return_king_name", "")
+            ok, message = return_farm_king_to_ban(king_name, comment_text)
             clear_state(user_id)
             send_farm_kings_menu(chat_id, message)
             return
@@ -8738,7 +9472,7 @@ def handle_message(msg):
             bm_id = text.strip()
 
             if not bm_id:
-                tg_send_message(chat_id, "Впиши ID BM.")
+                send_text_input_prompt(chat_id, "Впиши ID BM.")
                 return
 
             result = build_farm_bm_search_text(bm_id)
@@ -8802,7 +9536,7 @@ def handle_message(msg):
             fp_link = text.strip()
 
             if not fp_link:
-                tg_send_message(chat_id, "Впиши ссылку FP.")
+                send_text_input_prompt(chat_id, "Впиши ссылку FP.")
                 return
 
             result = build_farm_fp_search_text(fp_link)
@@ -8814,6 +9548,102 @@ def handle_message(msg):
 
             tg_send_message(chat_id, result)
             send_farm_fps_menu(chat_id, "Выбери следующее действие:")
+            return
+
+        if state.get("mode") == "awaiting_ban_reason_account":
+            comment_text = text.strip()
+            if not comment_text:
+                send_text_input_prompt(chat_id, "Напиши причину бана для лички.")
+                return
+
+            account_number = state.get("return_account_number", "")
+            ok, message = return_account_to_ban(account_number, comment_text)
+            clear_state(user_id)
+            send_accounts_main_menu(chat_id, message)
+            return
+
+
+        if state.get("mode") == "awaiting_ban_reason_king":
+            comment_text = text.strip()
+            if not comment_text:
+                send_text_input_prompt(chat_id, "Напиши причину бана для кинга.")
+                return
+
+            king_name = state.get("return_king_name", "")
+            source = state.get("return_king_source", "normal")
+
+            if source == "crypto":
+                ok, message = return_crypto_king_to_ban(king_name, comment_text)
+            else:
+                ok, message = return_king_to_ban(king_name, comment_text)
+
+            clear_state(user_id)
+            send_kings_menu(chat_id, message)
+            return
+
+
+        if state.get("mode") == "awaiting_ban_reason_bm":
+            comment_text = text.strip()
+            if not comment_text:
+                send_text_input_prompt(chat_id, "Напиши причину бана для БМа.")
+                return
+
+            bm_id = state.get("return_bm_id", "")
+            ok, message = return_bm_to_ban(bm_id, comment_text)
+            clear_state(user_id)
+            send_bms_menu(chat_id, message)
+            return
+
+
+        if state.get("mode") == "awaiting_ban_reason_pixel":
+            comment_text = text.strip()
+            if not comment_text:
+                send_text_input_prompt(chat_id, "Напиши причину бана для Пикселя.")
+                return
+
+            pixel_query = state.get("return_pixel_query", "")
+            ok, message = return_pixel_to_ban(pixel_query, comment_text)
+            clear_state(user_id)
+            send_pixels_menu(chat_id, message)
+            return
+
+
+        if state.get("mode") == "awaiting_ban_reason_farm_bm":
+            comment_text = text.strip()
+            if not comment_text:
+                send_text_input_prompt(chat_id, "Напиши причину бана для farm BM.")
+                return
+
+            bm_id = state.get("return_farm_bm_id", "")
+            ok, message = return_farm_bm_to_ban(bm_id, comment_text)
+            clear_state(user_id)
+            send_farm_bms_menu(chat_id, message)
+            return
+
+
+        if state.get("mode") == "awaiting_ban_reason_fp":
+            comment_text = text.strip()
+            if not comment_text:
+                send_text_input_prompt(chat_id, "Напиши причину бана для ФП.")
+                return
+
+            fp_link = state.get("return_fp_link", "")
+            ok, message = return_fp_to_ban(fp_link, comment_text)
+            clear_state(user_id)
+            send_fps_menu(chat_id, message)
+            return
+
+
+        if state.get("mode") == "awaiting_ban_reason_farm_fp":
+            comment_text = text.strip()
+            if not comment_text:
+                send_text_input_prompt(chat_id, "Напиши причину бана для farm FP.")
+                return
+
+            fp_link = state.get("return_fp_link", "")
+            ok, message = return_farm_fp_to_ban(fp_link, comment_text)
+            clear_state(user_id)
+            send_farm_fps_menu(chat_id, message)
             return
 
         send_main_menu(chat_id, "Не понял команду. Выбери кнопку из меню:", user_id=user_id)
@@ -9170,7 +10000,7 @@ def run_auto_healthcheck_once():
 
         all_checks = [
             ("База_личек", rows_accounts, 14),
-            ("Простые лички 26", rows_issues, 7),
+            ("Простые лички 26", rows_issues, 9),
             ("База_кингов", rows_kings, 12),
             ("База_крипта_кинги", rows_crypto, 12),
             ("База_БМ", rows_bms, 9),
