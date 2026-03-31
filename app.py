@@ -243,6 +243,7 @@ BTN_KING_RETURN_FREE_CONFIRM = 'Подтвердить возврат кинга
 BTN_FARM_KING_RETURN_FREE_CONFIRM = 'Подтвердить возврат farm king'
 BTN_FP_RETURN_FREE_CONFIRM = 'Подтвердить возврат ФП'
 BTN_FARM_FP_RETURN_FREE_CONFIRM = 'Подтвердить возврат farm FP'
+BTN_FARM_BM_RETURN_FREE_CONFIRM = 'Подтвердить возврат farm BM'
 
 SUBMENU_RETURN_FP = '↩️Вернуть ФП'
 FARM_SUBMENU_RETURN_FP = '↩️Вернуть FP'
@@ -1032,8 +1033,8 @@ def show_found_crypto_king(chat_id, user_id, found):
         f"Дата покупки: {found['purchase_date']}\n"
         f"Цена: {found['price']}\n"
         f"Гео: {found['geo']}\n"
-        f"Для кого: {state['king_for_whom']}\n"
-        f"Название: {state['king_name']}"
+        f"Для кого: {state.get('king_for_whom', 'не указано')}\n"
+        f"Название: {state.get('king_name', 'не указано')}"
     )
 
     keyboard = [
@@ -2192,6 +2193,8 @@ def return_fp_to_free(fp_link):
         [["free", "", "", ""]]
     )
 
+    delete_last_fp_issue_row(fp_link)
+
     invalidate_stats_cache()
     return True, "ФП возвращено в free."
 
@@ -2408,7 +2411,7 @@ def show_found_fp(chat_id, user_id, found):
         f"Ссылка: {found['fp_link']}\n"
         f"Дата покупки: {found['purchase_date']}\n"
         f"Цена: {found['price']}\n"
-        f"Для кого: {state['fp_for_whom']}"
+        f"Для кого: {state.get('fp_for_whom', 'не указано')}"
     )
 
     keyboard = [
@@ -2426,6 +2429,12 @@ def confirm_fp_issue(chat_id, user_id, username):
 
             if state.get("mode") != "fp_found":
                 send_fps_menu(chat_id, "Сначала выбери ФП заново.")
+                return
+
+            fp_for_whom = state.get("fp_for_whom", "").strip()
+            if not fp_for_whom:
+                clear_state(user_id)
+                send_fps_menu(chat_id, "Не найдено для кого выдавать ФП. Начни заново.")
                 return
 
             row_index = state.get("fp_row")
@@ -2471,7 +2480,6 @@ def confirm_fp_issue(chat_id, user_id, username):
 
             today = datetime.now(MOSCOW_TZ).strftime("%d/%m/%Y")
             who_took_text = f"@{username}" if username else "без username"
-            fp_for_whom = state["fp_for_whom"]
 
             sheet_update_raw(
                 SHEET_FPS,
@@ -2537,7 +2545,7 @@ def issue_fps_bulk(chat_id, user_id, username, count_needed):
             send_fps_menu(chat_id, "Сначала начни выдачу ФП заново.")
             return
 
-        fp_for_whom = state.get("fp_for_whom")
+        fp_for_whom = state.get("fp_for_whom", "").strip()
         if not fp_for_whom:
             clear_state(user_id)
             send_fps_menu(chat_id, "Не найдено для кого выдавать ФП. Начни заново.")
@@ -2674,8 +2682,15 @@ def confirm_pixel_issue(chat_id, user_id, username):
                 send_pixels_menu(chat_id, "Сначала выбери Пиксель заново.")
                 return
 
+            pixel_for_whom = state.get("pixel_for_whom", "").strip()
+            if not pixel_for_whom:
+                clear_state(user_id)
+                send_pixels_menu(chat_id, "Не найдено для кого выдавать Пиксель. Начни заново.")
+                return
+
             row_index = state.get("pixel_row")
             if not row_index:
+                clear_state(user_id)
                 send_pixels_menu(chat_id, "Не найден выбранный Пиксель. Начни заново.")
                 return
 
@@ -2717,7 +2732,7 @@ def confirm_pixel_issue(chat_id, user_id, username):
                 f"D{row_index}:G{row_index}",
                 [[
                     "taken",
-                    state["pixel_for_whom"],
+                    pixel_for_whom,
                     today,
                     who_took_text
                 ]]
@@ -2732,7 +2747,7 @@ def confirm_pixel_issue(chat_id, user_id, username):
                     normalize_numeric_for_sheet(row[1]),
                     today,
                     row[2],
-                    state["pixel_for_whom"]
+                    pixel_for_whom
                 ],
                 value_input_option="USER_ENTERED"
             )
@@ -2745,7 +2760,7 @@ def confirm_pixel_issue(chat_id, user_id, username):
             f"Готово ✅\n\n"
             f"Пиксель выдан.\n"
             f"Имя: {pixel_name}\n"
-            f"Для кого: {state['pixel_for_whom']}\n"
+            f"Для кого: {pixel_for_whom}\n"
             f"Кто взял в боте: {who_took_text}"
         )
 
@@ -2769,7 +2784,7 @@ def issue_pixels_bulk(chat_id, user_id, username, count_needed):
             send_pixels_menu(chat_id, "Сначала начни выдачу Пикселей заново.")
             return
 
-        pixel_for_whom = state.get("pixel_for_whom")
+        pixel_for_whom = state.get("pixel_for_whom", "").strip()
         if not pixel_for_whom:
             clear_state(user_id)
             send_pixels_menu(chat_id, "Не найдено для кого выдавать Пиксели. Начни заново.")
@@ -3064,7 +3079,7 @@ def show_found_pixel(chat_id, user_id, found):
         "Найден Пиксель:\n\n"
         f"Дата покупки: {found['purchase_date']}\n"
         f"Цена: {found['price']}\n"
-        f"Для кого: {state['pixel_for_whom']}"
+        f"Для кого: {state.get('pixel_for_whom', 'не указано')}"
     )
 
     keyboard = [
@@ -3361,6 +3376,12 @@ def issue_farm_kings(chat_id, user_id, username, king_names):
         send_farm_kings_menu(chat_id, "Ошибка выдачи фарм кингов. Начни заново.")
         return
 
+    count_needed = state.get("farm_kings_count", 0)
+    if not count_needed or count_needed != len(king_names):
+        clear_state(user_id)
+        send_farm_kings_menu(chat_id, "Ошибка количества farm кингов. Начни заново.")
+        return
+
     today = datetime.now(MOSCOW_TZ).strftime("%d/%m/%Y")
     who_took_text = f"@{username}" if username else "без username"
 
@@ -3570,6 +3591,31 @@ def return_farm_bm_to_ban(bm_id, comment_text=""):
     invalidate_stats_cache()
     return True, f"BM '{bm_id}' переведён в ban."
 
+def return_farm_bm_to_free(bm_id):
+    found = find_farm_bm_in_base(bm_id)
+    if not found:
+        return False, "BM не найден в База фарм бм."
+
+    row = found["row"]
+    if len(row) < 9:
+        row = row + [''] * (9 - len(row))
+
+    status = str(row[4]).strip().lower()
+
+    if status == "free":
+        return False, "Этот farm BM уже free."
+
+    sheet_update_and_refresh(
+        SHEET_FARM_BMS,
+        f"E{found['row_index']}:H{found['row_index']}",
+        [["free", "", "", ""]]
+    )
+
+    delete_last_bm_issue_row(bm_id)
+
+    invalidate_stats_cache()
+    return True, f"Farm BM '{bm_id}' возвращён в free."
+
 def issue_farm_bm(chat_id, user_id, username):
     today = datetime.now(MOSCOW_TZ).strftime("%d/%m/%Y")
     who_took_text = f"@{username}" if username else "без username"
@@ -3752,6 +3798,8 @@ def return_farm_fp_to_free(fp_link):
         f"F{found['row_index']}:I{found['row_index']}",
         [["free", "", "", ""]]
     )
+
+    delete_last_fp_issue_row(fp_link)
 
     invalidate_stats_cache()
     return True, "Farm FP возвращено в free."
@@ -4583,8 +4631,18 @@ def return_account_to_free(account_number):
         [["free", "", "", ""]]
     )
 
+    delete_last_issue_row(account_number)
+
     invalidate_stats_cache()
     return True, "Личка возвращена в free."
+
+def delete_last_issue_row(account_number):
+    issue_info = find_last_issue_row(account_number)
+    if not issue_info:
+        return False
+
+    sheet_delete_row_and_refresh(SHEET_ISSUES, issue_info["row_index"])
+    return True
 
 def build_account_search_text(account_number):
     base_info = find_account_in_base(account_number)
@@ -4880,7 +4938,7 @@ def show_found_account(chat_id, user_id, found):
         f"Дата покупки: {found['purchase_date']}\n"
         f"Цена: {found['price']}\n\n"
         f"Валюта: {found.get('currency', '')}\n\n"
-        f"Кому передали: {state['for_whom']}"
+        f"Кому передали: {state.get('for_whom', 'не указано')}"
     )
 
     keyboard = [
@@ -5080,9 +5138,15 @@ def confirm_issue(chat_id, user_id, username):
             send_main_menu(chat_id, "Не нашёл выбранную личку. Начни заново.", user_id=user_id)
             return
 
+        for_whom = state.get("for_whom", "").strip()
+        if not for_whom:
+            clear_state(user_id)
+            send_main_menu(chat_id, "Не найдено кому выдавать личку. Начни заново.", user_id=user_id)
+            return
+
         result = issue_accounts_bulk(
             account_numbers=[account_number],
-            for_whom=state["for_whom"],
+            for_whom=for_whom,
             username=username
         )
 
@@ -5098,14 +5162,14 @@ def confirm_issue(chat_id, user_id, username):
         if current_mode == "quick_account_found":
             set_state(user_id, {
                 "mode": "quick_issue_continue",
-                "for_whom": state["for_whom"]
+                "for_whom": for_whom
             })
 
             tg_send_message(
                 chat_id,
                 f"Готово ✅\n\n"
                 f"Выдана личка: {item['account_number']}\n"
-                f"Кому передали: {state['for_whom']}\n"
+                f"Кому передали: {for_whom}\n"
                 f"Кто взял в боте: {who_took_text}"
             )
 
@@ -5128,7 +5192,7 @@ def confirm_issue(chat_id, user_id, username):
             chat_id,
             f"Готово ✅\n\n"
             f"Выдана личка: {item['account_number']}\n"
-            f"Кому передали: {state['for_whom']}\n"
+            f"Кому передали: {for_whom}\n"
             f"Кто взял в боте: {who_took_text}"
         )
 
@@ -5337,7 +5401,7 @@ def show_found_bm(chat_id, user_id, found):
     text = (
         "Найден БМ:\n\n"
         f"ID БМа: {found['bm_id']}\n"
-        f"Для кого: {state['bm_for_whom']}"
+        f"Для кого: {state.get('bm_for_whom', 'не указано')}"
     )
 
     keyboard = [
@@ -5357,8 +5421,15 @@ def confirm_bm_issue(chat_id, user_id, username):
                 send_bms_menu(chat_id, "Сначала выбери БМ заново.")
                 return
 
+            bm_for_whom = state.get("bm_for_whom", "").strip()
+            if not bm_for_whom:
+                clear_state(user_id)
+                send_bms_menu(chat_id, "Не найдено для кого выдавать БМ. Начни заново.")
+                return
+
             row_index = state.get("bm_row")
             if not row_index:
+                clear_state(user_id)
                 send_bms_menu(chat_id, "Не найден выбранный БМ. Начни заново.")
                 return
 
@@ -5408,7 +5479,7 @@ def confirm_bm_issue(chat_id, user_id, username):
                 f"E{row_index}:H{row_index}",
                 [[
                     "taken",
-                    state["bm_for_whom"],
+                    bm_for_whom,
                     who_took_text,
                     today
                 ]]
@@ -5423,7 +5494,7 @@ def confirm_bm_issue(chat_id, user_id, username):
                     normalize_numeric_for_sheet(price),
                     today,
                     supplier,
-                    state["bm_for_whom"]
+                    bm_for_whom
                 ],
                 value_input_option="USER_ENTERED"
             )
@@ -5437,7 +5508,7 @@ def confirm_bm_issue(chat_id, user_id, username):
             f"Готово ✅\n\n"
             f"БМ выдан.\n"
             f"ID БМа: {bm_id}\n"
-            f"Для кого: {state['bm_for_whom']}\n"
+            f"Для кого: {bm_for_whom}\n"
             f"Кто взял в боте: {who_took_text}"
         )
 
@@ -5461,7 +5532,7 @@ def issue_bms_bulk(chat_id, user_id, username, count_needed):
             send_bms_menu(chat_id, "Сначала начни выдачу БМ заново.")
             return
 
-        bm_for_whom = state.get("bm_for_whom")
+        bm_for_whom = state.get("bm_for_whom", "").strip()
         if not bm_for_whom:
             clear_state(user_id)
             send_bms_menu(chat_id, "Не найдено для кого выдавать БМы. Начни заново.")
@@ -5590,8 +5661,8 @@ def show_found_king(chat_id, user_id, found):
         f"Дата покупки: {found['purchase_date']}\n"
         f"Цена: {found['price']}\n"
         f"Гео: {found['geo']}\n"
-        f"Для кого: {state['king_for_whom']}\n"
-        f"Название: {state['king_name']}"
+        f"Для кого: {state.get('king_for_whom', 'не указано')}\n"
+        f"Название: {state.get('king_name', 'не указано')}"
     )
 
     keyboard = [
@@ -5610,8 +5681,15 @@ def confirm_king_issue(chat_id, user_id, username):
                 send_kings_menu(chat_id, "Сначала выбери кинга заново.")
                 return
 
+            king_for_whom = state.get("king_for_whom", "").strip()
+            if not king_for_whom:
+                clear_state(user_id)
+                send_kings_menu(chat_id, "Не найдено для кого выдавать кинга. Начни заново.")
+                return
+
             row_index = state.get("king_row")
             if not row_index:
+                clear_state(user_id)
                 send_kings_menu(chat_id, "Не найден выбранный кинг. Начни заново.")
                 return
 
@@ -5672,7 +5750,7 @@ def confirm_king_issue(chat_id, user_id, username):
                     row[2],
                     row[3],
                     "taken",
-                    state["king_for_whom"],
+                    king_for_whom,
                     today,
                     geo_value,
                     who_took_text,
@@ -5688,7 +5766,7 @@ def confirm_king_issue(chat_id, user_id, username):
                 price=row[2],
                 transfer_date=today,
                 supplier=row[3],
-                for_whom=state["king_for_whom"]
+                for_whom=king_for_whom
             )
 
             invalidate_stats_cache()
@@ -5699,7 +5777,7 @@ def confirm_king_issue(chat_id, user_id, username):
             f"Готово ✅\n\n"
             f"Кинг выдан.\n"
             f"Название: {king_name}\n"
-            f"Для кого: {state['king_for_whom']}\n"
+            f"Для кого: {king_for_whom}\n"
             f"Гео: {geo_value}"
         )
 
@@ -5724,6 +5802,12 @@ def issue_kings_bulk(chat_id, user_id, username, king_names):
         if not selected_rows or len(selected_rows) != len(king_names):
             clear_state(user_id)
             send_kings_menu(chat_id, "Ошибка выдачи кингов. Начни заново.")
+            return
+
+        king_for_whom = state.get("king_for_whom", "").strip()
+        if not king_for_whom:
+            clear_state(user_id)
+            send_kings_menu(chat_id, "Не найдено для кого выдавать кингов. Начни заново.")
             return
 
         today = datetime.now(MOSCOW_TZ).strftime("%d/%m/%Y")
@@ -5766,7 +5850,7 @@ def issue_kings_bulk(chat_id, user_id, username, king_names):
                         row[2],
                         row[3],
                         "taken",
-                        state["king_for_whom"],
+                        king_for_whom,
                         today,
                         row[7],
                         who_took_text,
@@ -5794,7 +5878,7 @@ def issue_kings_bulk(chat_id, user_id, username, king_names):
                     price=item["price"],
                     transfer_date=today,
                     supplier=item["supplier"],
-                    for_whom=state["king_for_whom"]
+                    for_whom=king_for_whom
                 )
 
             invalidate_stats_cache()
@@ -5807,7 +5891,7 @@ def issue_kings_bulk(chat_id, user_id, username, king_names):
                 f"Готово ✅\n\n"
                 f"Кинг выдан.\n"
                 f"Название: {item['king_name']}\n"
-                f"Для кого: {state['king_for_whom']}\n"
+                f"Для кого: {king_for_whom}\n"
                 f"Гео: {item['geo']}"
             )
 
@@ -5833,8 +5917,15 @@ def confirm_crypto_king_issue(chat_id, user_id, username):
                 send_kings_menu(chat_id, "Сначала выбери crypto king заново.")
                 return
 
+            king_for_whom = state.get("king_for_whom", "").strip()
+            if not king_for_whom:
+                clear_state(user_id)
+                send_kings_menu(chat_id, "Не найдено для кого выдавать crypto king. Начни заново.")
+                return
+
             row_index = state.get("king_row")
             if not row_index:
+                clear_state(user_id)
                 send_kings_menu(chat_id, "Не найден выбранный crypto king. Начни заново.")
                 return
 
@@ -5895,7 +5986,7 @@ def confirm_crypto_king_issue(chat_id, user_id, username):
                     row[2],
                     row[3],
                     "taken",
-                    state["king_for_whom"],
+                    king_for_whom,
                     today,
                     geo_value,
                     who_took_text,
@@ -5911,7 +6002,7 @@ def confirm_crypto_king_issue(chat_id, user_id, username):
                 price=row[2],
                 transfer_date=today,
                 supplier=row[3],
-                for_whom=state["king_for_whom"]
+                for_whom=king_for_whom
             )
 
             invalidate_stats_cache()
@@ -5922,7 +6013,7 @@ def confirm_crypto_king_issue(chat_id, user_id, username):
             f"Готово ✅\n\n"
             f"Crypto king выдан.\n"
             f"Название: {king_name}\n"
-            f"Для кого: {state['king_for_whom']}\n"
+            f"Для кого: {king_for_whom}\n"
             f"Гео: {geo_value}"
         )
 
@@ -6024,6 +6115,23 @@ def find_last_fp_issue_row(fp_link):
             }
 
     return last_match
+
+def delete_last_bm_issue_row(bm_id):
+    issue_info = find_last_bm_issue_row(bm_id)
+    if not issue_info:
+        return False
+
+    sheet_delete_row_and_refresh(SHEET_ISSUES, issue_info["row_index"])
+    return True
+
+
+def delete_last_fp_issue_row(fp_link):
+    issue_info = find_last_fp_issue_row(fp_link)
+    if not issue_info:
+        return False
+
+    sheet_delete_row_and_refresh(SHEET_ISSUES, issue_info["row_index"])
+    return True
 
 def find_king_in_base_by_name(king_name):
     target = str(king_name).strip().lower()
@@ -7722,17 +7830,23 @@ def handle_message(msg):
             if state.get("mode") != "quick_issue_continue":
                 send_accounts_menu(chat_id, "Сначала начни быструю выдачу заново.")
                 return
-
+        
+            for_whom = state.get("for_whom", "").strip()
+            if not for_whom:
+                clear_state(user_id)
+                send_accounts_menu(chat_id, "Не найдено кому выдавать лички. Начни заново.")
+                return
+        
             result = issue_next_quick_account_for_person(
-                for_whom=state["for_whom"],
+                for_whom=for_whom,
                 username=username
             )
-
+        
             if not result:
                 clear_state(user_id)
                 send_accounts_menu(chat_id, "Свободных личек больше нет.")
                 return
-
+        
             tg_send_message(
                 chat_id,
                 f"Готово ✅\n\n"
@@ -7740,12 +7854,12 @@ def handle_message(msg):
                 f"Кому передали: {result['for_whom']}\n"
                 f"Кто взял в боте: {result['who_took_text']}"
             )
-
+        
             if result["account_url"]:
                 tg_send_message(chat_id, f"Ссылка на личку:\n{result['account_url']}")
             else:
                 tg_send_message(chat_id, "Ссылка на личку не найдена в колонке N.")
-
+        
             keyboard = [
                 [{"text": BTN_ISSUE_MORE}],
                 [{"text": BTN_BACK_TO_MENU}]
@@ -7902,39 +8016,43 @@ def handle_message(msg):
             if not state:
                 send_kings_menu(chat_id, "Начни заново.")
                 return
-
-            if state.get("mode") == "crypto_king_found" or state.get("mode") == "awaiting_crypto_king_name":
-                if not state.get("king_geo"):
-                    send_kings_menu(chat_id, "Начни заново.")
+        
+            if state.get("mode") in ["crypto_king_found", "awaiting_crypto_king_name"]:
+                king_geo = state.get("king_geo", "").strip()
+                if not king_geo:
+                    clear_state(user_id)
+                    send_kings_menu(chat_id, "Не найдено GEO для crypto king. Начни заново.")
                     return
-
+        
                 found = find_free_crypto_king_by_geo(
-                    state["king_geo"],
+                    king_geo,
                     exclude_row=state.get("king_row")
                 )
-
+        
                 if not found:
                     clear_state(user_id)
                     send_kings_menu(chat_id, "Свободных crypto king с таким GEO больше нет.")
                     return
-
+        
                 show_found_crypto_king(chat_id, user_id, found)
                 return
-
-            if not state.get("king_geo"):
-                send_kings_menu(chat_id, "Начни заново.")
+        
+            king_geo = state.get("king_geo", "").strip()
+            if not king_geo:
+                clear_state(user_id)
+                send_kings_menu(chat_id, "Не найдено GEO. Начни заново.")
                 return
-
+        
             found = find_free_king_by_geo(
-                state["king_geo"],
+                king_geo,
                 exclude_row=state.get("king_row")
             )
-
+        
             if not found:
                 clear_state(user_id)
                 send_kings_menu(chat_id, "Свободных кингов с таким GEO больше нет.")
                 return
-
+        
             show_found_king(chat_id, user_id, found)
             return
 
@@ -7995,6 +8113,17 @@ def handle_message(msg):
             ok, message = return_farm_fp_to_free(fp_link)
             clear_state(user_id)
             send_farm_fps_menu(chat_id, message)
+            return
+
+        if text == BTN_FARM_BM_RETURN_FREE_CONFIRM:
+            if state.get("mode") != "awaiting_farm_return_bm_free_confirm":
+                send_farm_bms_menu(chat_id, "Сначала выбери действие заново.")
+                return
+
+            bm_id = state.get("return_farm_bm_id", "")
+            ok, message = return_farm_bm_to_free(bm_id)
+            clear_state(user_id)
+            send_farm_bms_menu(chat_id, message)
             return
 
         if text == BTN_FP_RETURN_FREE_CONFIRM:
@@ -8227,8 +8356,8 @@ def handle_message(msg):
             return
 
         if text == FARM_SUBMENU_RETURN_BM:
-            set_state(user_id, {"mode": "awaiting_farm_return_bm"})
-            send_text_input_prompt(chat_id, "Впиши ID BM, который нужно перевести в ban.")
+            update_state(user_id, mode="awaiting_farm_bm_return_action")
+            send_return_action_menu(chat_id, "farm BM")
             return
 
         if text == FARM_SUBMENU_GET_FP:
@@ -8411,6 +8540,20 @@ def handle_message(msg):
                 return
 
             send_return_action_menu(chat_id, "farm FP")
+            return
+
+        if state.get("mode") == "awaiting_farm_bm_return_action":
+            if text == BTN_RETURN_TO_BAN:
+                update_state(user_id, mode="awaiting_farm_return_bm")
+                send_text_input_prompt(chat_id, "Впиши ID farm BM, который нужно перевести в ban.")
+                return
+
+            if text == BTN_RETURN_TO_FREE:
+                update_state(user_id, mode="awaiting_farm_return_bm_free")
+                send_text_input_prompt(chat_id, "Впиши ID farm BM, который нужно вернуть.")
+                return
+
+            send_return_action_menu(chat_id, "farm BM")
             return
 
         # ========= СОСТОЯНИЯ: ПОИСК / ВОЗВРАТ ЛИЧЕК =========
@@ -8861,7 +9004,13 @@ def handle_message(msg):
             state["king_name"] = king_name
             set_state(user_id, state)
 
-            found = find_free_crypto_king_by_geo(state["king_geo"])
+            king_geo = state.get("king_geo", "").strip()
+            if not king_geo:
+                clear_state(user_id)
+                send_kings_menu(chat_id, "Не найдено GEO для crypto king. Начни заново.")
+                return
+            
+            found = find_free_crypto_king_by_geo(king_geo)
 
             if not found:
                 clear_state(user_id)
@@ -9468,10 +9617,10 @@ def handle_message(msg):
                 "farm_kings_count": count_needed,
                 "farm_king_rows": found
             })
-
+            
             send_text_input_prompt(
                 chat_id,
-                f"Пришли {state['farm_kings_count']} названий для кингов.\nКаждое название с новой строки."
+                f"Пришли {count_needed} названий для кингов.\nКаждое название с новой строки."
             )
             return
 
@@ -9600,6 +9749,35 @@ def handle_message(msg):
             tg_send_message(
                 chat_id,
                 f"Внимание: BM '{bm_id}' будет перемещён в ban.\nПодтвердить?",
+                keyboard
+            )
+            return
+
+        if state.get("mode") == "awaiting_farm_return_bm_free":
+            bm_id = text.strip()
+
+            if not bm_id:
+                tg_send_message(chat_id, "Впиши ID farm BM.")
+                return
+
+            found = find_farm_bm_in_base(bm_id)
+            if not found:
+                clear_state(user_id)
+                send_farm_bms_menu(chat_id, "BM не найден.")
+                return
+
+            set_state(user_id, {
+                "mode": "awaiting_farm_return_bm_free_confirm",
+                "return_farm_bm_id": bm_id
+            })
+
+            keyboard = [
+                [{"text": BTN_FARM_BM_RETURN_FREE_CONFIRM}, {"text": MENU_CANCEL}]
+            ]
+
+            tg_send_message(
+                chat_id,
+                f"Внимание: farm BM '{bm_id}' будет возвращён в free.\nПодтвердить?",
                 keyboard
             )
             return
@@ -9855,7 +10033,22 @@ def index():
 
 @app.route("/health", methods=["GET"])
 def health():
-    return "healthy", 200
+    now = time.time()
+
+    request_stale = now - last_request_time > WATCHDOG_TIMEOUT
+    background_stale = now - last_background_time > WATCHDOG_TIMEOUT
+
+    if background_stale:
+        return jsonify({
+            "ok": False,
+            "error": "background threads stale"
+        }), 503
+
+    return jsonify({
+        "ok": True,
+        "last_request_age": int(now - last_request_time),
+        "last_background_age": int(now - last_background_time),
+    }), 200
 
 
 @app.route("/webhook", methods=["POST"])
