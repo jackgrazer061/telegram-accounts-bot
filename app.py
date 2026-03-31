@@ -1946,6 +1946,45 @@ def notify_all_users_about_update():
 
     return sent, failed
 
+def append_auto_warehouse_rows_for_new_fps(added_items):
+    if not added_items:
+        return 0
+
+    grouped = {}
+
+    for item in added_items:
+        warehouse = str(item.get("warehouse", "")).strip()
+        if not warehouse:
+            continue
+
+        if warehouse not in grouped:
+            grouped[warehouse] = item
+
+    rows_to_append = []
+
+    for warehouse, item in grouped.items():
+        purchase_date = item.get("purchase_date", "")
+        supplier = item.get("supplier", "")
+
+        rows_to_append.append([
+            warehouse,          # A
+            "KING",             # B
+            purchase_date,      # C дата покупки
+            35,                 # D цена склада
+            purchase_date,      # E дата передачи
+            supplier,           # F поставщик
+            "TEAM"              # G кому передали
+        ])
+
+    if rows_to_append:
+        sheet_append_rows_and_refresh(
+            SHEET_ISSUES,
+            rows_to_append,
+            value_input_option="USER_ENTERED"
+        )
+
+    return len(rows_to_append)
+
 def add_fps_from_text(text, target_sheet=SHEET_FPS):
     existing_rows = get_sheet_rows_cached(target_sheet)
     existing_links = set()
@@ -1956,6 +1995,7 @@ def add_fps_from_text(text, target_sheet=SHEET_FPS):
 
     lines = [line.strip() for line in text.splitlines() if line.strip()]
     to_append = []
+    added_items = []
     errors = []
     duplicates = 0
 
@@ -1985,9 +2025,11 @@ def add_fps_from_text(text, target_sheet=SHEET_FPS):
             errors.append(f"Строка {i}: неверная цена '{price_raw}'")
             continue
 
+        purchase_date_str = purchase_date.strftime("%d/%m/%Y")
+
         to_append.append([
             fp_link,
-            purchase_date.strftime("%d/%m/%Y"),
+            purchase_date_str,
             price,
             supplier,
             warehouse,
@@ -1997,15 +2039,25 @@ def add_fps_from_text(text, target_sheet=SHEET_FPS):
             ""
         ])
 
+        added_items.append({
+            "warehouse": warehouse,
+            "purchase_date": purchase_date_str,
+            "supplier": supplier
+        })
+
         existing_links.add(fp_link)
+
+    warehouse_rows_added = 0
 
     if to_append:
         sheet_append_rows_and_refresh(target_sheet, to_append)
+        warehouse_rows_added = append_auto_warehouse_rows_for_new_fps(added_items)
         invalidate_stats_cache()
 
     message = (
         f"Готово ✅\n"
         f"Добавлено FP: {len(to_append)}\n"
+        f"Добавлено авто-строк по складам: {warehouse_rows_added}\n"
         f"Дубликатов пропущено: {duplicates}\n"
         f"Ошибок: {len(errors)}"
     )
@@ -8021,19 +8073,19 @@ def handle_message(msg):
                 king_geo = state.get("king_geo", "").strip()
                 if not king_geo:
                     clear_state(user_id)
-                    send_kings_menu(chat_id, "Не найдено GEO для crypto king. Начни заново.")
+                    send_kings_menu(chat_id, "Не найдено GEO. Начни заново.")
                     return
-        
+            
                 found = find_free_crypto_king_by_geo(
                     king_geo,
                     exclude_row=state.get("king_row")
                 )
-        
+            
                 if not found:
                     clear_state(user_id)
                     send_kings_menu(chat_id, "Свободных crypto king с таким GEO больше нет.")
                     return
-        
+            
                 show_found_crypto_king(chat_id, user_id, found)
                 return
         
@@ -8124,29 +8176,6 @@ def handle_message(msg):
             ok, message = return_farm_bm_to_free(bm_id)
             clear_state(user_id)
             send_farm_bms_menu(chat_id, message)
-            return
-
-        if text == BTN_FP_RETURN_FREE_CONFIRM:
-            if state.get("mode") != "awaiting_return_fp_free_confirm":
-                send_fps_menu(chat_id, "Сначала выбери действие заново.")
-                return
-
-            fp_link = state.get("return_fp_link", "")
-            ok, message = return_fp_to_free(fp_link)
-            clear_state(user_id)
-            send_fps_menu(chat_id, message)
-            return
-
-
-        if text == BTN_FARM_FP_RETURN_FREE_CONFIRM:
-            if state.get("mode") != "awaiting_farm_return_fp_free_confirm":
-                send_farm_fps_menu(chat_id, "Сначала выбери действие заново.")
-                return
-
-            fp_link = state.get("return_fp_link", "")
-            ok, message = return_farm_fp_to_free(fp_link)
-            clear_state(user_id)
-            send_farm_fps_menu(chat_id, message)
             return
 
         # ========= БМы =========
