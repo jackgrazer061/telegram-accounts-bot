@@ -1858,17 +1858,25 @@ def add_bms_from_txt_content(file_text, target_sheet=SHEET_BMS):
             basebot_sheet = None
     
         if basebot_sheet:
-            basebot_rows = []
-            for row in to_append:
-                basebot_rows.append([
-                    "farm bm" if target_sheet == SHEET_FARM_BMS else "bm",
-                    row[0],    # bm_id
-                    row[3],    # supplier
-                    row[4],    # status
-                    row[8],    # data
-                    row[25],   # sync_id (Z)
-                ])
-            basebot_append_rows(basebot_sheet, basebot_rows)
+            try:
+                basebot_rows = []
+                for row in to_append:
+                    basebot_rows.append([
+                        "farm bm" if target_sheet == SHEET_FARM_BMS else "bm",
+                        row[0],    # bm_id
+                        row[3],    # supplier
+                        row[4],    # status
+                        row[8],    # data
+                        row[25],   # sync_id (Z)
+                    ])
+        
+                logging.info(f"BM basebot sync start: sheet={basebot_sheet}, rows={len(basebot_rows)}")
+                basebot_append_rows(basebot_sheet, basebot_rows)
+                logging.info("BM basebot sync success")
+        
+            except Exception as e:
+                logging.exception("BM basebot sync failed")
+                raise RuntimeError(f"Ошибка записи в BaseBot BM: {repr(e)}")
     
         invalidate_stats_cache()
 
