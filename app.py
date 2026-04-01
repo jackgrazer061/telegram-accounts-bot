@@ -49,7 +49,12 @@ ADMINS = {
 }
 
 FP_WAREHOUSE_NOTIFY_ADMIN_ID = 7573650707
-FARM_FP_WAREHOUSE_NOTIFY_ADMIN_ID = 7573650707
+
+FARM_FP_WAREHOUSE_NOTIFY_ADMIN_IDS = [
+    7573650707,
+    7172090459,
+    7389698288,
+]
 
 BOT_ERROR_NOTIFY_ADMIN_ID = 7573650707
 BOT_ERROR_NOTIFY_ADMIN_NAME = "JackGrazer_Deputy_Head_Account"
@@ -484,7 +489,19 @@ def get_gspread_client():
         return gspread_client
 
     try:
-        data = json.loads(SERVICE_ACCOUNT_JSON)
+        raw_service_json = str(SERVICE_ACCOUNT_JSON or "").strip()
+
+        if not raw_service_json:
+            raise RuntimeError("GOOGLE_SERVICE_ACCOUNT_JSON пустой")
+
+        try:
+            data = json.loads(raw_service_json)
+        except Exception as e:
+            logging.error(
+                f"GOOGLE_SERVICE_ACCOUNT_JSON parse error. "
+                f"First 200 chars: {raw_service_json[:200]}"
+            )
+            raise RuntimeError(f"GOOGLE_SERVICE_ACCOUNT_JSON невалидный JSON: {e}")
 
         scopes = [
             "https://www.googleapis.com/auth/spreadsheets",
@@ -2407,7 +2424,13 @@ def notify_admin_farm_fp_warehouse_finished(warehouse_name):
             f"Следующего склада для выдачи не найдено."
         )
 
-    tg_send_message(FARM_FP_WAREHOUSE_NOTIFY_ADMIN_ID, text)
+    for admin_id in FARM_FP_WAREHOUSE_NOTIFY_ADMIN_IDS:
+        try:
+            tg_send_message(admin_id, text)
+        except Exception:
+            logging.exception(
+                f"notify_admin_farm_fp_warehouse_finished failed for admin_id={admin_id}"
+            )
 
 def find_free_fp(exclude_link=None):
     rows = get_sheet_rows_cached(SHEET_FPS)
@@ -3857,113 +3880,139 @@ def return_farm_fp_to_free(fp_link):
     return True, "Farm FP возвращено в free."
 
 def issue_farm_fps(chat_id, user_id, username, count_needed):
-    found = find_free_farm_fps(count_needed)
-
-    current_warehouse = get_current_open_farm_fp_warehouse()
-
-    if not current_warehouse:
-        send_farm_fps_menu(chat_id, "Свободных FP сейчас нет.")
-        return
-
-    available_in_current = count_free_farm_fp_in_warehouse(current_warehouse)
-
-    if available_in_current < count_needed:
-        send_farm_fps_menu(
-            chat_id,
-            f"Недостаточно свободных FP на текущем складе {current_warehouse}. "
-            f"Доступно: {available_in_current}"
+    try:
+        logging.info(
+            f"issue_farm_fps START user_id={user_id} username={username} "
+            f"count_needed={count_needed}"
         )
-        return
 
-    today = datetime.now(MOSCOW_TZ).strftime("%d/%m/%Y")
-    who_took_text = f"@{username}" if username else "без username"
+        logging.info("issue_farm_fps before find_free_farm_fps")
+        found = find_free_farm_fps(count_needed)
+        logging.info(f"issue_farm_fps after find_free_farm_fps found_count={len(found)}")
 
-    issue_rows = []
-    messages = []
+        logging.info("issue_farm_fps before get_current_open_farm_fp_warehouse")
+        current_warehouse = get_current_open_farm_fp_warehouse()
+        logging.info(f"issue_farm_fps current_warehouse={current_warehouse}")
 
-    with issue_lock:
-        current_rows = get_sheet_rows_cached(SHEET_FARM_FPS, force=True)
+        if not current_warehouse:
+            send_farm_fps_menu(chat_id, "Свободных FP сейчас нет.")
+            return
 
-        for item in found:
-            row_index = item["row_index"]
+        logging.info(
+            f"issue_farm_fps before count_free_farm_fp_in_warehouse "
+            f"warehouse={current_warehouse}"
+        )
+        available_in_current = count_free_farm_fp_in_warehouse(current_warehouse)
+        logging.info(f"issue_farm_fps available_in_current={available_in_current}")
 
-            if row_index - 1 >= len(current_rows):
-                send_farm_fps_menu(chat_id, "Ошибка: одна из FP пропала из таблицы.")
-                return
-
-            row = current_rows[row_index - 1]
-            if len(row) < 9:
-                row = row + [''] * (9 - len(row))
-
-            if str(row[5]).strip().lower() != "free":
-                send_farm_fps_menu(chat_id, "Одна из FP уже не свободна.")
-                return
-
-            if str(row[4]).strip() != current_warehouse:
-                send_farm_fps_menu(chat_id, "Одна из FP уже не из текущего склада.")
-                return
-
-        for item in found:
-            row_index = item["row_index"]
-            row = current_rows[row_index - 1]
-            if len(row) < 9:
-                row = row + [''] * (9 - len(row))
-
-            sheet_update_raw(
-                SHEET_FARM_FPS,
-                f"F{row_index}:I{row_index}",
-                [[
-                    "taken",
-                    "farm",
-                    who_took_text,
-                    today
-                ]]
+        if available_in_current < count_needed:
+            send_farm_fps_menu(
+                chat_id,
+                f"Недостаточно свободных FP на текущем складе {current_warehouse}. "
+                f"Доступно: {available_in_current}"
             )
+            return
 
-            issue_rows.append([
-                row[0],
-                "FP",
-                row[1],
-                normalize_numeric_for_sheet(row[2]),
-                today,
-                row[3],
-                "farm"
-            ])
+        today = datetime.now(MOSCOW_TZ).strftime("%d/%m/%Y")
+        who_took_text = f"@{username}" if username else "без username"
 
-            messages.append(f"Ссылка: {row[0]}")
+        issue_rows = []
+        messages = []
 
-        refresh_sheet_cache(SHEET_FARM_FPS)
+        with issue_lock:
+            logging.info("issue_farm_fps before get_sheet_rows_cached(force=True)")
+            current_rows = get_sheet_rows_cached(SHEET_FARM_FPS, force=True)
+            logging.info(f"issue_farm_fps current_rows_count={len(current_rows)}")
 
-        if issue_rows:
-            sheet_append_rows_and_refresh(
-                SHEET_ISSUES,
-                issue_rows,
-                value_input_option="USER_ENTERED"
-            )
+            for item in found:
+                row_index = item["row_index"]
 
-        invalidate_stats_cache()
+                if row_index - 1 >= len(current_rows):
+                    send_farm_fps_menu(chat_id, "Ошибка: одна из FP пропала из таблицы.")
+                    return
 
-    remaining_in_warehouse = count_free_farm_fp_in_warehouse(current_warehouse)
+                row = current_rows[row_index - 1]
+                if len(row) < 9:
+                    row = row + [''] * (9 - len(row))
 
-    if remaining_in_warehouse == 0:
-        try:
-            notify_admin_farm_fp_warehouse_finished(current_warehouse)
-        except Exception:
-            logging.exception("notify_admin_farm_fp_warehouse_finished crashed")
+                if str(row[5]).strip().lower() != "free":
+                    send_farm_fps_menu(chat_id, "Одна из FP уже не свободна.")
+                    return
 
-    clear_state(user_id)
+                if str(row[4]).strip() != current_warehouse:
+                    send_farm_fps_menu(chat_id, "Одна из FP уже не из текущего склада.")
+                    return
 
-    tg_send_message(
-        chat_id,
-        f"Готово ✅\n\n"
-        f"Выдано FP: {len(messages)}\n"
-        f"Склад: {current_warehouse}"
-    )
+            for item in found:
+                row_index = item["row_index"]
+                row = current_rows[row_index - 1]
+                if len(row) < 9:
+                    row = row + [''] * (9 - len(row))
 
-    for msg_text in messages:
-        tg_send_message(chat_id, msg_text)
+                sheet_update_raw(
+                    SHEET_FARM_FPS,
+                    f"F{row_index}:I{row_index}",
+                    [[
+                        "taken",
+                        "farm",
+                        who_took_text,
+                        today
+                    ]]
+                )
 
-    send_farm_fps_menu(chat_id, "Выбери следующее действие:")
+                issue_rows.append([
+                    row[0],
+                    "FP",
+                    row[1],
+                    normalize_numeric_for_sheet(row[2]),
+                    today,
+                    row[3],
+                    "farm"
+                ])
+
+                messages.append(f"Ссылка: {row[0]}")
+
+            refresh_sheet_cache(SHEET_FARM_FPS)
+
+            if issue_rows:
+                sheet_append_rows_and_refresh(
+                    SHEET_ISSUES,
+                    issue_rows,
+                    value_input_option="USER_ENTERED"
+                )
+
+            invalidate_stats_cache()
+
+        remaining_in_warehouse = count_free_farm_fp_in_warehouse(current_warehouse)
+
+        if remaining_in_warehouse == 0:
+            try:
+                notify_admin_farm_fp_warehouse_finished(current_warehouse)
+            except Exception:
+                logging.exception("notify_admin_farm_fp_warehouse_finished crashed")
+
+        clear_state(user_id)
+
+        tg_send_message(
+            chat_id,
+            f"Готово ✅\n\n"
+            f"Выдано FP: {len(messages)}\n"
+            f"Склад: {current_warehouse}"
+        )
+
+        for msg_text in messages:
+            tg_send_message(chat_id, msg_text)
+
+        send_farm_fps_menu(chat_id, "Выбери следующее действие:")
+
+    except Exception as e:
+        logging.exception("issue_farm_fps crashed")
+        notify_admin_about_error(
+            "issue_farm_fps",
+            str(e),
+            extra_text=f"user_id={user_id}, count_needed={count_needed}"
+        )
+        raise
 # =========================
 # HELPERS
 # =========================
