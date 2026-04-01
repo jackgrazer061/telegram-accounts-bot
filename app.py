@@ -435,15 +435,33 @@ def sheet_update_raw(sheet_name, cell_range, values):
     google_write_with_retry(_do)
     mark_sheet_cache_stale(sheet_name)
 
+def get_next_empty_row(sheet_name):
+    rows = get_sheet_rows_cached(sheet_name)
+    return len(rows) + 1
 
-def sheet_append_row_and_refresh(sheet_name, row, value_input_option="USER_ENTERED"):
+
+def sheet_write_rows_from_a(sheet_name, start_row, rows):
+    if not rows:
+        return
+
+    max_len = max(len(r) for r in rows)
+    end_row = start_row + len(rows) - 1
+    end_col_letter = chr(ord("A") + max_len - 1)
+
     def _do():
         with google_lock:
             sheet = get_sheet(sheet_name)
-            sheet.append_row(row, value_input_option=value_input_option)
+            sheet.update(
+                f"A{start_row}:{end_col_letter}{end_row}",
+                rows
+            )
 
     google_write_with_retry(_do)
     mark_sheet_cache_stale(sheet_name)
+
+def sheet_append_row_and_refresh(sheet_name, row, value_input_option="USER_ENTERED"):
+    start_row = get_next_empty_row(sheet_name)
+    sheet_write_rows_from_a(sheet_name, start_row, [row])
 
 def sheet_delete_row_and_refresh(sheet_name, row_index):
     def _do():
@@ -455,13 +473,8 @@ def sheet_delete_row_and_refresh(sheet_name, row_index):
     mark_sheet_cache_stale(sheet_name)
 
 def sheet_append_rows_and_refresh(sheet_name, rows, value_input_option="USER_ENTERED"):
-    def _do():
-        with google_lock:
-            sheet = get_sheet(sheet_name)
-            sheet.append_rows(rows, value_input_option=value_input_option)
-
-    google_write_with_retry(_do)
-    mark_sheet_cache_stale(sheet_name)
+    start_row = get_next_empty_row(sheet_name)
+    sheet_write_rows_from_a(sheet_name, start_row, rows)
 
 def get_next_empty_row_in_issues():
     rows = get_sheet_rows_cached(SHEET_ISSUES)
@@ -611,13 +624,32 @@ def get_basebot_sheet(sheet_name):
         basebot_sheet_cache = {}
         raise
 
-def basebot_append_rows(sheet_name, rows, value_input_option="USER_ENTERED"):
+def basebot_get_next_empty_row(sheet_name):
+    rows = basebot_get_all_rows(sheet_name)
+    return len(rows) + 1
+
+
+def basebot_write_rows_from_a(sheet_name, start_row, rows):
+    if not rows:
+        return
+
+    max_len = max(len(r) for r in rows)
+    end_row = start_row + len(rows) - 1
+    end_col_letter = chr(ord("A") + max_len - 1)
+
     def _do():
         with google_lock:
             sheet = get_basebot_sheet(sheet_name)
-            sheet.append_rows(rows, value_input_option=value_input_option)
+            sheet.update(
+                f"A{start_row}:{end_col_letter}{end_row}",
+                rows
+            )
 
     google_write_with_retry(_do)
+
+def basebot_append_rows(sheet_name, rows, value_input_option="USER_ENTERED"):
+    start_row = basebot_get_next_empty_row(sheet_name)
+    basebot_write_rows_from_a(sheet_name, start_row, rows)
 
 def basebot_update_range(sheet_name, cell_range, values):
     def _do():
