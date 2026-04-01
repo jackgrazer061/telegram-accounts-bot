@@ -163,7 +163,7 @@ GAMBLA_NAMES = [
     '№27 denis', '№29 ivansh', '№14 evgen', '№777 asim',
     '№30 maksim2', '№39 alex_gambl', '№47 daniil', '№48 semen', '№49 ivan2',
     '№50 andrey2', '№51 vitaliy', '№21 vladimir1', '№22 andrey', '№52 gleb', '№53 dasha2', '№54 vladimir3',
-    '№000 richard', '№55 artem2', '№56 ilya2', '№58 байер'
+    '№000 richard', '№55 artem2', '№56 ilya2', '№58 KM2'
 ]
 
 SUBMENU_GET = '➡️Выдать лички'
