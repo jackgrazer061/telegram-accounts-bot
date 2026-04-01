@@ -11,6 +11,7 @@ import requests
 import gspread
 from google.oauth2.service_account import Credentials
 import threading
+import uuid
 
 app = Flask(__name__)
 CORS(app)
@@ -23,6 +24,7 @@ BOT_TOKEN = os.environ.get("BOT_TOKEN", "")
 SPREADSHEET_ID = os.environ.get("SPREADSHEET_ID", "")
 SERVICE_ACCOUNT_JSON = os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON", "")
 BACKUP_SPREADSHEET_ID = os.environ.get("BACKUP_SPREADSHEET_ID", "")
+BASEBOT_SPREADSHEET_ID = os.environ.get("BASEBOT_SPREADSHEET_ID", "")
 EXCHANGE_API_BASE = os.environ.get("EXCHANGE_API_BASE", "https://api.exchangerate.host")
 
 if not BOT_TOKEN:
@@ -36,6 +38,10 @@ if not SERVICE_ACCOUNT_JSON:
 
 if not BACKUP_SPREADSHEET_ID:
     raise RuntimeError("BACKUP_SPREADSHEET_ID не задан")
+
+if not BASEBOT_SPREADSHEET_ID:
+    raise RuntimeError("BASEBOT_SPREADSHEET_ID не задан")
+    
 
 # =========================
 # ACCESS CONTROL
@@ -109,6 +115,24 @@ SHEET_FARM_BMS = "База фарм бм"
 SHEET_FARM_FPS = "База фарм фп"
 SHEET_CRYPTO_KINGS = "База_крипта_кинги"
 SHEET_PIXELS = "База_пикселей"
+
+SYNC_COL_KINGS = 25
+SYNC_COL_BMS = 25
+SYNC_COL_CRYPTO_KINGS = 25
+SYNC_COL_PIXELS = 25
+SYNC_COL_FARM_KINGS = 25
+SYNC_COL_FARM_BMS = 25
+
+BASEBOT_SHEET_KINGS = "BaseBot Kings"
+BASEBOT_SHEET_BMS = "BaseBot BM"
+BASEBOT_SHEET_CRYPTO_KINGS = "BaseBot Crypto Kings"
+BASEBOT_SHEET_PIXELS = "BaseBot Pixels"
+BASEBOT_SHEET_FARM_KINGS = "BaseBot Farm Kings"
+BASEBOT_SHEET_FARM_BMS = "BaseBot Farm BM"
+
+BASEBOT_SYNC_COL_KINGS = 7
+BASEBOT_SYNC_COL_BMS = 5
+BASEBOT_SYNC_COL_PIXELS = 4
 
 LIMIT_OPTIONS = ['-250', '250-500', '500-1200', '1200-1500', 'unlim']
 THRESHOLD_OPTIONS = ['0-49', '50-99', '100-199', '200-499', '500+']
@@ -286,9 +310,10 @@ GOOGLE_ERROR_COOLDOWN = 5
 google_error_count = 0
 
 def reset_google_cache():
-    global gspread_client, sheet_cache, table_cache
+    global gspread_client, sheet_cache, table_cache, basebot_sheet_cache
     gspread_client = None
     sheet_cache = {}
+    basebot_sheet_cache = {}
 
     with table_cache_lock:
         table_cache = {
@@ -559,6 +584,64 @@ def get_sheet(sheet_name):
         google_error_until = time.time() + cooldown
         reset_google_cache()
         raise
+
+basebot_sheet_cache = {}
+
+def get_basebot_sheet(sheet_name):
+    global basebot_sheet_cache
+
+    check_google_available()
+
+    try:
+        cached = basebot_sheet_cache.get(sheet_name)
+        if cached is not None:
+            return cached
+
+        def _open_sheet():
+            client = get_gspread_client()
+            spreadsheet = client.open_by_key(BASEBOT_SPREADSHEET_ID)
+            return spreadsheet.worksheet(sheet_name)
+
+        sheet = google_read_with_retry(_open_sheet)
+        basebot_sheet_cache[sheet_name] = sheet
+        return sheet
+
+    except Exception as e:
+        logging.error(f"get_basebot_sheet error for '{sheet_name}': {e}")
+        basebot_sheet_cache = {}
+        raise
+
+def basebot_append_rows(sheet_name, rows, value_input_option="USER_ENTERED"):
+    def _do():
+        with google_lock:
+            sheet = get_basebot_sheet(sheet_name)
+            sheet.append_rows(rows, value_input_option=value_input_option)
+
+    google_write_with_retry(_do)
+
+def basebot_update_range(sheet_name, cell_range, values):
+    def _do():
+        with google_lock:
+            sheet = get_basebot_sheet(sheet_name)
+            sheet.update(cell_range, values)
+
+    google_write_with_retry(_do)
+
+def basebot_get_all_rows(sheet_name):
+    def _do():
+        with google_lock:
+            sheet = get_basebot_sheet(sheet_name)
+            return sheet.get_all_values()
+
+    return google_read_with_retry(_do)
+
+def basebot_delete_row(sheet_name, row_index):
+    def _do():
+        with google_lock:
+            sheet = get_basebot_sheet(sheet_name)
+            sheet.delete_rows(row_index)
+
+    google_write_with_retry(_do)
 
 
 # =========================
@@ -1655,7 +1738,9 @@ def add_kings_from_txt_content(file_text, target_sheet=SHEET_KINGS):
             )
             continue
 
-        to_append.append([
+        sync_id = make_sync_id("king")
+
+        row_to_add = [
             "",                     # A название кинга — пока пусто
             item["purchase_date"],  # B дата покупки
             item["price"],          # C цена
@@ -1668,10 +1753,40 @@ def add_kings_from_txt_content(file_text, target_sheet=SHEET_KINGS):
             part_j,                 # J данные часть 1
             part_k,                 # K данные часть 2
             part_l                  # L данные часть 3
-        ])
+        ]
+        
+        row_to_add = ensure_row_len(row_to_add, 26)
+        row_to_add[25] = sync_id   
+        
+        to_append.append(row_to_add)
 
     if to_append:
         sheet_append_rows_and_refresh(target_sheet, to_append)
+    
+        if target_sheet == SHEET_KINGS:
+            basebot_sheet = BASEBOT_SHEET_KINGS
+        elif target_sheet == SHEET_CRYPTO_KINGS:
+            basebot_sheet = BASEBOT_SHEET_CRYPTO_KINGS
+        elif target_sheet == SHEET_FARM_KINGS:
+            basebot_sheet = BASEBOT_SHEET_FARM_KINGS
+        else:
+            basebot_sheet = None
+    
+        if basebot_sheet:
+            basebot_rows = []
+            for row in to_append:
+                basebot_rows.append([
+                    "crypto king" if target_sheet == SHEET_CRYPTO_KINGS else ("farm king" if target_sheet == SHEET_FARM_KINGS else "king"),
+                    row[3],    # supplier
+                    row[4],    # status
+                    row[7],    # geo
+                    row[9],    # data1
+                    row[10],   # data2
+                    row[11],   # data3
+                    row[25],   # sync_id (Z)
+                ])
+            basebot_append_rows(basebot_sheet, basebot_rows)
+    
         invalidate_stats_cache()
 
     message = (
@@ -1712,7 +1827,9 @@ def add_bms_from_txt_content(file_text, target_sheet=SHEET_BMS):
             duplicates += 1
             continue
 
-        to_append.append([
+        sync_id = make_sync_id("bm")
+
+        row_to_add = [
             item["bm_id"],           # A id БМа
             item["purchase_date"],   # B дата покупки
             item["price"],           # C цена
@@ -1722,11 +1839,37 @@ def add_bms_from_txt_content(file_text, target_sheet=SHEET_BMS):
             "",                      # G кто взял
             "",                      # H дата выдачи
             item["data_text"]        # I данные
-        ])
+        ]
+        
+        row_to_add = ensure_row_len(row_to_add, 26)
+        row_to_add[25] = sync_id   
+        
+        to_append.append(row_to_add)
         existing_ids.add(bm_id)
 
     if to_append:
         sheet_append_rows_and_refresh(target_sheet, to_append)
+    
+        if target_sheet == SHEET_BMS:
+            basebot_sheet = BASEBOT_SHEET_BMS
+        elif target_sheet == SHEET_FARM_BMS:
+            basebot_sheet = BASEBOT_SHEET_FARM_BMS
+        else:
+            basebot_sheet = None
+    
+        if basebot_sheet:
+            basebot_rows = []
+            for row in to_append:
+                basebot_rows.append([
+                    "farm bm" if target_sheet == SHEET_FARM_BMS else "bm",
+                    row[0],    # bm_id
+                    row[3],    # supplier
+                    row[4],    # status
+                    row[8],    # data
+                    row[25],   # sync_id (Z)
+                ])
+            basebot_append_rows(basebot_sheet, basebot_rows)
+    
         invalidate_stats_cache()
 
     message = (
@@ -2146,7 +2289,9 @@ def add_pixels_from_text(text, target_sheet=SHEET_PIXELS):
             errors.append(f"Блок {i}: не указаны данные Пикселя")
             continue
 
-        to_append.append([
+        sync_id = make_sync_id("pixel")
+
+        row_to_add = [
             purchase_date.strftime("%d/%m/%Y"),  # A дата покупки
             price,                               # B цена
             supplier,                            # C поставщик
@@ -2155,10 +2300,28 @@ def add_pixels_from_text(text, target_sheet=SHEET_PIXELS):
             "",                                  # F дата взятия
             "",                                  # G кто взял
             data_text                            # H данные
-        ])
+        ]
+        
+        row_to_add = ensure_row_len(row_to_add, 26)
+        row_to_add[25] = sync_id   
+        
+        to_append.append(row_to_add)
 
     if to_append:
         sheet_append_rows_and_refresh(target_sheet, to_append)
+    
+        if target_sheet == SHEET_PIXELS:
+            basebot_rows = []
+            for row in to_append:
+                basebot_rows.append([
+                    "pixel",
+                    row[2],    # supplier
+                    row[3],    # status
+                    row[7],    # data
+                    row[25],   # sync_id (Z)
+                ])
+            basebot_append_rows(BASEBOT_SHEET_PIXELS, basebot_rows)
+    
         invalidate_stats_cache()
 
     message = (
@@ -2777,8 +2940,8 @@ def confirm_pixel_issue(chat_id, user_id, username):
                 return
 
             row = rows[row_index - 1]
-            if len(row) < 8:
-                row = row + [''] * (8 - len(row))
+            row = ensure_row_len(row, 26)
+            sync_id = row[25]
 
             status = str(row[3]).strip().lower()
 
@@ -2812,6 +2975,9 @@ def confirm_pixel_issue(chat_id, user_id, username):
                     who_took_text
                 ]]
             )
+
+            if sync_id:
+                sync_status_to_basebot(BASEBOT_SHEET_PIXELS, sync_id, "taken")
 
             sheet_append_row_and_refresh(
                 SHEET_ISSUES,
@@ -2904,9 +3070,9 @@ def issue_pixels_bulk(chat_id, user_id, username, count_needed):
                     return
 
                 row = current_rows[row_index - 1]
-                if len(row) < 8:
-                    row = row + [''] * (8 - len(row))
-                    current_rows[row_index - 1] = row
+                row = ensure_row_len(row, 26)
+                current_rows[row_index - 1] = row
+                sync_id = row[25]
 
                 status = str(row[3]).strip().lower()
                 if status != "free":
@@ -2956,7 +3122,8 @@ def issue_pixels_bulk(chat_id, user_id, username, count_needed):
 
                 issued_messages.append({
                     "pixel_name": pixel_name,
-                    "data_text": data_text
+                    "data_text": data_text,
+                    "sync_id": sync_id
                 })
 
             # одним добавлением пишем в Простые лички 26
@@ -2973,6 +3140,10 @@ def issue_pixels_bulk(chat_id, user_id, username, count_needed):
                 table_cache[SHEET_PIXELS]["updated_at"] = time.time()
 
             invalidate_stats_cache()
+
+        for item in issued_messages:
+            if item["sync_id"]:
+                sync_status_to_basebot(BASEBOT_SHEET_PIXELS, item["sync_id"], "taken")
 
         clear_state(user_id)
 
@@ -3220,6 +3391,12 @@ def return_pixel_to_ban(pixel_query, comment_text=""):
         [["ban", "ban"]]
     )
 
+    row = ensure_row_len(row, 26)
+    sync_id = row[25]
+    
+    if sync_id:
+        sync_status_to_basebot(BASEBOT_SHEET_PIXELS, sync_id, "ban")
+
     issue_info = find_last_pixel_issue_row(pixel_name=pixel_name, pixel_id=pixel_id)
     if issue_info:
         mark_issue_row_as_ban(issue_info["row_index"], comment_text)
@@ -3396,6 +3573,12 @@ def return_farm_king_to_ban(king_name, comment_text=""):
         [["ban", "ban"]]
     )
 
+    row = ensure_row_len(row, 26)
+    sync_id = row[25]
+    
+    if sync_id:
+        sync_status_to_basebot(BASEBOT_SHEET_FARM_KINGS, sync_id, "ban")
+
     issue_info = find_last_king_issue_row(king_name)
     if issue_info:
         mark_issue_row_as_ban(issue_info["row_index"], comment_text)
@@ -3434,6 +3617,12 @@ def return_farm_king_to_free(king_name):
             ""
         ]]
     )
+
+    row = ensure_row_len(row, 26)
+    sync_id = row[25]
+    
+    if sync_id:
+        sync_status_to_basebot(BASEBOT_SHEET_FARM_KINGS, sync_id, "free")
 
     if old_king_name:
         delete_last_king_issue_row(old_king_name)
@@ -3475,8 +3664,8 @@ def issue_farm_kings(chat_id, user_id, username, king_names):
                 return
 
             row = current_rows[row_index - 1]
-            if len(row) < 12:
-                row = row + [''] * (12 - len(row))
+            row = ensure_row_len(row, 26)
+            sync_id = row[25]
 
             if str(row[4]).strip().lower() != "free":
                 clear_state(user_id)
@@ -3522,7 +3711,8 @@ def issue_farm_kings(chat_id, user_id, username, king_names):
 
             messages.append({
                 "king_name": king_name,
-                "data_text": full_data_text
+                "data_text": full_data_text,
+                "sync_id": sync_id
             })
 
         refresh_sheet_cache(SHEET_FARM_KINGS)
@@ -3533,6 +3723,10 @@ def issue_farm_kings(chat_id, user_id, username, king_names):
                 issue_rows,
                 value_input_option="USER_ENTERED"
             )
+
+        for item in messages:
+            if item["sync_id"]:
+                sync_status_to_basebot(BASEBOT_SHEET_FARM_KINGS, item["sync_id"], "taken")
 
         invalidate_stats_cache()
 
@@ -3659,6 +3853,12 @@ def return_farm_bm_to_ban(bm_id, comment_text=""):
         [["ban", "ban"]]
     )
 
+    row = ensure_row_len(row, 26)
+    sync_id = row[25]
+    
+    if sync_id:
+        sync_status_to_basebot(BASEBOT_SHEET_FARM_BMS, sync_id, "ban")
+
     issue_info = find_last_bm_issue_row(bm_id)
     if issue_info:
         mark_issue_row_as_ban(issue_info["row_index"], comment_text)
@@ -3686,6 +3886,12 @@ def return_farm_bm_to_free(bm_id):
         [["free", "", "", ""]]
     )
 
+    row = ensure_row_len(row, 26)
+    sync_id = row[25]
+    
+    if sync_id:
+        sync_status_to_basebot(BASEBOT_SHEET_FARM_BMS, sync_id, "free")
+
     delete_last_bm_issue_row(bm_id)
 
     invalidate_stats_cache()
@@ -3710,8 +3916,8 @@ def issue_farm_bm(chat_id, user_id, username):
             return
 
         row = rows[row_index - 1]
-        if len(row) < 9:
-            row = row + [''] * (9 - len(row))
+        row = ensure_row_len(row, 26)
+        sync_id = row[25]
 
         if str(row[4]).strip().lower() != "free":
             send_farm_bms_menu(chat_id, "Этот BM уже занят.")
@@ -3727,6 +3933,9 @@ def issue_farm_bm(chat_id, user_id, username):
                 today
             ]]
         )
+
+        if sync_id:
+            sync_status_to_basebot(BASEBOT_SHEET_FARM_BMS, sync_id, "taken")
 
         sheet_append_row_and_refresh(
             SHEET_ISSUES,
@@ -4106,6 +4315,15 @@ def normalize_numeric_for_sheet(value):
         return int(num)
 
     return float(num)
+
+def ensure_row_len(row, size):
+    row = list(row or [])
+    if len(row) < size:
+        row += [''] * (size - len(row))
+    return row
+
+def make_sync_id(prefix):
+    return f"{prefix}_{uuid.uuid4().hex}"
 
 def parse_sheet_date(value):
     value = str(value).strip()
@@ -5485,6 +5703,12 @@ def return_bm_to_ban(bm_id, comment_text=""):
         [["ban", "ban"]]
     )
 
+    row = ensure_row_len(row, 26)
+    sync_id = row[25]
+    
+    if sync_id:
+        sync_status_to_basebot(BASEBOT_SHEET_BMS, sync_id, "ban")
+
     issue_info = find_last_bm_issue_row(bm_id)
     if issue_info:
         mark_issue_row_as_ban(issue_info["row_index"], comment_text)
@@ -5542,9 +5766,8 @@ def confirm_bm_issue(chat_id, user_id, username):
                 return
 
             row = rows[row_index - 1]
-
-            if len(row) < 9:
-                row = row + [''] * (9 - len(row))
+            row = ensure_row_len(row, 26)
+            sync_id = row[25]
 
             # A id БМа
             # B дата покупки
@@ -5585,6 +5808,9 @@ def confirm_bm_issue(chat_id, user_id, username):
                     today
                 ]]
             )
+
+            if sync_id:
+                sync_status_to_basebot(BASEBOT_SHEET_BMS, sync_id, "taken")
 
             sheet_append_row_and_refresh(
                 SHEET_ISSUES,
@@ -5676,8 +5902,8 @@ def issue_bms_bulk(chat_id, user_id, username, count_needed):
                     return
 
                 row = current_rows[row_index - 1]
-                if len(row) < 9:
-                    row = row + [''] * (9 - len(row))
+                row = ensure_row_len(row, 26)
+                sync_id = row[25]
 
                 if str(row[4]).strip().lower() != "free":
                     clear_state(user_id)
@@ -5712,7 +5938,8 @@ def issue_bms_bulk(chat_id, user_id, username, count_needed):
 
                 issued_items.append({
                     "bm_id": row[0],
-                    "data_text": row[8] if len(row) > 8 else ""
+                    "data_text": row[8] if len(row) > 8 else "",
+                    "sync_id": sync_id
                 })
 
             refresh_sheet_cache(SHEET_BMS)
@@ -5723,6 +5950,10 @@ def issue_bms_bulk(chat_id, user_id, username, count_needed):
                     issue_rows,
                     value_input_option="USER_ENTERED"
                 )
+
+            for item in issued_items:
+                if item["sync_id"]:
+                    sync_status_to_basebot(BASEBOT_SHEET_BMS, item["sync_id"], "taken")
 
             invalidate_stats_cache()
 
@@ -5802,9 +6033,8 @@ def confirm_king_issue(chat_id, user_id, username):
                 return
 
             row = rows[row_index - 1]
-
-            if len(row) < 12:
-                row = row + [''] * (12 - len(row))
+            row = ensure_row_len(row, 26)
+            sync_id = row[25]
 
             status = str(row[4]).strip().lower()
 
@@ -5860,6 +6090,9 @@ def confirm_king_issue(chat_id, user_id, username):
                     row[11]
                 ]]
             )
+
+            if sync_id:
+                sync_status_to_basebot(BASEBOT_SHEET_KINGS, sync_id, "taken")
 
             append_king_to_issues_sheet(
                 king_name=king_name,
@@ -5928,8 +6161,8 @@ def issue_kings_bulk(chat_id, user_id, username, king_names):
                     return
 
                 row = current_rows[row_index - 1]
-                if len(row) < 12:
-                    row = row + [''] * (12 - len(row))
+                row = ensure_row_len(row, 26)
+                sync_id = row[25]
 
                 if str(row[4]).strip().lower() != "free":
                     clear_state(user_id)
@@ -5967,7 +6200,8 @@ def issue_kings_bulk(chat_id, user_id, username, king_names):
                     "price": row[2],
                     "supplier": row[3],
                     "geo": row[7],
-                    "data_text": get_full_king_data_from_row(row)
+                    "data_text": get_full_king_data_from_row(row),
+                    "sync_id": sync_id
                 })
 
             refresh_sheet_cache(SHEET_KINGS)
@@ -5981,6 +6215,10 @@ def issue_kings_bulk(chat_id, user_id, username, king_names):
                     supplier=item["supplier"],
                     for_whom=king_for_whom
                 )
+
+            for item in issued_items:
+                if item["sync_id"]:
+                    sync_status_to_basebot(BASEBOT_SHEET_KINGS, item["sync_id"], "taken")
 
             invalidate_stats_cache()
 
@@ -6038,9 +6276,8 @@ def confirm_crypto_king_issue(chat_id, user_id, username):
                 return
 
             row = rows[row_index - 1]
-
-            if len(row) < 12:
-                row = row + [''] * (12 - len(row))
+            row = ensure_row_len(row, 26)
+            sync_id = row[25]
 
             status = str(row[4]).strip().lower()
 
@@ -6096,6 +6333,9 @@ def confirm_crypto_king_issue(chat_id, user_id, username):
                     row[11]
                 ]]
             )
+
+            if sync_id:
+                 sync_status_to_basebot(BASEBOT_SHEET_CRYPTO_KINGS, sync_id, "taken")
 
             append_king_to_issues_sheet(
                 king_name=king_name,
@@ -6278,6 +6518,15 @@ def return_king_to_ban(king_name, comment_text=""):
         [["ban", "ban"]]
     )
 
+    row = ensure_row_len(row, 26)
+    sync_id = row[25]
+    
+    if sync_id:
+        if sheet_name == SHEET_KINGS:
+            sync_status_to_basebot(BASEBOT_SHEET_KINGS, sync_id, "ban")
+        elif sheet_name == SHEET_CRYPTO_KINGS:
+            sync_status_to_basebot(BASEBOT_SHEET_CRYPTO_KINGS, sync_id, "ban")
+
     issue_info = find_last_king_issue_row(king_name)
     if issue_info:
         mark_issue_row_as_ban(issue_info["row_index"], comment_text)
@@ -6318,6 +6567,15 @@ def return_king_to_free(king_name):
             ""           # I кто взял
         ]]
     )
+
+    row = ensure_row_len(row, 26)
+    sync_id = row[25]
+    
+    if sync_id:
+        if sheet_name == SHEET_KINGS:
+            sync_status_to_basebot(BASEBOT_SHEET_KINGS, sync_id, "free")
+        elif sheet_name == SHEET_CRYPTO_KINGS:
+            sync_status_to_basebot(BASEBOT_SHEET_CRYPTO_KINGS, sync_id, "free")
 
     if old_king_name:
         delete_last_king_issue_row(old_king_name)
@@ -6361,6 +6619,12 @@ def return_crypto_king_to_ban(king_name, comment_text=""):
         f"E{base_info['row_index']}:F{base_info['row_index']}",
         [["ban", "ban"]]
     )
+
+    row = ensure_row_len(row, 26)
+    sync_id = row[25]
+    
+    if sync_id:
+        sync_status_to_basebot(BASEBOT_SHEET_CRYPTO_KINGS, sync_id, "ban")
 
     issue_info = find_last_king_issue_row(king_name)
     if issue_info:
@@ -7216,6 +7480,53 @@ def find_duplicate_values_in_sheet(sheet_name, value_index, min_cols=1, normaliz
             seen[value] = offset
 
     return duplicates
+
+def find_row_in_sheet_by_sync_id(sheet_name, sync_id, sync_col_index=0, basebot=False):
+    if basebot:
+        rows = basebot_get_all_rows(sheet_name)
+    else:
+        rows = get_sheet_rows_cached(sheet_name, force=True)
+
+    target = str(sync_id or "").strip()
+
+    for idx, row in enumerate(rows[1:], start=2):
+        if len(row) <= sync_col_index:
+            continue
+
+        if str(row[sync_col_index]).strip() == target:
+            return {
+                "row_index": idx,
+                "row": row
+            }
+
+    return None
+
+def sync_status_to_basebot(basebot_sheet_name, sync_id, new_status):
+    if basebot_sheet_name in [BASEBOT_SHEET_KINGS, BASEBOT_SHEET_CRYPTO_KINGS, BASEBOT_SHEET_FARM_KINGS]:
+        sync_col_index = BASEBOT_SYNC_COL_KINGS   # H
+        status_col = "C"
+    elif basebot_sheet_name in [BASEBOT_SHEET_BMS, BASEBOT_SHEET_FARM_BMS]:
+        sync_col_index = BASEBOT_SYNC_COL_BMS     # F
+        status_col = "D"
+    elif basebot_sheet_name == BASEBOT_SHEET_PIXELS:
+        sync_col_index = BASEBOT_SYNC_COL_PIXELS  # E
+        status_col = "C"
+    else:
+        return False
+
+    found = find_row_in_sheet_by_sync_id(
+        sheet_name=basebot_sheet_name,
+        sync_id=sync_id,
+        sync_col_index=sync_col_index,
+        basebot=True
+    )
+
+    if not found:
+        return False
+
+    row_index = found["row_index"]
+    basebot_update_range(basebot_sheet_name, f"{status_col}{row_index}", [[new_status]])
+    return True
 
 def tg_send_long_message(chat_id, text, chunk_size=3500):
     text = str(text or "").strip()
@@ -10343,6 +10654,56 @@ def fastadscheck_add():
             "ok": False,
             "error": str(e)
         }), 500
+
+@app.route("/basebot-delete-sync", methods=["POST"])
+def basebot_delete_sync():
+    try:
+        payload = request.get_json(silent=True) or {}
+
+        token = str(payload.get("token", "")).strip()
+        sheet_type = str(payload.get("sheet_type", "")).strip()
+        sync_id = str(payload.get("sync_id", "")).strip()
+
+        expected_token = os.environ.get("BASEBOT_SYNC_TOKEN", "").strip()
+
+        if token != expected_token:
+            return jsonify({"ok": False, "error": "unauthorized"}), 403
+
+        if not sheet_type or not sync_id:
+            return jsonify({"ok": False, "error": "sheet_type or sync_id missing"}), 400
+
+        mapping = {
+            "kings": (SHEET_KINGS, 25),
+            "crypto_kings": (SHEET_CRYPTO_KINGS, 25),
+            "farm_kings": (SHEET_FARM_KINGS, 25),
+            "bms": (SHEET_BMS, 25),
+            "farm_bms": (SHEET_FARM_BMS, 25),
+            "pixels": (SHEET_PIXELS, 25),
+        }
+
+        if sheet_type not in mapping:
+            return jsonify({"ok": False, "error": "unknown sheet_type"}), 400
+
+        resource_sheet, sync_col_index = mapping[sheet_type]
+
+        found = find_row_in_sheet_by_sync_id(
+            sheet_name=resource_sheet,
+            sync_id=sync_id,
+            sync_col_index=sync_col_index,
+            basebot=False
+        )
+
+        if not found:
+            return jsonify({"ok": True, "deleted": False, "reason": "not_found_in_resourcehub"}), 200
+
+        sheet_delete_row_and_refresh(resource_sheet, found["row_index"])
+        invalidate_stats_cache()
+
+        return jsonify({"ok": True, "deleted": True}), 200
+
+    except Exception as e:
+        logging.exception("basebot_delete_sync crashed")
+        return jsonify({"ok": False, "error": str(e)}), 500
 
 def run_auto_healthcheck_once():
     try:
