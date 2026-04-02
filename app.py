@@ -74,6 +74,7 @@ ACCOUNTS_USERS = {
     8334712952: "Ariana_Grande_Account_manager",
     7851493919: "CateBlanchettAccountManager",
     7426931469: "JimCarrey_AccountManager",
+    8035275476: "SeanConneryManager",
 }
 
 FARMERS_USERS = {
