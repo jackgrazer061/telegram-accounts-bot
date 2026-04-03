@@ -436,6 +436,18 @@ def sheet_update_raw(sheet_name, cell_range, values):
     google_write_with_retry(_do)
     mark_sheet_cache_stale(sheet_name)
 
+def sheet_batch_update_raw(sheet_name, updates):
+    if not updates:
+        return
+
+    def _do():
+        with google_lock:
+            sheet = get_sheet(sheet_name)
+            sheet.batch_update(updates)
+
+    google_write_with_retry(_do)
+    mark_sheet_cache_stale(sheet_name)
+
 def get_next_empty_row(sheet_name):
     rows = get_sheet_rows_cached(sheet_name)
     return len(rows) + 1
@@ -10543,38 +10555,75 @@ def fastadscheck_import():
                 "error": "rows пустой или неверный формат"
             }), 400
 
-        updated = 0
-        not_found = []
-        skipped = []
+        with accounts_lock:
+            existing_rows = get_sheet_rows_cached(SHEET_ACCOUNTS, force=True)
 
-        for item in rows:
-            account_number = str(item.get("account_id", "")).strip()
-            limit_value = item.get("limit_usd")
-            threshold_value = item.get("threshold_usd")
-            gmt_value = str(item.get("gmt", "")).strip()
-            currency_value = str(item.get("currency", "")).strip().upper()
-            account_url = str(item.get("account_url", "")).strip()
+            indexed = {}
+            for idx, row in enumerate(existing_rows[1:], start=2):
+                row = ensure_row_len(row, 14)
+                account_number = str(row[0]).strip()
+                if account_number:
+                    indexed[account_number] = {
+                        "row_index": idx,
+                        "row": row
+                    }
 
-            if not account_number or limit_value is None or threshold_value is None or gmt_value == "":
-                skipped.append(account_number or "unknown")
-                continue
+            updated = 0
+            not_found = []
+            skipped = []
+            batch_updates = []
 
-            ok, _ = update_account_from_fastadscheck(
-                account_number=account_number,
-                limit_value=limit_value,
-                threshold_value=threshold_value,
-                gmt_value=gmt_value,
-                currency_value=currency_value,
-                account_url=account_url
-            )
+            for item in rows:
+                account_number = str(item.get("account_id", "")).strip()
+                limit_value = item.get("limit_usd")
+                threshold_value = item.get("threshold_usd")
+                gmt_value = str(item.get("gmt", "")).strip()
+                currency_value = str(item.get("currency", "")).strip().upper()
+                account_url = str(item.get("account_url", "")).strip()
 
-            if ok:
+                if not account_number or limit_value is None or threshold_value is None or gmt_value == "":
+                    skipped.append(account_number or "unknown")
+                    continue
+
+                found = indexed.get(account_number)
+                if not found:
+                    not_found.append(account_number)
+                    continue
+
+                row_index = found["row_index"]
+                row = found["row"]
+
+                parsed_limit = parse_limit_number(limit_value)
+                if parsed_limit == "unlim":
+                    limit_to_store = "unlim"
+                else:
+                    limit_to_store = normalize_numeric_for_sheet(limit_value)
+
+                values_en = [[
+                    limit_to_store,                                # E
+                    normalize_numeric_for_sheet(threshold_value),  # F
+                    str(gmt_value),                                # G
+                    row[7] if len(row) > 7 else "",                # H
+                    row[8] if len(row) > 8 else "",                # I
+                    row[9] if len(row) > 9 else "",                # J
+                    row[10] if len(row) > 10 else "",              # K
+                    row[11] if len(row) > 11 else "",              # L
+                    currency_value or "",                          # M
+                    account_url or ""                              # N
+                ]]
+
+                batch_updates.append({
+                    "range": f"E{row_index}:N{row_index}",
+                    "values": values_en
+                })
+
                 updated += 1
-            else:
-                not_found.append(account_number)
 
-        refresh_sheet_cache(SHEET_ACCOUNTS)
-        invalidate_stats_cache()
+            if batch_updates:
+                sheet_batch_update_raw(SHEET_ACCOUNTS, batch_updates)
+
+            refresh_sheet_cache(SHEET_ACCOUNTS)
+            invalidate_stats_cache()
 
         return jsonify({
             "ok": True,
