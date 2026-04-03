@@ -2166,13 +2166,14 @@ def append_auto_warehouse_rows_for_new_fps(added_items):
     for warehouse, item in grouped.items():
         purchase_date = item.get("purchase_date", "")
         supplier = item.get("supplier", "")
-
+        transfer_date = datetime.now(MOSCOW_TZ).strftime("%d/%m/%Y")
+    
         rows_to_append.append([
             warehouse,          # A
             "KING",             # B
             purchase_date,      # C дата покупки
             35,                 # D цена склада
-            purchase_date,      # E дата передачи
+            transfer_date,      # E дата передачи
             supplier,           # F поставщик
             "TEAM"              # G кому передали
         ])
