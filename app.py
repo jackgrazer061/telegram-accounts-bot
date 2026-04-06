@@ -26,6 +26,8 @@ SERVICE_ACCOUNT_JSON = os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON", "")
 BACKUP_SPREADSHEET_ID = os.environ.get("BACKUP_SPREADSHEET_ID", "")
 BASEBOT_SPREADSHEET_ID = os.environ.get("BASEBOT_SPREADSHEET_ID", "")
 EXCHANGE_API_BASE = os.environ.get("EXCHANGE_API_BASE", "https://api.exchangerate.host")
+OCTO_API_TOKEN = os.environ.get("OCTO_API_TOKEN", "").strip()
+OCTO_API_BASE = os.environ.get("OCTO_API_BASE", "https://app.octobrowser.net/api/v2/automation").strip()
 
 if not BOT_TOKEN:
     raise RuntimeError("BOT_TOKEN не задан")
@@ -1055,6 +1057,23 @@ def send_add_pixels_instructions(chat_id):
         "16/02/2026; 500; TT\n"
         "pixel data 2"
     )
+    tg_send_message(chat_id, text)
+
+def send_octo_king_data_instructions(chat_id, warehouse_name=""):
+    warehouse_text = f" для склада {warehouse_name}" if warehouse_name else ""
+
+    text = (
+        f"Теперь скинь данные кинга{warehouse_text} в таком формате:\n\n"
+        "GEO - \n\n"
+        "FB Login: \n"
+        "FB Password: \n\n"
+        "Email: \n"
+        "Email's Password: \n"
+        "Service: \n"
+        "2FA: \n\n"
+        "Doc's:"
+    )
+
     tg_send_message(chat_id, text)
 
 def get_free_king_geos():
@@ -2263,7 +2282,8 @@ def add_fps_from_text(text, target_sheet=SHEET_FPS):
         existing_links.add(fp_link)
 
     warehouse_rows_added = 0
-
+    new_warehouses = octo_extract_unique_warehouses(added_items)
+    
     if to_append:
         sheet_append_rows_and_refresh(target_sheet, to_append)
         warehouse_rows_added = append_auto_warehouse_rows_for_new_fps(added_items)
@@ -2273,16 +2293,26 @@ def add_fps_from_text(text, target_sheet=SHEET_FPS):
         f"Готово ✅\n"
         f"Добавлено FP: {len(to_append)}\n"
         f"Добавлено авто-строк по складам: {warehouse_rows_added}\n"
+        f"Octo профилей создано: {octo_result['created']}\n"
+        f"Octo профилей уже существовало: {octo_result['skipped']}\n"
         f"Дубликатов пропущено: {duplicates}\n"
         f"Ошибок: {len(errors)}"
     )
+    
+    if octo_result["errors"]:
+        message += "\n\nОшибки Octo:\n" + "\n".join(octo_result["errors"][:10])
+        if len(octo_result["errors"]) > 10:
+            message += f"\n... и ещё {len(octo_result['errors']) - 10}"
 
     if errors:
         message += "\n\nОшибки:\n" + "\n".join(errors[:10])
         if len(errors) > 10:
             message += f"\n... и ещё {len(errors) - 10}"
 
-    return message
+    return {
+        "message": message,
+        "new_warehouses": new_warehouses
+    }
 
 def add_pixels_from_text(text, target_sheet=SHEET_PIXELS):
     lines = text.splitlines()
@@ -4280,6 +4310,156 @@ def issue_farm_fps(chat_id, user_id, username, count_needed):
 # =========================
 # HELPERS
 # =========================
+
+def normalize_multiline_text_block(text):
+    return str(text or "").replace("\r\n", "\n").replace("\r", "\n").strip()
+
+
+def parse_king_data_block(raw_text):
+    """
+    Разбирает текст формата:
+    GEO -
+    FB Login:
+    FB Password:
+    Email:
+    Email's Password:
+    Service:
+    2FA:
+    Doc's:
+    """
+    text = normalize_multiline_text_block(raw_text)
+
+    result = {
+        "geo": "",
+        "fb_login": "",
+        "fb_password": "",
+        "email": "",
+        "email_password": "",
+        "service": "",
+        "twofa": "",
+        "docs": "",
+    }
+
+    if not text:
+        return result
+
+    lines = text.split("\n")
+    current_key = None
+
+    key_map = {
+        "geo": "geo",
+        "fb login": "fb_login",
+        "fb password": "fb_password",
+        "email": "email",
+        "email's password": "email_password",
+        "emails password": "email_password",
+        "email password": "email_password",
+        "service": "service",
+        "2fa": "twofa",
+        "doc's": "docs",
+        "docs": "docs",
+    }
+
+    for raw_line in lines:
+        line = str(raw_line).strip()
+        if not line:
+            if current_key == "docs":
+                result["docs"] += "\n"
+            continue
+
+        matched = False
+
+        # Поддержка "GEO - value"
+        if re.match(r"^geo\s*-\s*", line, re.IGNORECASE):
+            value = re.sub(r"^geo\s*-\s*", "", line, flags=re.IGNORECASE).strip()
+            result["geo"] = value
+            current_key = "geo"
+            matched = True
+
+        if not matched:
+            m = re.match(r"^([^:]+):\s*(.*)$", line)
+            if m:
+                raw_key = m.group(1).strip().lower()
+                value = m.group(2).strip()
+
+                mapped = key_map.get(raw_key)
+                if mapped:
+                    if mapped == "docs":
+                        result["docs"] = value
+                    else:
+                        result[mapped] = value
+                    current_key = mapped
+                    matched = True
+
+        # Если строка без ключа и мы уже внутри Doc's — считаем продолжением
+        if not matched and current_key == "docs":
+            if result["docs"]:
+                result["docs"] += "\n" + line
+            else:
+                result["docs"] = line
+
+    return result
+
+
+def build_octo_description_from_king_data(parsed):
+    parsed = parsed or {}
+
+    geo = str(parsed.get("geo", "") or "").strip()
+    fb_login = str(parsed.get("fb_login", "") or "").strip()
+    fb_password = str(parsed.get("fb_password", "") or "").strip()
+    email = str(parsed.get("email", "") or "").strip()
+    email_password = str(parsed.get("email_password", "") or "").strip()
+    service = str(parsed.get("service", "") or "").strip()
+    twofa = str(parsed.get("twofa", "") or "").strip()
+    docs = str(parsed.get("docs", "") or "").strip()
+
+    return (
+        f"GEO - {geo}\n\n"
+        f"FB Login: {fb_login}\n"
+        f"FB Password: {fb_password}\n\n"
+        f"Email: {email}\n"
+        f"Email's Password: {email_password}\n"
+        f"Service: {service}\n"
+        f"2FA: {twofa}\n\n"
+        f"Doc's: {docs}"
+    )
+
+
+def octo_headers():
+    if not OCTO_API_TOKEN:
+        raise RuntimeError("OCTO_API_TOKEN не задан")
+
+    return {
+        "X-Octo-Api-Token": OCTO_API_TOKEN,
+        "Content-Type": "application/json",
+    }
+
+
+def octo_update_profile_description(profile_uuid, description_text):
+    if not profile_uuid:
+        raise RuntimeError("Не передан profile_uuid для Octo")
+
+    payload = {
+        "description": str(description_text or "")
+    }
+
+    # Если у тебя в Octo другой endpoint для update — потом поправим только здесь
+    resp = requests.patch(
+        f"{OCTO_API_BASE}/automation/profiles/{profile_uuid}",
+        headers=octo_headers(),
+        json=payload,
+        timeout=60
+    )
+
+    if resp.status_code not in [200, 201]:
+        raise RuntimeError(f"Octo update description failed: {resp.status_code} {resp.text}")
+
+    data = resp.json()
+    if isinstance(data, dict) and data.get("error"):
+        raise RuntimeError(f"Octo update description error: {data}")
+
+    return True
+    
 def parse_date(value):
     value = str(value).strip()
     for fmt in ("%d/%m/%Y", "%d.%m.%Y", "%d-%m-%Y", "%Y-%m-%d"):
@@ -7602,6 +7782,150 @@ def tg_send_long_message(chat_id, text, chunk_size=3500):
 TELEGRAM_MESSAGE_LIMIT = 4096
 SAFE_EDIT_LIMIT = 3500
 
+def octo_headers():
+    if not OCTO_API_TOKEN:
+        raise RuntimeError("OCTO_API_TOKEN не задан")
+    return {
+        "X-Octo-Api-Token": OCTO_API_TOKEN,
+        "Content-Type": "application/json",
+    }
+
+
+def octo_extract_unique_warehouses(added_items):
+    unique = []
+    seen = set()
+
+    for item in added_items:
+        warehouse = str(item.get("warehouse", "")).strip()
+        if not warehouse or warehouse in seen:
+            continue
+        seen.add(warehouse)
+        unique.append(warehouse)
+
+    return unique
+
+
+def parse_proxy_input(text):
+    """
+    Поддерживаем форматы:
+    ip:port
+    ip:port:login:password
+    host:port:login:password
+
+    Если логин/пароль нет — ставим без авторизации.
+    """
+    raw = str(text or "").strip()
+    parts = [x.strip() for x in raw.split(":")]
+
+    if len(parts) == 2:
+        host, port = parts
+        return {
+            "host": host,
+            "port": port,
+            "login": "",
+            "password": ""
+        }
+
+    if len(parts) == 4:
+        host, port, login, password = parts
+        return {
+            "host": host,
+            "port": port,
+            "login": login,
+            "password": password
+        }
+
+    return None
+
+
+def octo_find_profile_by_title(profile_name):
+    resp = requests.get(
+        f"{OCTO_API_BASE}/profiles",
+        headers=octo_headers(),
+        params={"search": profile_name},
+        timeout=30
+    )
+    resp.raise_for_status()
+
+    data = resp.json()
+    items = data.get("data") or data.get("items") or []
+    target = str(profile_name).strip().lower()
+
+    for item in items:
+        title = str(item.get("title") or item.get("name") or "").strip().lower()
+        if title == target:
+            return item
+
+    return None
+
+
+def build_octo_profile_payload(profile_name, proxy_data):
+    """
+    Лучший вариант: использовать template в Octo.
+    Тогда расширения, стартовые страницы, bookmarks и прочее
+    берутся из шаблона, а бот подставляет имя и proxy.
+    """
+
+    payload = {
+        "title": profile_name,
+        "tags": ["Sido", "corby"],
+        "proxy": {
+            "type": "http",
+            "host": proxy_data["host"],
+            "port": proxy_data["port"],
+            "login": proxy_data["login"],
+            "password": proxy_data["password"]
+        }
+    }
+
+    # если есть шаблон — используем его
+    if OCTO_FP_TEMPLATE_ID:
+        payload["template_id"] = OCTO_FP_TEMPLATE_ID
+    else:
+        # fallback без template
+        payload["start_pages"] = ["https://www.facebook.com"]
+        payload["bookmarks"] = [
+            {
+                "title": "facebook.com",
+                "url": "https://www.facebook.com"
+            },
+            {
+                "title": "2fa.cn",
+                "url": "https://2fa.cn"
+            }
+        ]
+        payload["fingerprint"] = {
+            "os": "win"
+        }
+
+    return payload
+
+
+def octo_create_profile(profile_name, proxy_data):
+    payload = build_octo_profile_payload(profile_name, proxy_data)
+
+    resp = requests.post(
+        f"{OCTO_API_BASE}/profiles",
+        headers=octo_headers(),
+        json=payload,
+        timeout=60
+    )
+    resp.raise_for_status()
+    return resp.json()
+
+
+def ensure_octo_profile_for_warehouse(warehouse_name, proxy_data):
+    profile_name = str(warehouse_name or "").strip()
+    if not profile_name:
+        return False, "empty warehouse"
+
+    existing = octo_find_profile_by_title(profile_name)
+    if existing:
+        return True, f"already exists: {profile_name}"
+
+    created = octo_create_profile(profile_name, proxy_data)
+    return True, created
+
 def tg_send_split_text(chat_id, text, chunk_size=3500):
     text = str(text or "").strip()
     if not text:
@@ -8876,9 +9200,28 @@ def handle_message(msg):
 
         if state.get("mode") == "awaiting_fps_add":
             result = add_fps_from_text(text)
+            result_message = result["message"]
+            new_warehouses = result["new_warehouses"]
+        
+            if new_warehouses and OCTO_API_TOKEN:
+                set_state(user_id, {
+                    "mode": "awaiting_octo_proxy_for_warehouse",
+                    "octo_target_sheet": SHEET_FPS,
+                    "octo_warehouses_queue": new_warehouses,
+                    "octo_created_profiles": [],
+                    "octo_failed_profiles": []
+                })
+        
+                tg_send_message(chat_id, result_message)
+                send_text_input_prompt(
+                    chat_id,
+                    f"Теперь пришли proxy для Octo профиля склада:\n{new_warehouses[0]}\n\nФормат:\nip:port\nили\nip:port:login:password"
+                )
+                return
+        
             clear_state(user_id)
-            tg_send_message(chat_id, result)
-
+            tg_send_message(chat_id, result_message)
+        
             if is_admin(user_id):
                 send_admin_menu(chat_id, "Выбери следующее действие:")
             else:
@@ -8887,9 +9230,28 @@ def handle_message(msg):
 
         if state.get("mode") == "awaiting_farm_fps_add":
             result = add_fps_from_text(text, target_sheet=SHEET_FARM_FPS)
+            result_message = result["message"]
+            new_warehouses = result["new_warehouses"]
+        
+            if new_warehouses and OCTO_API_TOKEN:
+                set_state(user_id, {
+                    "mode": "awaiting_octo_proxy_for_warehouse",
+                    "octo_target_sheet": SHEET_FARM_FPS,
+                    "octo_warehouses_queue": new_warehouses,
+                    "octo_created_profiles": [],
+                    "octo_failed_profiles": []
+                })
+        
+                tg_send_message(chat_id, result_message)
+                send_text_input_prompt(
+                    chat_id,
+                    f"Теперь пришли proxy для Octo профиля склада:\n{new_warehouses[0]}\n\nФормат:\nip:port\nили\nip:port:login:password"
+                )
+                return
+        
             clear_state(user_id)
-            tg_send_message(chat_id, result)
-
+            tg_send_message(chat_id, result_message)
+        
             if is_admin(user_id):
                 send_admin_farmers_menu(chat_id, "Выбери следующее действие:")
             else:
@@ -10354,6 +10716,118 @@ def handle_message(msg):
             ok, message = return_farm_fp_to_ban(fp_link, comment_text)
             clear_state(user_id)
             send_farm_fps_menu(chat_id, message)
+            return
+
+        if state.get("mode") == "awaiting_octo_proxy_for_warehouse":
+            proxy_data = parse_proxy_input(text)
+        
+            if not proxy_data:
+                send_text_input_prompt(
+                    chat_id,
+                    "Неверный формат proxy.\n\nИспользуй:\nip:port\nили\nip:port:login:password"
+                )
+                return
+        
+            warehouses_queue = list(state.get("octo_warehouses_queue", []))
+            created_profiles = list(state.get("octo_created_profiles", []))
+            failed_profiles = list(state.get("octo_failed_profiles", []))
+        
+            if not warehouses_queue:
+                clear_state(user_id)
+                tg_send_message(chat_id, "Очередь складов для Octo пуста.")
+                send_main_menu(chat_id, user_id=user_id)
+                return
+        
+            current_warehouse = warehouses_queue.pop(0)
+        
+            try:
+                ok, result = ensure_octo_profile_for_warehouse(current_warehouse, proxy_data)
+        
+                if ok:
+                    created_profiles.append(current_warehouse)
+                    tg_send_message(chat_id, f"Octo профиль создан/готов:\n{current_warehouse}")
+                else:
+                    failed_profiles.append(f"{current_warehouse}: {result}")
+                    tg_send_message(chat_id, f"Ошибка Octo для склада {current_warehouse}:\n{result}")
+        
+            except Exception as e:
+                logging.exception("Octo profile create crashed")
+                failed_profiles.append(f"{current_warehouse}: {e}")
+                tg_send_message(chat_id, f"Ошибка Octo для склада {current_warehouse}:\n{e}")
+        
+            if warehouses_queue:
+                set_state(user_id, {
+                    "mode": "awaiting_octo_proxy_for_warehouse",
+                    "octo_target_sheet": state.get("octo_target_sheet", ""),
+                    "octo_warehouses_queue": warehouses_queue,
+                    "octo_created_profiles": created_profiles,
+                    "octo_failed_profiles": failed_profiles
+                })
+        
+                send_text_input_prompt(
+                    chat_id,
+                    f"Пришли proxy для следующего склада:\n{warehouses_queue[0]}\n\nФормат:\nip:port\nили\nip:port:login:password"
+                )
+                return
+        
+            clear_state(user_id)
+        
+            summary = (
+                "Создание Octo профилей завершено.\n\n"
+                f"Успешно: {len(created_profiles)}\n"
+                f"Ошибок: {len(failed_profiles)}"
+            )
+        
+            if created_profiles:
+                summary += "\n\nСозданы:\n" + "\n".join(created_profiles[:20])
+        
+            if failed_profiles:
+                summary += "\n\nОшибки:\n" + "\n".join(failed_profiles[:20])
+        
+            tg_send_long_message(chat_id, summary)
+        
+            if is_admin(user_id):
+                send_admin_menu(chat_id, "Меню Admin:")
+            else:
+                send_main_menu(chat_id, "Главное меню:", user_id=user_id)
+            return
+
+        if state.get("mode") == "awaiting_octo_king_data":
+            raw_king_text = text.strip()
+
+            if not raw_king_text:
+                send_octo_king_data_instructions(chat_id, state.get("octo_warehouse_name", ""))
+                return
+
+            profile_uuid = str(state.get("octo_profile_uuid", "")).strip()
+            warehouse_name = str(state.get("octo_warehouse_name", "")).strip()
+
+            if not profile_uuid:
+                clear_state(user_id)
+                tg_send_message(chat_id, "Не найден profile_uuid Octo. Начни заново.")
+                return
+
+            parsed = parse_king_data_block(raw_king_text)
+            description_text = build_octo_description_from_king_data(parsed)
+
+            try:
+                octo_update_profile_description(profile_uuid, description_text)
+            except Exception as e:
+                logging.exception("octo_update_profile_description crashed")
+                tg_send_message(chat_id, f"Профиль создан, но описание в Octo не обновилось:\n{e}")
+                return
+
+            clear_state(user_id)
+
+            tg_send_message(
+                chat_id,
+                f"Готово ✅\n\n"
+                f"Профиль Octo обновлен.\n"
+                f"Склад: {warehouse_name}\n"
+                f"Описание кинга записано."
+            )
+
+            send_main_menu(chat_id, "Главное меню:", user_id=user_id)
             return
 
         send_main_menu(chat_id, "Не понял команду. Выбери кнопку из меню:", user_id=user_id)
