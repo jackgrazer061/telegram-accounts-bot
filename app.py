@@ -10875,5 +10875,5 @@ if __name__ == "__main__":
     auto_health_thread = threading.Thread(target=auto_healthcheck_loop, daemon=True)
     auto_health_thread.start()
 
-    port = int(os.environ.get("PORT", 10000))
+    port = int(os.environ.get("PORT", 8080))
     app.run(host="0.0.0.0", port=port)
