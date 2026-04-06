@@ -82,6 +82,7 @@ FARMERS_USERS = {
     8389730381: "JaimeMurray_farmer",
     8589105033: "owenwilson_farmer",
     8503147017: "zendaya_farmer",
+    8797795819: "markzuckerberg_farm",
 }
 
 def is_admin(user_id):
