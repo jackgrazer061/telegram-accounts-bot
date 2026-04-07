@@ -201,7 +201,7 @@ GAMBLA_NAMES = [
     '№27 denis', '№29 ivansh', '№14 evgen', '№777 asim',
     '№30 maksim2', '№39 alex_gambl', '№47 daniil', '№48 semen', '№49 ivan2',
     '№50 andrey2', '№51 vitaliy', '№21 vladimir1', '№22 andrey', '№52 gleb', '№53 dasha2', '№54 vladimir3',
-    '№000 richard', '№55 artem2', '№56 IC1', '№58 KM2', '№60 MSH5', '№59 байер'
+    '№000 richard', '№55 artem2', '№56 IC1', '№58 KM2', '№60 MSH5', '№59 AH6'
 ]
 
 SUBMENU_GET = '➡️Выдать лички'
@@ -954,14 +954,13 @@ def send_free_accounts_limit_menu(chat_id, text="Выбери лимит:"):
         [{"text": MENU_CANCEL}]
     ]
     tg_send_message(chat_id, text, keyboard)
-    
 def send_kings_menu(chat_id, text="Меню кингов:"):
     keyboard = [
         [{"text": SUBMENU_GET_KINGS}, {"text": SUBMENU_CRYPTO_KINGS}],
         [{"text": SUBMENU_FREE_KINGS}],
         [{"text": SUBMENU_RETURN_KING}],
         [{"text": SUBMENU_SEARCH_KING}],
-        [{"text": BTN_BACK_TO_MENU}]
+        [{"text": SUBMENU_BACK_MAIN}]
     ]
     tg_send_message(chat_id, text, keyboard)
 
@@ -8081,18 +8080,20 @@ def build_octo_profile_payload(profile_name, proxy_data):
 def octo_create_profile(profile_name, proxy_data):
     payload = build_octo_profile_payload(profile_name, proxy_data)
 
+    headers = {
+        "X-Octo-Api-Token": OCTO_API_TOKEN,
+        "Content-Type": "application/json"
+    }
+
     resp = requests.post(
         f"{OCTO_API_BASE}/automation/profiles",
-        headers=headers,
         json=payload,
+        headers=headers,
         timeout=60
     )
-    
-    if resp.status_code >= 400:
-        raise RuntimeError(f"Octo create profile error {resp.status_code}: {resp.text}")
-        
-        resp.raise_for_status()
-        return resp.json()
+
+    resp.raise_for_status()
+    return resp.json()
 
 
 def ensure_octo_profile_for_warehouse(warehouse_name, proxy_data):
