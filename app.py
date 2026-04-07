@@ -8036,16 +8036,14 @@ def build_octo_profile_payload(profile_name, proxy_data):
     берутся из шаблона, а бот подставляет имя и proxy.
     """
 
-    payload = {
-        "title": profile_name,
-        "tags": ["Sido", "corby"],
-        "proxy": {
-            "type": proxy_data["type"],
-            "host": proxy_data["host"],
-            "port": proxy_data["port"],
-            "login": proxy_data["login"],
-            "password": proxy_data["password"],
-        }
+    proxy_data = parse_proxy_input(proxy_raw)
+
+    payload["proxy"] = {
+        "type": proxy_data["type"],   # socks5 / http
+        "host": proxy_data["host"],
+        "port": int(proxy_data["port"]),
+        "login": proxy_data["login"],
+        "password": proxy_data["password"],
     }
 
     # если есть шаблон — используем его
@@ -8075,13 +8073,17 @@ def octo_create_profile(profile_name, proxy_data):
     payload = build_octo_profile_payload(profile_name, proxy_data)
 
     resp = requests.post(
-        f"{OCTO_API_BASE}/profiles",
-        headers=octo_headers(),
+        f"{OCTO_API_BASE}/automation/profiles",
+        headers=headers,
         json=payload,
         timeout=60
     )
-    resp.raise_for_status()
-    return resp.json()
+    
+    if resp.status_code >= 400:
+        raise RuntimeError(f"Octo create profile error {resp.status_code}: {resp.text}")
+        
+        resp.raise_for_status()
+        return resp.json()
 
 
 def ensure_octo_profile_for_warehouse(warehouse_name, proxy_data):
