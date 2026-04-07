@@ -7817,59 +7817,48 @@ def octo_extract_unique_warehouses(added_items):
 import re
 
 def parse_proxy_input(text):
-    """
-    Поддерживаем форматы:
-    1) ip:port
-    2) ip:port:login:password
-    3) socks5://login:password@host:port
-    4) http://login:password@host:port
-    5) socks5://host:port
-    6) http://host:port
-    """
     raw = str(text or "").strip()
-    if not raw:
-        return None
 
-    proxy_type = "socks5"
+    match = re.match(
+        r'^(?:(socks5|http|https)://)?([^:@]+):([^:@]+)@([^:]+):(\d+)$',
+        raw,
+        re.IGNORECASE
+    )
+    if match:
+        ptype, login, password, host, port = match.groups()
+        return {
+            "type": (ptype or "socks5").lower(),
+            "host": host.strip(),
+            "port": port.strip(),
+            "login": login.strip(),
+            "password": password.strip(),
+        }
 
-    if "://" in raw:
-        scheme, rest = raw.split("://", 1)
-        scheme = scheme.strip().lower()
-
-        if scheme in ["socks5", "http", "https"]:
-            proxy_type = "http" if scheme in ["http", "https"] else "socks5"
-        else:
-            return None
-
-        if "@" in rest:
-            auth_part, host_part = rest.rsplit("@", 1)
-            if ":" not in auth_part or ":" not in host_part:
-                return None
-
-            login, password = auth_part.split(":", 1)
-            host, port = host_part.rsplit(":", 1)
-
-            return {
-                "type": proxy_type,
-                "host": host.strip(),
-                "port": port.strip(),
-                "login": login.strip(),
-                "password": password.strip(),
-            }
-        else:
-            if ":" not in rest:
-                return None
-
-            host, port = rest.rsplit(":", 1)
-            return {
-                "type": proxy_type,
-                "host": host.strip(),
-                "port": port.strip(),
-                "login": "",
-                "password": "",
-            }
+    match = re.match(
+        r'^(?:(socks5|http|https)://)?([^:]+):(\d+)$',
+        raw,
+        re.IGNORECASE
+    )
+    if match:
+        ptype, host, port = match.groups()
+        return {
+            "type": (ptype or "socks5").lower(),
+            "host": host.strip(),
+            "port": port.strip(),
+            "login": "",
+            "password": "",
+        }
 
     parts = [x.strip() for x in raw.split(":")]
+    if len(parts) == 4:
+        host, port, login, password = parts
+        return {
+            "type": "socks5",
+            "host": host,
+            "port": port,
+            "login": login,
+            "password": password
+        }
 
     if len(parts) == 2:
         host, port = parts
@@ -7879,16 +7868,6 @@ def parse_proxy_input(text):
             "port": port,
             "login": "",
             "password": ""
-        }
-
-    if len(parts) == 4:
-        host, port, login, password = parts
-        return {
-            "type": "socks5",
-            "host": host,
-            "port": port,
-            "login": login,
-            "password": password
         }
 
     return None
@@ -8076,6 +8055,9 @@ def octo_create_profile(payload):
     }
 
     url = f"{OCTO_API_BASE}/profiles"
+
+    logging.info(f"OCTO CREATE URL: {url}")
+    logging.info(f"OCTO PAYLOAD: {json.dumps(payload, ensure_ascii=False)}")
 
     resp = requests.post(
         url,
