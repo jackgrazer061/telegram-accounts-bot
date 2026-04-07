@@ -27,7 +27,7 @@ BACKUP_SPREADSHEET_ID = os.environ.get("BACKUP_SPREADSHEET_ID", "")
 BASEBOT_SPREADSHEET_ID = os.environ.get("BASEBOT_SPREADSHEET_ID", "")
 EXCHANGE_API_BASE = os.environ.get("EXCHANGE_API_BASE", "https://api.exchangerate.host")
 OCTO_API_TOKEN = os.environ.get("OCTO_API_TOKEN", "").strip()
-OCTO_API_BASE = os.environ.get("OCTO_API_BASE", "https://app.octobrowser.net/api/v2").strip()
+OCTO_API_BASE = os.environ.get("OCTO_API_BASE", "https://app.octobrowser.net/api/v2")
 OCTO_FP_TEMPLATE_ID = os.environ.get("OCTO_FP_TEMPLATE_ID", "").strip()
 OCTO_TAG_SIDO = "Sido"
 OCTO_TAG_CORBY = "corby"
@@ -8077,16 +8077,16 @@ def build_octo_profile_payload(profile_name, proxy_data):
     return payload
 
 
-def octo_create_profile(profile_name, proxy_data):
-    payload = build_octo_profile_payload(profile_name, proxy_data)
-
+def octo_create_profile(payload):
     headers = {
         "X-Octo-Api-Token": OCTO_API_TOKEN,
-        "Content-Type": "application/json"
+        "Content-Type": "application/json",
     }
 
+    url = f"{OCTO_API_BASE}/automation/profiles"
+
     resp = requests.post(
-        f"{OCTO_API_BASE}/automation/profiles",
+        url,
         json=payload,
         headers=headers,
         timeout=60
@@ -8094,7 +8094,6 @@ def octo_create_profile(profile_name, proxy_data):
 
     resp.raise_for_status()
     return resp.json()
-
 
 def ensure_octo_profile_for_warehouse(warehouse_name, proxy_data):
     profile_name = str(warehouse_name or "").strip()
