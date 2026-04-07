@@ -7815,68 +7815,73 @@ def octo_extract_unique_warehouses(added_items):
     return unique
 
 
+import re
+
 def parse_proxy_input(text):
     """
     Поддерживаем форматы:
-    ip:port
-    host:port
-    ip:port:login:password
-    host:port:login:password
-    http://login:password@host:port
-    https://login:password@host:port
-    socks5://login:password@host:port
-    socks4://login:password@host:port
-
-    Возвращает:
-    {
-        "host": str,
-        "port": str,
-        "login": str,
-        "password": str,
-        "type": str,   # http / https / socks5 / socks4
-    }
+    1) ip:port
+    2) host:port
+    3) host:port:login:password
+    4) socks5://login:password@host:port
+    5) http://login:password@host:port
+    6) socks5://host:port
+    7) http://host:port
     """
+
     raw = str(text or "").strip()
     if not raw:
         return None
 
-    proxy_type = "http"
-
-    # формат scheme://login:password@host:port
-    scheme_match = re.match(
-        r'^(?P<scheme>https?|socks5|socks4)://(?P<login>[^:@]+):(?P<password>[^@]+)@(?P<host>[^:]+):(?P<port>\d+)$',
-        raw,
-        re.IGNORECASE
+    # Формат scheme://login:password@host:port
+    m = re.match(
+        r'^(?P<scheme>[a-zA-Z0-9]+)://(?P<login>[^:@]+):(?P<password>[^@]+)@(?P<host>[^:]+):(?P<port>\d+)$',
+        raw
     )
-    if scheme_match:
+    if m:
         return {
-            "host": scheme_match.group("host").strip(),
-            "port": scheme_match.group("port").strip(),
-            "login": scheme_match.group("login").strip(),
-            "password": scheme_match.group("password").strip(),
-            "type": scheme_match.group("scheme").lower(),
+            "type": m.group("scheme").lower(),
+            "host": m.group("host").strip(),
+            "port": m.group("port").strip(),
+            "login": m.group("login").strip(),
+            "password": m.group("password").strip(),
         }
 
-    # формат host:port
-    simple_match = re.match(r'^(?P<host>[^:]+):(?P<port>\d+)$', raw)
-    if simple_match:
+    # Формат scheme://host:port
+    m = re.match(
+        r'^(?P<scheme>[a-zA-Z0-9]+)://(?P<host>[^:]+):(?P<port>\d+)$',
+        raw
+    )
+    if m:
         return {
-            "host": simple_match.group("host").strip(),
-            "port": simple_match.group("port").strip(),
+            "type": m.group("scheme").lower(),
+            "host": m.group("host").strip(),
+            "port": m.group("port").strip(),
             "login": "",
             "password": "",
-            "type": proxy_type,
         }
 
-    # формат host:port:login:password
-    auth_match = re.match(r'^(?P<host>[^:]+):(?P<port>\d+):(?P<login>[^:]+):(?P<password>.+)$', raw)
-    if auth_match:
+    # Формат host:port:login:password
+    parts = [x.strip() for x in raw.split(":")]
+    if len(parts) == 4:
+        host, port, login, password = parts
         return {
-            "host": auth_match.group("host").strip(),
-            "port": auth_match.group("port").strip(),
-            "login": auth_match.group("login").strip(),
-            "password": auth_match.group("password").strip(),
-            "type": proxy_type,
+            "type": "socks5",
+            "host": host,
+            "port": port,
+            "login": login,
+            "password": password,
+        }
+
+    # Формат host:port
+    if len(parts) == 2:
+        host, port = parts
+        return {
+            "type": "socks5",
+            "host": host,
+            "port": port,
+            "login": "",
+            "password": "",
         }
 
     return None
