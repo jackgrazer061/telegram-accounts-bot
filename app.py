@@ -3069,6 +3069,8 @@ def confirm_pixel_issue(chat_id, user_id, username):
             who_took_text = f"@{username}" if username else "без username"
             data_text = row[7]
             pixel_name = extract_pixel_name_from_data(data_text)
+            pixel_id = extract_pixel_id_from_data(data_text)
+            issue_pixel_value = pixel_id or pixel_name
 
             sheet_update_and_refresh(
                 SHEET_PIXELS,
@@ -3087,7 +3089,7 @@ def confirm_pixel_issue(chat_id, user_id, username):
             sheet_append_row_and_refresh(
                 SHEET_ISSUES,
                 [
-                    pixel_name,
+                    issue_pixel_value,
                     "PIXEL",
                     row[0],
                     normalize_numeric_for_sheet(row[1]),
@@ -3196,6 +3198,8 @@ def issue_pixels_bulk(chat_id, user_id, username, count_needed):
 
                 data_text = str(row[7] or "").strip()
                 pixel_name = extract_pixel_name_from_data(data_text)
+                pixel_id = extract_pixel_id_from_data(data_text)
+                issue_pixel_value = pixel_id or pixel_name
 
                 # D статус, E кому, F дата, G кто взял
                 sheet_update_raw(
@@ -3216,7 +3220,7 @@ def issue_pixels_bulk(chat_id, user_id, username, count_needed):
                 row[6] = who_took_text
 
                 issue_rows.append([
-                    pixel_name,
+                    issue_pixel_value,
                     "PIXEL",
                     row[0],
                     normalize_numeric_for_sheet(row[1]),
