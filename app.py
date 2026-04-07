@@ -7829,7 +7829,7 @@ def parse_proxy_input(text):
         return {
             "type": (ptype or "socks5").lower(),
             "host": host.strip(),
-            "port": port.strip(),
+            "port": int(port),
             "login": login.strip(),
             "password": password.strip(),
         }
@@ -7844,18 +7844,19 @@ def parse_proxy_input(text):
         return {
             "type": (ptype or "socks5").lower(),
             "host": host.strip(),
-            "port": port.strip(),
+            "port": int(port),
             "login": "",
             "password": "",
         }
 
     parts = [x.strip() for x in raw.split(":")]
+
     if len(parts) == 4:
         host, port, login, password = parts
         return {
             "type": "socks5",
             "host": host,
-            "port": port,
+            "port": int(port),
             "login": login,
             "password": password
         }
@@ -7865,7 +7866,7 @@ def parse_proxy_input(text):
         return {
             "type": "socks5",
             "host": host,
-            "port": port,
+            "port": int(port),
             "login": "",
             "password": ""
         }
@@ -8057,7 +8058,7 @@ def octo_create_profile(payload):
     url = f"{OCTO_API_BASE}/profiles"
 
     logging.info(f"OCTO CREATE URL: {url}")
-    logging.info(f"OCTO PAYLOAD: {json.dumps(payload, ensure_ascii=False)}")
+    logging.info(f"OCTO CREATE PAYLOAD: {json.dumps(payload, ensure_ascii=False)}")
 
     resp = requests.post(
         url,
@@ -8066,7 +8067,12 @@ def octo_create_profile(payload):
         timeout=60
     )
 
-    resp.raise_for_status()
+    logging.info(f"OCTO STATUS: {resp.status_code}")
+    logging.info(f"OCTO RESPONSE: {resp.text}")
+
+    if resp.status_code >= 400:
+        raise RuntimeError(f"Octo API error {resp.status_code}: {resp.text}")
+
     return resp.json()
 
 def ensure_octo_profile_for_warehouse(profile_name, proxy_data):
