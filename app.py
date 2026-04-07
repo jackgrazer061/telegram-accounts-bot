@@ -7833,7 +7833,6 @@ def parse_proxy_input(text):
 
     proxy_type = "socks5"
 
-    # формат schema://...
     if "://" in raw:
         scheme, rest = raw.split("://", 1)
         scheme = scheme.strip().lower()
@@ -7871,7 +7870,6 @@ def parse_proxy_input(text):
                 "password": "",
             }
 
-    # старые форматы без schema
     parts = [x.strip() for x in raw.split(":")]
 
     if len(parts) == 2:
@@ -8046,14 +8044,15 @@ def build_octo_profile_payload(profile_name, proxy_data):
     берутся из шаблона, а бот подставляет имя и proxy.
     """
 
-    proxy_data = parse_proxy_input(proxy_raw)
-
-    payload["proxy"] = {
-        "type": proxy_data["type"],   # socks5 / http
-        "host": proxy_data["host"],
-        "port": int(proxy_data["port"]),
-        "login": proxy_data["login"],
-        "password": proxy_data["password"],
+    payload = {
+        "title": str(profile_name).strip(),
+        "proxy": {
+            "type": proxy_data.get("type", "socks5"),
+            "host": proxy_data["host"],
+            "port": int(proxy_data["port"]),
+            "login": proxy_data.get("login", ""),
+            "password": proxy_data.get("password", "")
+        }
     }
 
     # если есть шаблон — используем его
@@ -11004,6 +11003,8 @@ def handle_message(msg):
                             f"Формат:\nip:port\nили\nip:port:login:password"
                         )
                         return
+
+                    logging.info("OCTO_PROXY_HANDLER_V2")
 
                     clear_state(user_id)
 
