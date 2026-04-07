@@ -8037,28 +8037,21 @@ def extract_octo_profile_uuid(octo_response):
     return ""
 
 def build_octo_profile_payload(profile_name, proxy_data):
-    """
-    Лучший вариант: использовать template в Octo.
-    Тогда расширения, стартовые страницы, bookmarks и прочее
-    берутся из шаблона, а бот подставляет имя и proxy.
-    """
-
     payload = {
-        "title": str(profile_name).strip(),
+        "title": profile_name,
+        "tags": ["Sido", "corby"],
         "proxy": {
             "type": proxy_data.get("type", "socks5"),
             "host": proxy_data["host"],
-            "port": int(proxy_data["port"]),
+            "port": proxy_data["port"],
             "login": proxy_data.get("login", ""),
             "password": proxy_data.get("password", "")
         }
     }
 
-    # если есть шаблон — используем его
     if OCTO_FP_TEMPLATE_ID:
         payload["template_id"] = OCTO_FP_TEMPLATE_ID
     else:
-        # fallback без template
         payload["start_pages"] = ["https://www.facebook.com"]
         payload["bookmarks"] = [
             {
@@ -8075,7 +8068,6 @@ def build_octo_profile_payload(profile_name, proxy_data):
         }
 
     return payload
-
 
 def octo_create_profile(payload):
     headers = {
@@ -8095,17 +8087,14 @@ def octo_create_profile(payload):
     resp.raise_for_status()
     return resp.json()
 
-def ensure_octo_profile_for_warehouse(warehouse_name, proxy_data):
-    profile_name = str(warehouse_name or "").strip()
-    if not profile_name:
-        return False, "empty warehouse"
-
+def ensure_octo_profile_for_warehouse(profile_name, proxy_data):
     existing = octo_find_profile_by_title(profile_name)
     if existing:
-        return True, f"already exists: {profile_name}"
+        return True, existing
 
-    created = octo_create_profile(profile_name, proxy_data)
-    return True, created
+    payload = build_octo_profile_payload(profile_name, proxy_data)
+    result = octo_create_profile(payload)
+    return True, result
 
 def tg_send_split_text(chat_id, text, chunk_size=3500):
     text = str(text or "").strip()
