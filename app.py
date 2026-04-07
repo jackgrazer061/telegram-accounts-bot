@@ -7793,30 +7793,64 @@ def parse_proxy_input(text):
     """
     Поддерживаем форматы:
     ip:port
+    host:port
     ip:port:login:password
     host:port:login:password
+    http://login:password@host:port
+    https://login:password@host:port
+    socks5://login:password@host:port
+    socks4://login:password@host:port
 
-    Если логин/пароль нет — ставим без авторизации.
+    Возвращает:
+    {
+        "host": str,
+        "port": str,
+        "login": str,
+        "password": str,
+        "type": str,   # http / https / socks5 / socks4
+    }
     """
     raw = str(text or "").strip()
-    parts = [x.strip() for x in raw.split(":")]
+    if not raw:
+        return None
 
-    if len(parts) == 2:
-        host, port = parts
+    proxy_type = "http"
+
+    # формат scheme://login:password@host:port
+    scheme_match = re.match(
+        r'^(?P<scheme>https?|socks5|socks4)://(?P<login>[^:@]+):(?P<password>[^@]+)@(?P<host>[^:]+):(?P<port>\d+)$',
+        raw,
+        re.IGNORECASE
+    )
+    if scheme_match:
         return {
-            "host": host,
-            "port": port,
-            "login": "",
-            "password": ""
+            "host": scheme_match.group("host").strip(),
+            "port": scheme_match.group("port").strip(),
+            "login": scheme_match.group("login").strip(),
+            "password": scheme_match.group("password").strip(),
+            "type": scheme_match.group("scheme").lower(),
         }
 
-    if len(parts) == 4:
-        host, port, login, password = parts
+    # формат host:port
+    simple_match = re.match(r'^(?P<host>[^:]+):(?P<port>\d+)$', raw)
+    if simple_match:
         return {
-            "host": host,
-            "port": port,
-            "login": login,
-            "password": password
+            "host": simple_match.group("host").strip(),
+            "port": simple_match.group("port").strip(),
+            "login": "",
+            "password": "",
+            "type": proxy_type,
+        }
+
+    # формат host:port:login:password
+    auth_match = re.match(r'^(?P<host>[^:]+):(?P<port>\d+):(?P<login>[^:]+):(?P<password>.+)$', raw)
+    if auth_match:
+        return {
+            "host": auth_match.group("host").strip(),
+            "port": auth_match.group("port").strip(),
+            "login": auth_match.group("login").strip(),
+            "password": auth_match.group("password").strip(),
+            "type": proxy_type,
         }
 
     return None
@@ -7874,11 +7908,11 @@ def build_octo_profile_payload(profile_name, proxy_data):
         "title": profile_name,
         "tags": ["Sido", "corby"],
         "proxy": {
-            "type": "http",
+            "type": proxy_data["type"],
             "host": proxy_data["host"],
             "port": proxy_data["port"],
             "login": proxy_data["login"],
-            "password": proxy_data["password"]
+            "password": proxy_data["password"],
         }
     }
 
