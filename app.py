@@ -29,6 +29,10 @@ EXCHANGE_API_BASE = os.environ.get("EXCHANGE_API_BASE", "https://api.exchangerat
 OCTO_API_TOKEN = os.environ.get("OCTO_API_TOKEN", "").strip()
 OCTO_API_BASE = os.environ.get("OCTO_API_BASE", "https://app.octobrowser.net/api/v2").strip()
 OCTO_FP_TEMPLATE_ID = os.environ.get("OCTO_FP_TEMPLATE_ID", "").strip()
+OCTO_TAG_SIDO = "Sido"
+OCTO_TAG_CORBY = "corby"
+OCTO_TAG_ACCOUNT_MANAGERS = "AccountManagers"
+OCTO_TAG_FARMERS = "Farmers"
 
 if not BOT_TOKEN:
     raise RuntimeError("BOT_TOKEN не задан")
@@ -2572,10 +2576,21 @@ def count_free_fp_in_warehouse(warehouse_name):
 def notify_admin_fp_warehouse_finished(warehouse_name):
     next_warehouse = get_next_fp_warehouse_name(warehouse_name)
 
+    octo_tag_result = ""
     if next_warehouse:
+        ok, msg = tag_next_octo_fp_warehouse(
+            next_warehouse_name=next_warehouse,
+            tag_name=OCTO_TAG_ACCOUNT_MANAGERS
+        )
+        octo_tag_result = (
+            f"\nOcto тег AccountManagers: {'OK' if ok else 'ERROR'}"
+            f"\nДетали: {msg}"
+        )
+
         text = (
             f"Склад {warehouse_name} закончился.\n"
             f"Нужно открыть доступ к складу {next_warehouse}."
+            f"{octo_tag_result}"
         )
     else:
         text = (
@@ -2656,10 +2671,21 @@ def get_current_open_farm_fp_warehouse():
 def notify_admin_farm_fp_warehouse_finished(warehouse_name):
     next_warehouse = get_next_farm_fp_warehouse_name(warehouse_name)
 
+    octo_tag_result = ""
     if next_warehouse:
+        ok, msg = tag_next_octo_fp_warehouse(
+            next_warehouse_name=next_warehouse,
+            tag_name=OCTO_TAG_FARMERS
+        )
+        octo_tag_result = (
+            f"\nOcto тег Farmers: {'OK' if ok else 'ERROR'}"
+            f"\nДетали: {msg}"
+        )
+
         text = (
             f"Склад {warehouse_name} закончился.\n"
             f"Нужно открыть доступ к складу {next_warehouse}."
+            f"{octo_tag_result}"
         )
     else:
         text = (
@@ -7855,6 +7881,40 @@ def parse_proxy_input(text):
 
     return None
 
+def octo_find_profile_by_title(profile_title):
+    title = str(profile_title or "").strip()
+    if not title:
+        return None
+
+    headers = {
+        "X-Octo-Api-Token": OCTO_API_TOKEN,
+        "Content-Type": "application/json",
+    }
+
+    resp = requests.get(
+        f"{OCTO_API_BASE}/automation/profiles",
+        headers=headers,
+        timeout=30
+    )
+    resp.raise_for_status()
+
+    data = resp.json()
+
+    items = data.get("data") or data.get("profiles") or data.get("items") or []
+    target = title.lower()
+
+    for item in items:
+        name = str(
+            item.get("title")
+            or item.get("name")
+            or item.get("profile_name")
+            or ""
+        ).strip()
+
+        if name.lower() == target:
+            return item
+
+    return None
 
 def octo_find_profile_by_title(profile_name):
     resp = requests.get(
@@ -7875,6 +7935,73 @@ def octo_find_profile_by_title(profile_name):
             return item
 
     return None
+
+def octo_update_profile_tags_by_title(profile_title, tags_to_add):
+    profile = octo_find_profile_by_title(profile_title)
+    if not profile:
+        return False, f"Octo профиль '{profile_title}' не найден"
+
+    profile_uuid = (
+        profile.get("uuid")
+        or profile.get("id")
+        or profile.get("profile_uuid")
+    )
+
+    if not profile_uuid:
+        return False, f"У Octo профиля '{profile_title}' не найден uuid"
+
+    current_tags = profile.get("tags") or []
+    normalized = []
+
+    for tag in current_tags:
+        if isinstance(tag, dict):
+            tag_name = str(tag.get("name") or "").strip()
+            if tag_name:
+                normalized.append(tag_name)
+        else:
+            tag_name = str(tag).strip()
+            if tag_name:
+                normalized.append(tag_name)
+
+    for tag in tags_to_add:
+        tag = str(tag).strip()
+        if tag and tag not in normalized:
+            normalized.append(tag)
+
+    headers = {
+        "X-Octo-Api-Token": OCTO_API_TOKEN,
+        "Content-Type": "application/json",
+    }
+
+    payload = {
+        "tags": normalized
+    }
+
+    resp = requests.patch(
+        f"{OCTO_API_BASE}/automation/profiles/{profile_uuid}",
+        headers=headers,
+        json=payload,
+        timeout=30
+    )
+    resp.raise_for_status()
+
+    return True, f"Теги обновлены для профиля '{profile_title}'"
+
+def tag_next_octo_fp_warehouse(next_warehouse_name, tag_name):
+    warehouse_name = str(next_warehouse_name or "").strip()
+    tag_name = str(tag_name or "").strip()
+
+    if not warehouse_name or not tag_name:
+        return False, "Не указано название склада или тег"
+
+    try:
+        return octo_update_profile_tags_by_title(
+            profile_title=warehouse_name,
+            tags_to_add=[tag_name]
+        )
+    except Exception as e:
+        logging.exception("tag_next_octo_fp_warehouse crashed")
+        return False, str(e)
 
 def extract_octo_profile_uuid(octo_response):
     if not isinstance(octo_response, dict):
