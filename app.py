@@ -7821,59 +7821,59 @@ def parse_proxy_input(text):
     """
     Поддерживаем форматы:
     1) ip:port
-    2) host:port
-    3) host:port:login:password
-    4) socks5://login:password@host:port
-    5) http://login:password@host:port
-    6) socks5://host:port
-    7) http://host:port
+    2) ip:port:login:password
+    3) socks5://login:password@host:port
+    4) http://login:password@host:port
+    5) socks5://host:port
+    6) http://host:port
     """
-
     raw = str(text or "").strip()
     if not raw:
         return None
 
-    # Формат scheme://login:password@host:port
-    m = re.match(
-        r'^(?P<scheme>[a-zA-Z0-9]+)://(?P<login>[^:@]+):(?P<password>[^@]+)@(?P<host>[^:]+):(?P<port>\d+)$',
-        raw
-    )
-    if m:
-        return {
-            "type": m.group("scheme").lower(),
-            "host": m.group("host").strip(),
-            "port": m.group("port").strip(),
-            "login": m.group("login").strip(),
-            "password": m.group("password").strip(),
-        }
+    proxy_type = "socks5"
 
-    # Формат scheme://host:port
-    m = re.match(
-        r'^(?P<scheme>[a-zA-Z0-9]+)://(?P<host>[^:]+):(?P<port>\d+)$',
-        raw
-    )
-    if m:
-        return {
-            "type": m.group("scheme").lower(),
-            "host": m.group("host").strip(),
-            "port": m.group("port").strip(),
-            "login": "",
-            "password": "",
-        }
+    # формат schema://...
+    if "://" in raw:
+        scheme, rest = raw.split("://", 1)
+        scheme = scheme.strip().lower()
 
-    # Формат host:port:login:password
+        if scheme in ["socks5", "http", "https"]:
+            proxy_type = "http" if scheme in ["http", "https"] else "socks5"
+        else:
+            return None
+
+        if "@" in rest:
+            auth_part, host_part = rest.rsplit("@", 1)
+            if ":" not in auth_part or ":" not in host_part:
+                return None
+
+            login, password = auth_part.split(":", 1)
+            host, port = host_part.rsplit(":", 1)
+
+            return {
+                "type": proxy_type,
+                "host": host.strip(),
+                "port": port.strip(),
+                "login": login.strip(),
+                "password": password.strip(),
+            }
+        else:
+            if ":" not in rest:
+                return None
+
+            host, port = rest.rsplit(":", 1)
+            return {
+                "type": proxy_type,
+                "host": host.strip(),
+                "port": port.strip(),
+                "login": "",
+                "password": "",
+            }
+
+    # старые форматы без schema
     parts = [x.strip() for x in raw.split(":")]
-    if len(parts) == 4:
-        host, port, login, password = parts
-        return {
-            "type": "socks5",
-            "host": host,
-            "port": port,
-            "login": login,
-            "password": password,
-        }
 
-    # Формат host:port
     if len(parts) == 2:
         host, port = parts
         return {
@@ -7881,7 +7881,17 @@ def parse_proxy_input(text):
             "host": host,
             "port": port,
             "login": "",
-            "password": "",
+            "password": ""
+        }
+
+    if len(parts) == 4:
+        host, port, login, password = parts
+        return {
+            "type": "socks5",
+            "host": host,
+            "port": port,
+            "login": login,
+            "password": password
         }
 
     return None
@@ -10895,6 +10905,7 @@ def handle_message(msg):
             return
 
         if state.get("mode") == "awaiting_octo_proxy_for_warehouse":
+            proxy_raw = text.strip()
             proxy_data = parse_proxy_input(text)
 
             if not proxy_data:
