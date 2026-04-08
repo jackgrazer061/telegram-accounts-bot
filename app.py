@@ -4461,6 +4461,21 @@ def build_octo_description_from_king_data(parsed):
         f"Doc's: {docs}"
     )
 
+def octo_get_profile_by_uuid(profile_uuid):
+    profile_uuid = str(profile_uuid or "").strip()
+    if not profile_uuid:
+        raise RuntimeError("profile_uuid пустой")
+
+    headers = {
+        "X-Octo-Api-Token": OCTO_API_TOKEN,
+        "Content-Type": "application/json",
+    }
+
+    url = f"{OCTO_API_BASE}/profiles/{profile_uuid}"
+    resp = requests.get(url, headers=headers, timeout=60)
+    resp.raise_for_status()
+
+    return resp.json()
 
 def octo_update_profile_description(profile_uuid, description_text):
     if not profile_uuid:
@@ -8063,7 +8078,6 @@ def octo_update_profile_tags_by_title(profile_title, tags_to_add):
     tags_to_add = [str(x).strip() for x in tags_to_add if str(x).strip()]
 
     profile = octo_find_profile_by_title(profile_title)
-
     if not profile:
         return False, f"Octo профиль '{profile_title}' не найден"
 
@@ -8071,16 +8085,29 @@ def octo_update_profile_tags_by_title(profile_title, tags_to_add):
     if not profile_uuid:
         return False, f"У профиля '{profile_title}' не найден id/uuid"
 
-    current_tags = profile.get("tags") or []
-    if not isinstance(current_tags, list):
-        current_tags = []
+    try:
+        full_profile = octo_get_profile_by_uuid(profile_uuid)
+    except Exception as e:
+        return False, f"Не удалось прочитать полный профиль '{profile_title}': {e}"
+
+    current_tags_raw = []
+    if isinstance(full_profile, dict):
+        if isinstance(full_profile.get("tags"), list):
+            current_tags_raw = full_profile.get("tags", [])
+        elif isinstance(full_profile.get("data"), dict) and isinstance(full_profile["data"].get("tags"), list):
+            current_tags_raw = full_profile["data"].get("tags", [])
 
     normalized_current = []
-    for tag in current_tags:
+    for tag in current_tags_raw:
         if isinstance(tag, str):
             clean_tag = tag.strip()
         elif isinstance(tag, dict):
-            clean_tag = str(tag.get("name") or tag.get("title") or "").strip()
+            clean_tag = str(
+                tag.get("name")
+                or tag.get("title")
+                or tag.get("value")
+                or ""
+            ).strip()
         else:
             clean_tag = str(tag).strip()
 
@@ -8111,7 +8138,10 @@ def octo_update_profile_tags_by_title(profile_title, tags_to_add):
             err = resp.text
         return False, f"Octo API error {resp.status_code}: {err}"
 
-    return True, f"Тег(и) {', '.join(tags_to_add)} поставлены на профиль '{profile_title}'"
+    return True, (
+        f"Тег(и) {', '.join(tags_to_add)} поставлены на профиль '{profile_title}'. "
+        f"Итоговые теги: {', '.join(merged_tags)}"
+    )
 
 def tag_next_octo_fp_warehouse(next_warehouse_name, tag_name):
     warehouse_name = str(next_warehouse_name or "").strip()
@@ -8398,6 +8428,23 @@ def handle_message(msg):
                 tg_send_long_message(chat_id, debug_result)
             except Exception as e:
                 tg_send_long_message(chat_id, f"octotagdebug error:\n{e}")
+            return
+
+        if text.startswith("/octofulltags "):
+            try:
+                profile_name = text[len("/octofulltags "):].strip()
+                profile = octo_find_profile_by_title(profile_name)
+        
+                if not profile:
+                    tg_send_message(chat_id, f"Профиль '{profile_name}' не найден")
+                    return
+        
+                profile_uuid = str(profile.get("uuid") or profile.get("id") or "").strip()
+                full_profile = octo_get_profile_by_uuid(profile_uuid)
+        
+                tg_send_long_message(chat_id, str(full_profile))
+            except Exception as e:
+                tg_send_long_message(chat_id, f"octofulltags error:\n{e}")
             return
 
         if text == "/octodebug":
