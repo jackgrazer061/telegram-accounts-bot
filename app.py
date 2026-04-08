@@ -7925,6 +7925,7 @@ def parse_proxy_input(text):
     return None
 
 def octo_find_profile_by_title(profile_title):
+    logging.info("OCTO_FIND_V3_RUNNING")
     headers = {
         "X-Octo-Api-Token": OCTO_API_TOKEN,
         "Content-Type": "application/json",
@@ -8049,26 +8050,6 @@ def normalize_octo_title(text):
     text = str(text or "").strip().lower()
     text = re.sub(r"\s+", " ", text)
     return text
-
-def octo_find_profile_by_title(profile_name):
-    resp = requests.get(
-        f"{OCTO_API_BASE}/profiles",
-        headers=octo_headers(),
-        params={"search": profile_name},
-        timeout=30
-    )
-    resp.raise_for_status()
-
-    data = resp.json()
-    items = data.get("data") or data.get("items") or []
-    target = normalize_octo_title(profile_title)
-
-    for item in items:
-        title = str(item.get("title") or item.get("name") or "").strip().lower()
-        if title == target:
-            return item
-
-    return None
 
 def octo_update_profile_tags_by_title(profile_title, tags_to_add):
     profile_title = str(profile_title or "").strip()
