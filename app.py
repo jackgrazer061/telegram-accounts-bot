@@ -8026,55 +8026,54 @@ def octo_find_profile_by_title(profile_name):
     return None
 
 def octo_update_profile_tags_by_title(profile_title, tags_to_add):
+    profile_title = str(profile_title or "").strip()
+
+    if not profile_title:
+        return False, "Не указано название Octo профиля"
+
+    if not isinstance(tags_to_add, list):
+        tags_to_add = [str(tags_to_add).strip()] if str(tags_to_add).strip() else []
+
+    tags_to_add = [str(x).strip() for x in tags_to_add if str(x).strip()]
+
     profile = octo_find_profile_by_title(profile_title)
+
     if not profile:
         return False, f"Octo профиль '{profile_title}' не найден"
 
-    profile_uuid = (
-        profile.get("uuid")
-        or profile.get("id")
-        or profile.get("profile_uuid")
-    )
-
+    profile_uuid = str(profile.get("uuid") or profile.get("id") or "").strip()
     if not profile_uuid:
-        return False, f"У Octo профиля '{profile_title}' не найден uuid"
+        return False, f"У профиля '{profile_title}' не найден id/uuid"
 
     current_tags = profile.get("tags") or []
-    normalized = []
+    if not isinstance(current_tags, list):
+        current_tags = []
 
-    for tag in current_tags:
-        if isinstance(tag, dict):
-            tag_name = str(tag.get("name") or "").strip()
-            if tag_name:
-                normalized.append(tag_name)
-        else:
-            tag_name = str(tag).strip()
-            if tag_name:
-                normalized.append(tag_name)
-
+    merged_tags = list(current_tags)
     for tag in tags_to_add:
-        tag = str(tag).strip()
-        if tag and tag not in normalized:
-            normalized.append(tag)
+        if tag not in merged_tags:
+            merged_tags.append(tag)
 
     headers = {
         "X-Octo-Api-Token": OCTO_API_TOKEN,
         "Content-Type": "application/json",
     }
 
+    url = f"{OCTO_API_BASE}/profiles/{profile_uuid}"
     payload = {
-        "tags": normalized
+        "tags": merged_tags
     }
 
-    resp = requests.patch(
-        f"{OCTO_API_BASE}/automation/profiles/{profile_uuid}",
-        headers=headers,
-        json=payload,
-        timeout=30
-    )
-    resp.raise_for_status()
+    resp = requests.patch(url, json=payload, headers=headers, timeout=60)
 
-    return True, f"Теги обновлены для профиля '{profile_title}'"
+    if resp.status_code >= 400:
+        try:
+            err = resp.json()
+        except Exception:
+            err = resp.text
+        return False, f"Octo API error {resp.status_code}: {err}"
+
+    return True, f"Тег(и) {', '.join(tags_to_add)} поставлены на профиль '{profile_title}'"
 
 def tag_next_octo_fp_warehouse(next_warehouse_name, tag_name):
     warehouse_name = str(next_warehouse_name or "").strip()
