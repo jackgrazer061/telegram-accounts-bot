@@ -7932,15 +7932,12 @@ def octo_find_profile_by_title(profile_title):
 
     target = str(profile_title or "").strip().lower()
 
-    # пробуем несколько страниц
-    for page in range(1, 11):
-        url = f"{OCTO_API_BASE}/profiles?page={page}&page_len=100"
+    for page in range(0, 10):
+        url = f"{OCTO_API_BASE}/profiles?page={page}&page_len=100&fields=title"
 
         resp = requests.get(url, headers=headers, timeout=60)
         resp.raise_for_status()
-
         data = resp.json()
-        logging.info(f"OCTO_FIND page={page} raw={data}")
 
         items = []
         if isinstance(data, dict):
@@ -7955,26 +7952,14 @@ def octo_find_profile_by_title(profile_title):
         elif isinstance(data, list):
             items = data
 
-        logging.info(f"OCTO_FIND target='{target}' page={page} count={len(items)}")
-
         for item in items:
-            title_val = str(item.get("title", "")).strip()
-            name_val = str(item.get("name", "")).strip()
-
-            logging.info(
-                f"OCTO_FIND candidate page={page} "
-                f"title='{title_val}' name='{name_val}'"
-            )
-
-            if normalize_octo_title(title_val) == target or normalize_octo_title(name_val) == target:
-                logging.info(f"OCTO_FIND MATCH page={page} item={item}")
+            title_val = str(item.get("title", "")).strip().lower()
+            if title_val == target:
                 return item
 
-        # если страница пустая — дальше смысла нет
         if not items:
             break
 
-    logging.warning(f"OCTO_FIND NOT FOUND target='{target}'")
     return None
 
 def octo_debug_list_profiles():
