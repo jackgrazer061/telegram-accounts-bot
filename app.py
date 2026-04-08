@@ -8075,7 +8075,19 @@ def octo_update_profile_tags_by_title(profile_title, tags_to_add):
     if not isinstance(current_tags, list):
         current_tags = []
 
-    merged_tags = list(current_tags)
+    normalized_current = []
+    for tag in current_tags:
+        if isinstance(tag, str):
+            clean_tag = tag.strip()
+        elif isinstance(tag, dict):
+            clean_tag = str(tag.get("name") or tag.get("title") or "").strip()
+        else:
+            clean_tag = str(tag).strip()
+
+        if clean_tag and clean_tag not in normalized_current:
+            normalized_current.append(clean_tag)
+
+    merged_tags = list(normalized_current)
     for tag in tags_to_add:
         if tag not in merged_tags:
             merged_tags.append(tag)
