@@ -294,6 +294,8 @@ BTN_FARM_KING_RETURN_FREE_CONFIRM = 'Подтвердить возврат farm 
 BTN_FP_RETURN_FREE_CONFIRM = 'Подтвердить возврат ФП'
 BTN_FARM_FP_RETURN_FREE_CONFIRM = 'Подтвердить возврат farm FP'
 BTN_FARM_BM_RETURN_FREE_CONFIRM = 'Подтвердить возврат farm BM'
+BTN_BM_RETURN_FREE_CONFIRM = 'Подтвердить возврат БМ'
+BTN_PIXEL_RETURN_FREE_CONFIRM = 'Подтвердить возврат Пикселя'
 
 SUBMENU_RETURN_FP = '↩️Вернуть ФП'
 FARM_SUBMENU_RETURN_FP = '↩️Вернуть FP'
@@ -3487,6 +3489,43 @@ def return_pixel_to_ban(pixel_query, comment_text=""):
     invalidate_stats_cache()
     return True, "Пиксель переведён в ban."
 
+def return_pixel_to_free(pixel_query):
+    found = find_pixel_in_base_by_data(pixel_query)
+    if not found:
+        return False, "Пиксель не найден."
+
+    row = found["row"]
+    if len(row) < 8:
+        row = row + [''] * (8 - len(row))
+
+    status = str(row[3]).strip().lower()
+
+    if status == "free":
+        return False, "Этот Пиксель уже free."
+
+    data_text = row[7]
+    pixel_name = extract_pixel_name_from_data(data_text)
+    pixel_id = extract_pixel_id_from_data(data_text)
+
+    sheet_update_and_refresh(
+        SHEET_PIXELS,
+        f"D{found['row_index']}:G{found['row_index']}",
+        [["free", "", "", ""]]
+    )
+
+    row = ensure_row_len(row, 26)
+    sync_id = row[25]
+
+    if sync_id:
+        sync_status_to_basebot(BASEBOT_SHEET_PIXELS, sync_id, "free")
+
+    issue_info = find_last_pixel_issue_row(pixel_name=pixel_name, pixel_id=pixel_id)
+    if issue_info:
+        sheet_delete_row_and_refresh(SHEET_ISSUES, issue_info["row_index"])
+
+    invalidate_stats_cache()
+    return True, "Пиксель возвращён в free."
+
 def get_free_farm_king_geos():
     rows = get_sheet_rows_cached(SHEET_FARM_KINGS)
 
@@ -5937,6 +5976,37 @@ def return_bm_to_ban(bm_id, comment_text=""):
 
     invalidate_stats_cache()
     return True, f"БМ '{bm_id}' переведён в ban."
+
+def return_bm_to_free(bm_id):
+    bm_info = find_bm_in_base(bm_id)
+    if not bm_info:
+        return False, "БМ не найден в База_БМ."
+
+    row = bm_info["row"]
+    if len(row) < 9:
+        row = row + [''] * (9 - len(row))
+
+    status = str(row[4]).strip().lower()
+
+    if status == "free":
+        return False, "Этот БМ уже free."
+
+    sheet_update_and_refresh(
+        SHEET_BMS,
+        f"E{bm_info['row_index']}:H{bm_info['row_index']}",
+        [["free", "", "", ""]]
+    )
+
+    row = ensure_row_len(row, 26)
+    sync_id = row[25]
+
+    if sync_id:
+        sync_status_to_basebot(BASEBOT_SHEET_BMS, sync_id, "free")
+
+    delete_last_bm_issue_row(bm_id)
+
+    invalidate_stats_cache()
+    return True, f"БМ '{bm_id}' возвращён в free."
 
 def show_found_bm(chat_id, user_id, found):
     state = get_state(user_id)
@@ -8996,6 +9066,17 @@ def handle_message(msg):
             send_text_input_prompt(chat_id, "Напиши причину бана для кинга.")
             return
 
+        if text == BTN_PIXEL_RETURN_FREE_CONFIRM:
+            if state.get("mode") != "awaiting_return_pixel_free_confirm":
+                send_pixels_menu(chat_id, "Сначала выбери действие заново.")
+                return
+        
+            pixel_query = state.get("return_pixel_query", "")
+            ok, message = return_pixel_to_free(pixel_query)
+            clear_state(user_id)
+            send_pixels_menu(chat_id, message)
+            return
+
         if text == BTN_KING_RETURN_FREE_CONFIRM:
             if state.get("mode") != "awaiting_return_king_free_confirm":
                 send_kings_menu(chat_id, "Сначала выбери действие заново.")
@@ -9042,6 +9123,17 @@ def handle_message(msg):
             send_farm_fps_menu(chat_id, message)
             return
 
+        if text == BTN_BM_RETURN_FREE_CONFIRM:
+            if state.get("mode") != "awaiting_return_bm_free_confirm":
+                send_bms_menu(chat_id, "Сначала выбери действие заново.")
+                return
+        
+            bm_id = state.get("return_bm_id", "")
+            ok, message = return_bm_to_free(bm_id)
+            clear_state(user_id)
+            send_bms_menu(chat_id, message)
+            return
+
         if text == BTN_FARM_BM_RETURN_FREE_CONFIRM:
             if state.get("mode") != "awaiting_farm_return_bm_free_confirm":
                 send_farm_bms_menu(chat_id, "Сначала выбери действие заново.")
@@ -9077,8 +9169,13 @@ def handle_message(msg):
             return
 
         if text == SUBMENU_RETURN_BM:
-            set_state(user_id, {"mode": "awaiting_return_bm"})
-            send_text_input_prompt(chat_id, "Впиши ID БМа, который нужно перевести в ban.")
+            if state.get("last_farmers_section") == "bms":
+                update_state(user_id, mode="awaiting_farm_bm_return_action")
+                send_return_action_menu(chat_id, "farm BM")
+                return
+        
+            update_state(user_id, mode="awaiting_bm_return_action")
+            send_return_action_menu(chat_id, "БМ")
             return
 
         if text == SUBMENU_GET_BM:
@@ -9182,8 +9279,8 @@ def handle_message(msg):
             return
 
         if text == SUBMENU_RETURN_PIXEL:
-            update_state(user_id, mode="awaiting_return_pixel")
-            send_text_input_prompt(chat_id, "Впиши ID пикселя или часть данных Пикселя, который нужно перевести в ban.")
+            update_state(user_id, mode="awaiting_pixel_return_action")
+            send_return_action_menu(chat_id, "Пикселем")
             return
 
         if text == SUBMENU_GET_PIXELS:
@@ -9458,6 +9555,19 @@ def handle_message(msg):
             send_return_action_menu(chat_id, "фарм кингом")
             return
 
+        if state.get("mode") == "awaiting_pixel_return_action":
+            if text == BTN_RETURN_TO_BAN:
+                update_state(user_id, mode="awaiting_return_pixel")
+                send_text_input_prompt(chat_id, "Впиши ID пикселя или часть данных Пикселя, который нужно перевести в ban.")
+                return
+        
+            if text == BTN_RETURN_TO_FREE:
+                update_state(user_id, mode="awaiting_return_pixel_free")
+                send_text_input_prompt(chat_id, "Впиши ID пикселя или часть данных Пикселя, который нужно вернуть.")
+                return
+        
+            send_return_action_menu(chat_id, "Пикселем")
+            return
 
         if state.get("mode") == "awaiting_fp_return_action":
             if text == BTN_RETURN_TO_BAN:
@@ -9473,6 +9583,19 @@ def handle_message(msg):
             send_return_action_menu(chat_id, "ФП")
             return
 
+        if state.get("mode") == "awaiting_bm_return_action":
+            if text == BTN_RETURN_TO_BAN:
+                update_state(user_id, mode="awaiting_return_bm")
+                send_text_input_prompt(chat_id, "Впиши ID БМа, который нужно перевести в ban.")
+                return
+        
+            if text == BTN_RETURN_TO_FREE:
+                update_state(user_id, mode="awaiting_return_bm_free")
+                send_text_input_prompt(chat_id, "Впиши ID БМа, который нужно вернуть.")
+                return
+        
+            send_return_action_menu(chat_id, "БМ")
+            return
 
         if state.get("mode") == "awaiting_farm_fp_return_action":
             if text == BTN_RETURN_TO_BAN:
@@ -10323,6 +10446,35 @@ def handle_message(msg):
             )
             return
 
+        if state.get("mode") == "awaiting_return_bm_free":
+            bm_id = text.strip()
+        
+            if not bm_id:
+                tg_send_message(chat_id, "Впиши ID БМа.")
+                return
+        
+            bm_info = find_bm_in_base(bm_id)
+            if not bm_info:
+                clear_state(user_id)
+                send_bms_menu(chat_id, "БМ не найден.")
+                return
+        
+            set_state(user_id, {
+                "mode": "awaiting_return_bm_free_confirm",
+                "return_bm_id": bm_id
+            })
+        
+            keyboard = [
+                [{"text": BTN_BM_RETURN_FREE_CONFIRM}, {"text": MENU_CANCEL}]
+            ]
+        
+            tg_send_message(
+                chat_id,
+                f"Внимание: БМ '{bm_id}' будет возвращён в free.\nПодтвердить?",
+                keyboard
+            )
+            return
+
         if state.get("mode") == "awaiting_pixels_add":
             result = add_pixels_from_text(text)
             clear_state(user_id)
@@ -10383,6 +10535,34 @@ def handle_message(msg):
             )
             return
 
+        if state.get("mode") == "awaiting_return_pixel_free":
+            pixel_query = text.strip()
+        
+            if not pixel_query:
+                tg_send_message(chat_id, "Впиши ID пикселя или данные Пикселя.")
+                return
+        
+            found = find_pixel_in_base_by_data(pixel_query)
+            if not found:
+                clear_state(user_id)
+                send_pixels_menu(chat_id, "Пиксель не найден.")
+                return
+        
+            set_state(user_id, {
+                "mode": "awaiting_return_pixel_free_confirm",
+                "return_pixel_query": pixel_query
+            })
+        
+            keyboard = [
+                [{"text": BTN_PIXEL_RETURN_FREE_CONFIRM}, {"text": MENU_CANCEL}]
+            ]
+        
+            tg_send_message(
+                chat_id,
+                "Внимание: Пиксель будет возвращён в free.\nПодтвердить?",
+                keyboard
+            )
+            return
 
         if state.get("mode") == "awaiting_pixel_department":
             if text not in [DEPT_CRYPTO, DEPT_GAMBLA]:
