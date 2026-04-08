@@ -7968,7 +7968,7 @@ def octo_debug_list_profiles():
         "Content-Type": "application/json",
     }
 
-    url = f"{OCTO_API_BASE}/profiles?page=1&page_len=100"
+    url = f"{OCTO_API_BASE}/profiles?page=0&page_len=100&fields=title"
     resp = requests.get(url, headers=headers, timeout=60)
     resp.raise_for_status()
 
@@ -7994,7 +7994,9 @@ def octo_debug_list_profiles():
         name_val = str(item.get("name", "")).strip()
         uuid_val = str(item.get("uuid", item.get("id", ""))).strip()
 
-        lines.append(f"{i}. title='{title_val}' | name='{name_val}' | id='{uuid_val}'")
+        lines.append(
+            f"{i}. title='{title_val}' | name='{name_val}' | id='{uuid_val}'"
+        )
 
     return "\n".join(lines)
 
