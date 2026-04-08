@@ -205,7 +205,7 @@ DEPT_GAMBLA = 'Гембла'
 CRYPTO_NAMES = [
     '№3 dasha', '№5 mark', '№20 misha',
     '№32 alex', '№34 anton', '№37 vladimir2', '№333 danilacc', '№42 aleksandr2',
-    '№43 maksim3', '№44 nikita3', '№45 anton2', '№46 yan', '№4 nikita', '№57 vladimir4'
+    '№43 maksim3', '№44 nikita3', '№45 anton2', '№46 yan', '№4 nikita', '№57 VD3'
 ]
 
 GAMBLA_NAMES = [
@@ -6404,6 +6404,7 @@ def confirm_king_issue(chat_id, user_id, username):
             f"Кинг выдан.\n"
             f"Название: {king_name}\n"
             f"Для кого: {king_for_whom}\n"
+            f"Цена: {row[2]}\n"
             f"Гео: {geo_value}"
         )
 
@@ -6523,6 +6524,7 @@ def issue_kings_bulk(chat_id, user_id, username, king_names):
                 f"Кинг выдан.\n"
                 f"Название: {item['king_name']}\n"
                 f"Для кого: {king_for_whom}\n"
+                f"Цена: {item['price']}\n"
                 f"Гео: {item['geo']}"
             )
 
@@ -6647,6 +6649,7 @@ def confirm_crypto_king_issue(chat_id, user_id, username):
             f"Crypto king выдан.\n"
             f"Название: {king_name}\n"
             f"Для кого: {king_for_whom}\n"
+            f"Цена: {row[2]}\n"
             f"Гео: {geo_value}"
         )
 
