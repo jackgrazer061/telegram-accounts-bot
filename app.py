@@ -639,32 +639,13 @@ def get_basebot_sheet(sheet_name):
         basebot_sheet_cache = {}
         raise
 
-def basebot_get_next_empty_row(sheet_name):
-    rows = basebot_get_all_rows(sheet_name)
-    return len(rows) + 1
-
-
-def basebot_write_rows_from_a(sheet_name, start_row, rows):
-    if not rows:
-        return
-
-    max_len = max(len(r) for r in rows)
-    end_row = start_row + len(rows) - 1
-    end_col_letter = chr(ord("A") + max_len - 1)
-
+def basebot_append_rows(sheet_name, rows, value_input_option="USER_ENTERED"):
     def _do():
         with google_lock:
             sheet = get_basebot_sheet(sheet_name)
-            sheet.update(
-                f"A{start_row}:{end_col_letter}{end_row}",
-                rows
-            )
+            sheet.append_rows(rows, value_input_option=value_input_option)
 
     google_write_with_retry(_do)
-
-def basebot_append_rows(sheet_name, rows, value_input_option="USER_ENTERED"):
-    start_row = basebot_get_next_empty_row(sheet_name)
-    basebot_write_rows_from_a(sheet_name, start_row, rows)
 
 def basebot_update_range(sheet_name, cell_range, values):
     def _do():
