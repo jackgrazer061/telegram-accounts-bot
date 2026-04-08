@@ -112,6 +112,18 @@ def touch_background_heartbeat():
     global last_background_time
     last_background_time = time.time()
 
+def cleanup_error_notifications():
+    now = time.time()
+    to_delete = []
+
+    with error_notify_lock:
+        for key, ts in last_error_notifications.items():
+            if now - ts > ERROR_NOTIFY_COOLDOWN * 3:
+                to_delete.append(key)
+
+        for key in to_delete:
+            last_error_notifications.pop(key, None)
+
 BASE_URL = f"https://api.telegram.org/bot{BOT_TOKEN}"
 
 SHEET_ACCOUNTS = "База_личек"
@@ -370,7 +382,7 @@ def invalidate_stats_cache():
 # =========================
 # AUTO CACHE FOR SHEETS
 # =========================
-TABLE_CACHE_TTL = 20
+TABLE_CACHE_TTL = 90
 
 table_cache = {
     SHEET_ACCOUNTS: {"rows": None, "updated_at": 0},
@@ -456,30 +468,6 @@ def sheet_batch_update_raw(sheet_name, updates):
     google_write_with_retry(_do)
     mark_sheet_cache_stale(sheet_name)
 
-def get_next_empty_row(sheet_name):
-    rows = get_sheet_rows_cached(sheet_name)
-    return len(rows) + 1
-
-
-def sheet_write_rows_from_a(sheet_name, start_row, rows):
-    if not rows:
-        return
-
-    max_len = max(len(r) for r in rows)
-    end_row = start_row + len(rows) - 1
-    end_col_letter = chr(ord("A") + max_len - 1)
-
-    def _do():
-        with google_lock:
-            sheet = get_sheet(sheet_name)
-            sheet.update(
-                f"A{start_row}:{end_col_letter}{end_row}",
-                rows
-            )
-
-    google_write_with_retry(_do)
-    mark_sheet_cache_stale(sheet_name)
-
 def sheet_append_row_and_refresh(sheet_name, row, value_input_option="USER_ENTERED"):
     start_row = get_next_empty_row(sheet_name)
     sheet_write_rows_from_a(sheet_name, start_row, [row])
@@ -496,10 +484,6 @@ def sheet_delete_row_and_refresh(sheet_name, row_index):
 def sheet_append_rows_and_refresh(sheet_name, rows, value_input_option="USER_ENTERED"):
     start_row = get_next_empty_row(sheet_name)
     sheet_write_rows_from_a(sheet_name, start_row, rows)
-
-def get_next_empty_row_in_issues():
-    rows = get_sheet_rows_cached(SHEET_ISSUES)
-    return len(rows) + 1
 
 def is_google_quota_error(exc):
     text = str(exc).lower()
@@ -2835,11 +2819,9 @@ def confirm_fp_issue(chat_id, user_id, username):
                 ]]
             )
 
-            next_row = get_next_empty_row_in_issues()
-            sheet_update_raw(
+            sheet_append_row_and_refresh(
                 SHEET_ISSUES,
-                f"A{next_row}:G{next_row}",
-                [[
+                [
                     fp_link,
                     "FP",
                     purchase_date,
@@ -2847,7 +2829,8 @@ def confirm_fp_issue(chat_id, user_id, username):
                     today,
                     supplier,
                     fp_for_whom
-                ]]
+                ],
+                value_input_option="USER_ENTERED"
             )
 
             refresh_sheet_cache(SHEET_FPS)
@@ -7177,84 +7160,84 @@ def backup_tables():
 
     with backup_lock:
         try:
-            client = get_gspread_client()
+            def _read_main_data():
+                with google_lock:
+                    client = get_gspread_client()
+                    main_spreadsheet = client.open_by_key(SPREADSHEET_ID)
+            
+                    return {
+                        "accounts": main_spreadsheet.worksheet(SHEET_ACCOUNTS).get_all_values(),
+                        "kings": main_spreadsheet.worksheet(SHEET_KINGS).get_all_values(),
+                        "crypto_kings": main_spreadsheet.worksheet(SHEET_CRYPTO_KINGS).get_all_values(),
+                        "issues": main_spreadsheet.worksheet(SHEET_ISSUES).get_all_values(),
+                        "bms": main_spreadsheet.worksheet(SHEET_BMS).get_all_values(),
+                        "fps": main_spreadsheet.worksheet(SHEET_FPS).get_all_values(),
+                        "pixels": main_spreadsheet.worksheet(SHEET_PIXELS).get_all_values(),
+                        "farm_kings": main_spreadsheet.worksheet(SHEET_FARM_KINGS).get_all_values(),
+                        "farm_bms": main_spreadsheet.worksheet(SHEET_FARM_BMS).get_all_values(),
+                        "farm_fps": main_spreadsheet.worksheet(SHEET_FARM_FPS).get_all_values(),
+                    }
 
-            main_spreadsheet = client.open_by_key(SPREADSHEET_ID)
-            backup_spreadsheet = client.open_by_key(BACKUP_SPREADSHEET_ID)
+            main_data = google_read_with_retry(_read_main_data)
 
-            accounts = main_spreadsheet.worksheet(SHEET_ACCOUNTS)
-            kings = main_spreadsheet.worksheet(SHEET_KINGS)
-            crypto_kings = main_spreadsheet.worksheet(SHEET_CRYPTO_KINGS)
-            issues = main_spreadsheet.worksheet(SHEET_ISSUES)
-            bms = main_spreadsheet.worksheet(SHEET_BMS)
-            fps = main_spreadsheet.worksheet(SHEET_FPS)
-            pixels = main_spreadsheet.worksheet(SHEET_PIXELS)
-            farm_kings = main_spreadsheet.worksheet(SHEET_FARM_KINGS)
-            farm_bms = main_spreadsheet.worksheet(SHEET_FARM_BMS)
-            farm_fps = main_spreadsheet.worksheet(SHEET_FARM_FPS)
+            def _write_backup():
+                with google_lock:
+                    client = get_gspread_client()
+                    backup_spreadsheet = client.open_by_key(BACKUP_SPREADSHEET_ID)
+            
+                    backup_accounts = backup_spreadsheet.worksheet("backup_accounts")
+                    backup_kings = backup_spreadsheet.worksheet("backup_kings")
+                    backup_crypto_kings = backup_spreadsheet.worksheet("backup_crypto_kings")
+                    backup_issues = backup_spreadsheet.worksheet("backup_issues")
+                    backup_bms = backup_spreadsheet.worksheet("backup_bms")
+                    backup_fps = backup_spreadsheet.worksheet("backup_fps")
+                    backup_pixels = backup_spreadsheet.worksheet("backup_pixels")
+                    backup_farm_kings = backup_spreadsheet.worksheet("backup_farm_kings")
+                    backup_farm_bms = backup_spreadsheet.worksheet("backup_farm_bms")
+                    backup_farm_fps = backup_spreadsheet.worksheet("backup_farm_fps")
+            
+                    backup_accounts.clear()
+                    backup_kings.clear()
+                    backup_crypto_kings.clear()
+                    backup_issues.clear()
+                    backup_bms.clear()
+                    backup_fps.clear()
+                    backup_pixels.clear()
+                    backup_farm_kings.clear()
+                    backup_farm_bms.clear()
+                    backup_farm_fps.clear()
+            
+                    if main_data["accounts"]:
+                        backup_accounts.append_rows(main_data["accounts"], value_input_option="USER_ENTERED")
+            
+                    if main_data["kings"]:
+                        backup_kings.append_rows(main_data["kings"], value_input_option="USER_ENTERED")
+            
+                    if main_data["crypto_kings"]:
+                        backup_crypto_kings.append_rows(main_data["crypto_kings"], value_input_option="USER_ENTERED")
+            
+                    if main_data["issues"]:
+                        backup_issues.append_rows(main_data["issues"], value_input_option="USER_ENTERED")
+            
+                    if main_data["bms"]:
+                        backup_bms.append_rows(main_data["bms"], value_input_option="USER_ENTERED")
+            
+                    if main_data["fps"]:
+                        backup_fps.append_rows(main_data["fps"], value_input_option="USER_ENTERED")
+            
+                    if main_data["pixels"]:
+                        backup_pixels.append_rows(main_data["pixels"], value_input_option="USER_ENTERED")
+            
+                    if main_data["farm_kings"]:
+                        backup_farm_kings.append_rows(main_data["farm_kings"], value_input_option="USER_ENTERED")
+            
+                    if main_data["farm_bms"]:
+                        backup_farm_bms.append_rows(main_data["farm_bms"], value_input_option="USER_ENTERED")
+            
+                    if main_data["farm_fps"]:
+                        backup_farm_fps.append_rows(main_data["farm_fps"], value_input_option="USER_ENTERED")
 
-            backup_accounts = backup_spreadsheet.worksheet("backup_accounts")
-            backup_kings = backup_spreadsheet.worksheet("backup_kings")
-            backup_crypto_kings = backup_spreadsheet.worksheet("backup_crypto_kings")
-            backup_issues = backup_spreadsheet.worksheet("backup_issues")
-            backup_bms = backup_spreadsheet.worksheet("backup_bms")
-            backup_fps = backup_spreadsheet.worksheet("backup_fps")
-            backup_pixels = backup_spreadsheet.worksheet("backup_pixels")
-            backup_farm_kings = backup_spreadsheet.worksheet("backup_farm_kings")
-            backup_farm_bms = backup_spreadsheet.worksheet("backup_farm_bms")
-            backup_farm_fps = backup_spreadsheet.worksheet("backup_farm_fps")
-
-            accounts_data = accounts.get_all_values()
-            kings_data = kings.get_all_values()
-            crypto_kings_data = crypto_kings.get_all_values()
-            issues_data = issues.get_all_values()
-            bms_data = bms.get_all_values()
-            fps_data = fps.get_all_values()
-            pixels_data = pixels.get_all_values()
-            farm_kings_data = farm_kings.get_all_values()
-            farm_bms_data = farm_bms.get_all_values()
-            farm_fps_data = farm_fps.get_all_values()
-
-            backup_accounts.clear()
-            backup_kings.clear()
-            backup_crypto_kings.clear()
-            backup_issues.clear()
-            backup_bms.clear()
-            backup_fps.clear()
-            backup_pixels.clear()
-            backup_farm_kings.clear()
-            backup_farm_bms.clear()
-            backup_farm_fps.clear()
-
-            if accounts_data:
-                backup_accounts.append_rows(accounts_data)
-
-            if kings_data:
-                backup_kings.append_rows(kings_data)
-
-            if issues_data:
-                backup_issues.append_rows(issues_data)
-
-            if bms_data:
-                backup_bms.append_rows(bms_data)
-
-            if fps_data:
-                backup_fps.append_rows(fps_data)
-
-            if pixels_data:
-                backup_pixels.append_rows(pixels_data)
-
-            if farm_kings_data:
-                backup_farm_kings.append_rows(farm_kings_data)
-
-            if farm_bms_data:
-                backup_farm_bms.append_rows(farm_bms_data)
-
-            if farm_fps_data:
-                backup_farm_fps.append_rows(farm_fps_data)
-
-            if crypto_kings_data:
-                backup_crypto_kings.append_rows(crypto_kings_data)
+            google_write_with_retry(_write_backup)
 
             last_backup_date = datetime.now(MOSCOW_TZ).date()
 
@@ -11650,6 +11633,7 @@ def auto_healthcheck_loop():
     while True:
         try:
             touch_background_heartbeat()
+            cleanup_error_notifications()
             run_auto_healthcheck_once()
             time.sleep(1800)  # каждые 30 минут
         except Exception as e:
