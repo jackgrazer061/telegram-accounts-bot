@@ -8070,7 +8070,6 @@ def extract_octo_profile_uuid(octo_response):
 def build_octo_profile_payload(profile_name, proxy_data):
     payload = {
         "title": profile_name,
-        "tags": ["Sido", "corby"],
         "proxy": {
             "type": proxy_data.get("type", "socks5"),
             "host": proxy_data["host"],
@@ -8083,16 +8082,11 @@ def build_octo_profile_payload(profile_name, proxy_data):
     if OCTO_FP_TEMPLATE_ID:
         payload["template_id"] = OCTO_FP_TEMPLATE_ID
     else:
+        payload["tags"] = ["Sido", "corby"]
         payload["start_pages"] = ["https://www.facebook.com"]
         payload["bookmarks"] = [
-            {
-                "title": "facebook.com",
-                "url": "https://www.facebook.com"
-            },
-            {
-                "title": "2fa.cn",
-                "url": "https://2fa.cn"
-            }
+            {"title": "facebook.com", "url": "https://www.facebook.com"},
+            {"title": "2fa.cn", "url": "https://2fa.cn"}
         ]
         payload["fingerprint"] = {
             "os": "win"
