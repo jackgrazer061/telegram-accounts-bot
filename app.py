@@ -7930,40 +7930,57 @@ def octo_find_profile_by_title(profile_title):
         "Content-Type": "application/json",
     }
 
-    url = f"{OCTO_API_BASE}/profiles?page_len=200"
-
-    resp = requests.get(url, headers=headers, timeout=60)
-    resp.raise_for_status()
-
-    data = resp.json()
-    logging.info(f"OCTO_FIND raw response keys: {list(data.keys()) if isinstance(data, dict) else type(data)}")
-
-    # пробуем вытащить список профилей из разных возможных мест
-    items = []
-    if isinstance(data, dict):
-        if isinstance(data.get("data"), list):
-            items = data["data"]
-        elif isinstance(data.get("profiles"), list):
-            items = data["profiles"]
-        elif isinstance(data.get("items"), list):
-            items = data["items"]
-    elif isinstance(data, list):
-        items = data
-
     target = str(profile_title or "").strip().lower()
 
-    logging.info(f"OCTO_FIND target='{target}', profiles_count={len(items)}")
+    # пробуем несколько страниц
+    for page in range(1, 11):
+        url = f"{OCTO_API_BASE}/profiles?page={page}&page_len=100"
 
-    for item in items:
-        title_val = str(item.get("title", "")).strip()
-        name_val = str(item.get("name", "")).strip()
+        resp = requests.get(url, headers=headers, timeout=60)
+        resp.raise_for_status()
 
-        logging.info(f"OCTO_FIND candidate title='{title_val}' name='{name_val}'")
+        data = resp.json()
+        logging.info(f"OCTO_FIND page={page} raw={data}")
 
-        if title_val.lower() == target or name_val.lower() == target:
-            return item
+        items = []
+        if isinstance(data, dict):
+            if isinstance(data.get("data"), list):
+                items = data["data"]
+            elif isinstance(data.get("profiles"), list):
+                items = data["profiles"]
+            elif isinstance(data.get("items"), list):
+                items = data["items"]
+            elif isinstance(data.get("list"), list):
+                items = data["list"]
+        elif isinstance(data, list):
+            items = data
 
+        logging.info(f"OCTO_FIND target='{target}' page={page} count={len(items)}")
+
+        for item in items:
+            title_val = str(item.get("title", "")).strip()
+            name_val = str(item.get("name", "")).strip()
+
+            logging.info(
+                f"OCTO_FIND candidate page={page} "
+                f"title='{title_val}' name='{name_val}'"
+            )
+
+            if normalize_octo_title(title_val) == target or normalize_octo_title(name_val) == target:
+                logging.info(f"OCTO_FIND MATCH page={page} item={item}")
+                return item
+
+        # если страница пустая — дальше смысла нет
+        if not items:
+            break
+
+    logging.warning(f"OCTO_FIND NOT FOUND target='{target}'")
     return None
+
+def normalize_octo_title(text):
+    text = str(text or "").strip().lower()
+    text = re.sub(r"\s+", " ", text)
+    return text
 
 def octo_find_profile_by_title(profile_name):
     resp = requests.get(
@@ -7976,7 +7993,7 @@ def octo_find_profile_by_title(profile_name):
 
     data = resp.json()
     items = data.get("data") or data.get("items") or []
-    target = str(profile_name).strip().lower()
+    target = normalize_octo_title(profile_title)
 
     for item in items:
         title = str(item.get("title") or item.get("name") or "").strip().lower()
