@@ -8085,8 +8085,12 @@ def build_octo_profile_payload(profile_name, proxy_data):
         payload["tags"] = ["Sido", "corby"]
         payload["start_pages"] = ["https://www.facebook.com"]
         payload["bookmarks"] = [
-            {"title": "facebook.com", "url": "https://www.facebook.com"},
-            {"title": "2fa.cn", "url": "https://2fa.cn"}
+            {
+                "url": "https://www.facebook.com"
+            },
+            {
+                "url": "https://2fa.cn"
+            }
         ]
         payload["fingerprint"] = {
             "os": "win"
