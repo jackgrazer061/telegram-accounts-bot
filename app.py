@@ -7925,36 +7925,42 @@ def parse_proxy_input(text):
     return None
 
 def octo_find_profile_by_title(profile_title):
-    title = str(profile_title or "").strip()
-    if not title:
-        return None
-
     headers = {
         "X-Octo-Api-Token": OCTO_API_TOKEN,
         "Content-Type": "application/json",
     }
 
-    resp = requests.get(
-        f"{OCTO_API_BASE}/automation/profiles",
-        headers=headers,
-        timeout=30
-    )
+    url = f"{OCTO_API_BASE}/profiles?page_len=200"
+
+    resp = requests.get(url, headers=headers, timeout=60)
     resp.raise_for_status()
 
     data = resp.json()
+    logging.info(f"OCTO_FIND raw response keys: {list(data.keys()) if isinstance(data, dict) else type(data)}")
 
-    items = data.get("data") or data.get("profiles") or data.get("items") or []
-    target = title.lower()
+    # пробуем вытащить список профилей из разных возможных мест
+    items = []
+    if isinstance(data, dict):
+        if isinstance(data.get("data"), list):
+            items = data["data"]
+        elif isinstance(data.get("profiles"), list):
+            items = data["profiles"]
+        elif isinstance(data.get("items"), list):
+            items = data["items"]
+    elif isinstance(data, list):
+        items = data
+
+    target = str(profile_title or "").strip().lower()
+
+    logging.info(f"OCTO_FIND target='{target}', profiles_count={len(items)}")
 
     for item in items:
-        name = str(
-            item.get("title")
-            or item.get("name")
-            or item.get("profile_name")
-            or ""
-        ).strip()
+        title_val = str(item.get("title", "")).strip()
+        name_val = str(item.get("name", "")).strip()
 
-        if name.lower() == target:
+        logging.info(f"OCTO_FIND candidate title='{title_val}' name='{name_val}'")
+
+        if title_val.lower() == target or name_val.lower() == target:
             return item
 
     return None
