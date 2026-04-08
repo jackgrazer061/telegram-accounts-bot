@@ -7977,6 +7977,42 @@ def octo_find_profile_by_title(profile_title):
     logging.warning(f"OCTO_FIND NOT FOUND target='{target}'")
     return None
 
+def octo_debug_list_profiles():
+    headers = {
+        "X-Octo-Api-Token": OCTO_API_TOKEN,
+        "Content-Type": "application/json",
+    }
+
+    url = f"{OCTO_API_BASE}/profiles?page=1&page_len=100"
+    resp = requests.get(url, headers=headers, timeout=60)
+    resp.raise_for_status()
+
+    data = resp.json()
+
+    items = []
+    if isinstance(data, dict):
+        if isinstance(data.get("data"), list):
+            items = data["data"]
+        elif isinstance(data.get("profiles"), list):
+            items = data["profiles"]
+        elif isinstance(data.get("items"), list):
+            items = data["items"]
+        elif isinstance(data.get("list"), list):
+            items = data["list"]
+    elif isinstance(data, list):
+        items = data
+
+    lines = [f"Всего на странице: {len(items)}"]
+
+    for i, item in enumerate(items[:20], start=1):
+        title_val = str(item.get("title", "")).strip()
+        name_val = str(item.get("name", "")).strip()
+        uuid_val = str(item.get("uuid", item.get("id", ""))).strip()
+
+        lines.append(f"{i}. title='{title_val}' | name='{name_val}' | id='{uuid_val}'")
+
+    return "\n".join(lines)
+
 def normalize_octo_title(text):
     text = str(text or "").strip().lower()
     text = re.sub(r"\s+", " ", text)
@@ -8322,6 +8358,14 @@ def handle_message(msg):
 
         if text == "/ping":
             tg_send_message(chat_id, "бот работает")
+            return
+
+        if text == "/octodebug":
+            try:
+                result = octo_debug_list_profiles()
+                tg_send_long_message(chat_id, result)
+            except Exception as e:
+                tg_send_long_message(chat_id, f"Octo debug error:\n{e}")
             return
 
         if text == MENU_CANCEL:
