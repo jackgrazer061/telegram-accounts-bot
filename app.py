@@ -7962,6 +7962,48 @@ def octo_find_profile_by_title(profile_title):
 
     return None
 
+def octo_debug_tag_next_warehouse(next_warehouse_name, tag_name):
+    result_lines = []
+
+    try:
+        result_lines.append(f"START next_warehouse_name={next_warehouse_name}")
+        result_lines.append(f"START tag_name={tag_name}")
+
+        warehouse_name = str(next_warehouse_name or "").strip()
+        tag_name = str(tag_name or "").strip()
+
+        result_lines.append(f"warehouse_name={warehouse_name}")
+        result_lines.append(f"tag_name={tag_name}")
+
+        if not warehouse_name or not tag_name:
+            result_lines.append("ERROR: warehouse_name or tag_name empty")
+            return "\n".join(result_lines)
+
+        result_lines.append("before octo_find_profile_by_title")
+        profile = octo_find_profile_by_title(warehouse_name)
+        result_lines.append(f"profile found={bool(profile)}")
+
+        if not profile:
+            result_lines.append(f"NOT FOUND profile '{warehouse_name}'")
+            return "\n".join(result_lines)
+
+        profile_uuid = str(profile.get("uuid") or profile.get("id") or "").strip()
+        result_lines.append(f"profile_uuid={profile_uuid}")
+
+        result_lines.append("before octo_update_profile_tags_by_title")
+        ok, msg = octo_update_profile_tags_by_title(
+            profile_title=warehouse_name,
+            tags_to_add=[tag_name]
+        )
+        result_lines.append(f"update_result ok={ok} msg={msg}")
+
+        return "\n".join(result_lines)
+
+    except Exception as e:
+        logging.exception("octo_debug_tag_next_warehouse crashed")
+        result_lines.append(f"EXCEPTION: {e}")
+        return "\n".join(result_lines)
+
 def octo_debug_list_profiles():
     headers = {
         "X-Octo-Api-Token": OCTO_API_TOKEN,
@@ -8344,6 +8386,22 @@ def handle_message(msg):
 
         if text == "/ping":
             tg_send_message(chat_id, "бот работает")
+            return
+
+        if text.startswith("/octotagdebug "):
+            try:
+                payload = text[len("/octotagdebug "):].strip()
+        
+                if "|" not in payload:
+                    tg_send_message(chat_id, "Формат:\n/octotagdebug название склада|тег")
+                    return
+        
+                warehouse_name, tag_name = [x.strip() for x in payload.split("|", 1)]
+        
+                debug_result = octo_debug_tag_next_warehouse(warehouse_name, tag_name)
+                tg_send_long_message(chat_id, debug_result)
+            except Exception as e:
+                tg_send_long_message(chat_id, f"octotagdebug error:\n{e}")
             return
 
         if text == "/octodebug":
