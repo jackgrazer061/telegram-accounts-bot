@@ -8085,44 +8085,19 @@ def octo_update_profile_tags_by_title(profile_title, tags_to_add):
     if not profile_uuid:
         return False, f"У профиля '{profile_title}' не найден id/uuid"
 
-    try:
-        full_profile = octo_get_profile_by_uuid(profile_uuid)
-    except Exception as e:
-        return False, f"Не удалось прочитать полный профиль '{profile_title}': {e}"
-
-    current_tags_raw = []
-    if isinstance(full_profile, dict):
-        if isinstance(full_profile.get("tags"), list):
-            current_tags_raw = full_profile.get("tags", [])
-        elif isinstance(full_profile.get("data"), dict) and isinstance(full_profile["data"].get("tags"), list):
-            current_tags_raw = full_profile["data"].get("tags", [])
-
-    normalized_current = []
-    for tag in current_tags_raw:
-        if isinstance(tag, str):
-            clean_tag = tag.strip()
-        elif isinstance(tag, dict):
-            clean_tag = str(
-                tag.get("name")
-                or tag.get("title")
-                or tag.get("value")
-                or ""
-            ).strip()
-        else:
-            clean_tag = str(tag).strip()
-
-        if clean_tag and clean_tag not in normalized_current:
-            normalized_current.append(clean_tag)
-
-    merged_tags = list(normalized_current)
-    for tag in tags_to_add:
-        if tag not in merged_tags:
-            merged_tags.append(tag)
-
     headers = {
         "X-Octo-Api-Token": OCTO_API_TOKEN,
         "Content-Type": "application/json",
     }
+
+    # всегда сохраняем базовые теги
+    base_tags = ["Sido", "corby"]
+
+    merged_tags = []
+    for tag in base_tags + tags_to_add:
+        tag = str(tag).strip()
+        if tag and tag not in merged_tags:
+            merged_tags.append(tag)
 
     url = f"{OCTO_API_BASE}/profiles/{profile_uuid}"
     payload = {
