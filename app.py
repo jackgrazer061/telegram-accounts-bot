@@ -469,8 +469,13 @@ def sheet_batch_update_raw(sheet_name, updates):
     mark_sheet_cache_stale(sheet_name)
 
 def sheet_append_row_and_refresh(sheet_name, row, value_input_option="USER_ENTERED"):
-    start_row = get_next_empty_row(sheet_name)
-    sheet_write_rows_from_a(sheet_name, start_row, [row])
+    def _do():
+        with google_lock:
+            sheet = get_sheet(sheet_name)
+            sheet.append_row(row, value_input_option=value_input_option)
+
+    google_write_with_retry(_do)
+    mark_sheet_cache_stale(sheet_name)
 
 def sheet_delete_row_and_refresh(sheet_name, row_index):
     def _do():
@@ -482,8 +487,13 @@ def sheet_delete_row_and_refresh(sheet_name, row_index):
     mark_sheet_cache_stale(sheet_name)
 
 def sheet_append_rows_and_refresh(sheet_name, rows, value_input_option="USER_ENTERED"):
-    start_row = get_next_empty_row(sheet_name)
-    sheet_write_rows_from_a(sheet_name, start_row, rows)
+    def _do():
+        with google_lock:
+            sheet = get_sheet(sheet_name)
+            sheet.append_rows(rows, value_input_option=value_input_option)
+
+    google_write_with_retry(_do)
+    mark_sheet_cache_stale(sheet_name)
 
 def is_google_quota_error(exc):
     text = str(exc).lower()
