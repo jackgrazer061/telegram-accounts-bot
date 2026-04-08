@@ -7937,6 +7937,7 @@ def octo_find_profile_by_title(profile_title):
 
         resp = requests.get(url, headers=headers, timeout=60)
         resp.raise_for_status()
+
         data = resp.json()
 
         items = []
@@ -7954,7 +7955,9 @@ def octo_find_profile_by_title(profile_title):
 
         for item in items:
             title_val = str(item.get("title", "")).strip().lower()
-            if title_val == target:
+            name_val = str(item.get("name", "")).strip().lower()
+
+            if title_val == target or name_val == target:
                 return item
 
         if not items:
