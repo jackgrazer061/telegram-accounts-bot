@@ -4768,6 +4768,7 @@ def parse_crypto_king_raw_data(raw_text):
         if len(unique_emails) >= 2 and not result["email"]:
             result["email"] = unique_emails[1]
 
+    result["cookies_too_long_for_octo"] = len(result.get("cookies_json", "")) > 400
     return result
 
 
@@ -4790,17 +4791,9 @@ def build_crypto_king_octo_description(parsed):
         lines.append(link)
 
     extra_pairs = parsed.get("extra_pairs", [])
-    if extra_pairs:
-        for pair in extra_pairs:
-            if pair not in lines:
-                lines.append(pair)
-
-    cookie_links = parsed.get("cookies_links", [])
-    if cookie_links:
-        lines.append("")
-        lines.append("Cookies links (manual import):")
-        for link in cookie_links:
-            lines.append(link)
+    for pair in extra_pairs:
+        if pair not in lines:
+            lines.append(pair)
 
     bm_links = parsed.get("bm_links", [])
     if bm_links:
@@ -4809,7 +4802,22 @@ def build_crypto_king_octo_description(parsed):
         for link in bm_links:
             lines.append(link)
 
-    return "\n".join(lines).strip()
+    cookie_links = parsed.get("cookies_links", [])
+    if cookie_links:
+        lines.append("")
+        lines.append("Cookies links (manual import):")
+        for link in cookie_links:
+            lines.append(link)
+
+    text = "\n".join(lines).strip()
+
+    if len(text) > 1024:
+        raise RuntimeError(
+            f"Octo description too long: {len(text)} chars. "
+            f"Укороти описание, но не за счёт cookies — cookies должны идти через txt/manual."
+        )
+
+    return text
 
 def build_octo_description_from_king_data(parsed):
     parsed = parsed or {}
@@ -11761,6 +11769,18 @@ def handle_message(msg):
                     f"Octo профиль: {'создан✅' if octo_ok else 'ошибка❌'}",
                     keyboard
                 )
+
+                if parsed_crypto.get("cookies_json") and parsed_crypto.get("cookies_too_long_for_octo"):
+                    tg_send_message(
+                        chat_id,
+                        "Куки слишком длинные, в Octo автоматически не вставлялись. "
+                        "Нажми «📄 Скачать txt» и вставь их вручную."
+                    )
+                elif parsed_crypto.get("cookies_json"):
+                    tg_send_message(
+                        chat_id,
+                        "Cookies JSON найден. Для надёжности проверь его вручную через «📄 Скачать txt»."
+                    )
         
                 if parsed_crypto.get("bm_links"):
                     tg_send_long_message(
