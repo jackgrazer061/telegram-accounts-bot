@@ -4787,35 +4787,14 @@ def build_crypto_king_octo_description(parsed):
         "Doc's:",
     ]
 
-    for link in parsed.get("docs_links", []):
-        lines.append(link)
-
-    extra_pairs = parsed.get("extra_pairs", [])
-    for pair in extra_pairs:
-        if pair not in lines:
-            lines.append(pair)
-
-    bm_links = parsed.get("bm_links", [])
-    if bm_links:
-        lines.append("")
-        lines.append("BM:")
-        for link in bm_links:
-            lines.append(link)
-
-    cookie_links = parsed.get("cookies_links", [])
-    if cookie_links:
-        lines.append("")
-        lines.append("Cookies links (manual import):")
-        for link in cookie_links:
-            lines.append(link)
+    docs_links = parsed.get("docs_links", [])
+    if docs_links:
+        lines.append(docs_links[0])
 
     text = "\n".join(lines).strip()
 
     if len(text) > 1024:
-        raise RuntimeError(
-            f"Octo description too long: {len(text)} chars. "
-            f"Укороти описание, но не за счёт cookies — cookies должны идти через txt/manual."
-        )
+        raise RuntimeError(f"Octo description too long: {len(text)} chars")
 
     return text
 
@@ -11766,8 +11745,8 @@ def handle_message(msg):
                     f"Для кого: {king_for_whom}\n"
                     f"Цена: {row[2]}\n"
                     f"Гео: {parsed_crypto.get('geo', geo_value)}\n"
-                    f"Octo профиль: {'создан✅' if octo_ok else 'ошибка❌'}",
-                    keyboard
+                    f"Octo профиль: {'создан✅' if octo_ok else 'ошибка❌'}\n"
+                    f"Детали Octo: {octo_msg}"
                 )
 
                 if parsed_crypto.get("cookies_json") and parsed_crypto.get("cookies_too_long_for_octo"):
@@ -11801,7 +11780,6 @@ def handle_message(msg):
                         "Doc's по этому crypto king:\n\n" + "\n".join(parsed_crypto["docs_links"])
                     )
         
-                send_kings_menu(chat_id, "Выбери следующее действие:")
                 return
         
             except Exception as e:
