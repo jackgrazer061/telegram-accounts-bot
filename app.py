@@ -4437,6 +4437,354 @@ def parse_king_data_block(raw_text):
 
     return result
 
+def _clean_crypto_text(text):
+    text = str(text or "").strip().strip('"').strip()
+    text = text.replace("\r", " ").replace("\n", " ").replace("\t", " ")
+    text = re.sub(r"\s+", " ", text)
+    return text.strip()
+
+
+def _extract_first_match(pattern, text, flags=re.IGNORECASE):
+    m = re.search(pattern, text, flags)
+    return m.group(1).strip() if m else ""
+
+
+def _extract_all_emails(text):
+    return re.findall(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}", text or "")
+
+
+def _extract_all_urls(text):
+    return re.findall(r"https?://[^\s\"']+", text or "")
+
+
+def _extract_cookie_json_block(text):
+    text = str(text or "")
+    marker = "Cookie JSON -"
+    start_marker = text.find(marker)
+    if start_marker == -1:
+        return ""
+
+    start_bracket = text.find("[", start_marker)
+    if start_bracket == -1:
+        return ""
+
+    depth = 0
+    end_bracket = -1
+    for i in range(start_bracket, len(text)):
+        ch = text[i]
+        if ch == "[":
+            depth += 1
+        elif ch == "]":
+            depth -= 1
+            if depth == 0:
+                end_bracket = i
+                break
+
+    if end_bracket == -1:
+        return ""
+
+    return text[start_bracket:end_bracket + 1].strip()
+
+
+def _extract_twofa_value(text):
+    text = str(text or "")
+
+    m = re.search(r"2FA\s*-\s*(https?://[^\s]+)", text, re.IGNORECASE)
+    if m:
+        url = m.group(1).strip()
+
+        key_match = re.search(r"[?&]key=([A-Z2-7]+)", url, re.IGNORECASE)
+        if key_match:
+            return key_match.group(1).strip()
+
+        tail_match = re.search(r"/([A-Z2-7]{16,})$", url, re.IGNORECASE)
+        if tail_match:
+            return tail_match.group(1).strip()
+
+        return url
+
+    # fallback: просто длинная 2fa-похожая строка
+    m = re.search(r"\b([A-Z2-7]{16,})\b", text)
+    if m:
+        return m.group(1).strip()
+
+    return ""
+
+
+def _extract_user_agent(text):
+    m = re.search(r"(Mozilla/5\.0[^\n\r]+?Safari/[0-9.]+)", text)
+    return m.group(1).strip() if m else ""
+
+
+def _extract_geo_value(text):
+    text = str(text or "").strip().strip('"').strip()
+    if not text:
+        return ""
+
+    # сначала явные короткие GEO/страны в начале
+    first_token = text.split()[0].strip()
+    if re.fullmatch(r"[A-Za-zА-Яа-яЁё]{2,20}", first_token):
+        if first_token.lower() not in {
+            "login", "password", "birthday", "id", "user-agent",
+            "token", "email", "cookie", "2fa"
+        }:
+            return first_token
+
+    # если в начале до "login -" есть кусок
+    m = re.match(r"^(.*?)\s+login\s*-\s*", text, re.IGNORECASE)
+    if m:
+        geo_raw = m.group(1).strip()
+        if geo_raw:
+            parts = geo_raw.split()
+            if parts:
+                return parts[0].strip()
+
+    return ""
+
+
+def _extract_login_value(text):
+    # 1) явный login -
+    m = re.search(r"login\s*-\s*([A-Za-z0-9._@+-]+)", text, re.IGNORECASE)
+    if m:
+        return m.group(1).strip()
+
+    # 2) profile.php?id=
+    m = re.search(r"profile\.php\?id=\s*([0-9]{8,20})", text, re.IGNORECASE)
+    if m:
+        return m.group(1).strip()
+
+    # 3) просто длинный numeric id
+    m = re.search(r"\b([0-9]{8,20})\b", text)
+    if m:
+        return m.group(1).strip()
+
+    return ""
+
+
+def _extract_fb_password_value(text):
+    m = re.search(r"password\s*-\s*([^\s]+)", text, re.IGNORECASE)
+    if m:
+        return m.group(1).strip()
+
+    return ""
+
+
+def _extract_email_from_email_block(text):
+    m = re.search(r"Email\s*-\s*([^;\s]+)", text, re.IGNORECASE)
+    if m:
+        return m.group(1).strip()
+    return ""
+
+
+def _extract_email_password_from_email_block(text):
+    m = re.search(r"Email\s*-\s*[^:;\s]+[:;]([^\s;]+)", text, re.IGNORECASE)
+    if m:
+        return m.group(1).strip()
+    return ""
+
+
+def _extract_docs_links(text):
+    docs = []
+
+    m = re.search(
+        r"IZOBRAZHENIYA S PROHOZHDENIEM ZRD/CHEK\s*(https?://[^\s]+)",
+        text,
+        re.IGNORECASE
+    )
+    if m:
+        docs.append(m.group(1).strip())
+
+    for pattern in [
+        r"\bAVA\s+(https?://[^\s]+)",
+        r"\bDOC\s+(https?://[^\s]+)",
+        r"\bzrd\s*=\s*(https?://[^\s]+)",
+    ]:
+        for mm in re.finditer(pattern, text, re.IGNORECASE):
+            val = mm.group(1).strip()
+            if val not in docs:
+                docs.append(val)
+
+    return docs
+
+
+def _extract_bm_links(text):
+    urls = _extract_all_urls(text)
+    result = []
+    for url in urls:
+        if "business.facebook.com" in url:
+            if url not in result:
+                result.append(url)
+    return result
+
+
+def _extract_cookie_links(text):
+    urls = _extract_all_urls(text)
+    result = []
+    for url in urls:
+        if "drive.google.com" in url:
+            if url not in result:
+                result.append(url)
+    return result
+
+
+def parse_crypto_king_raw_data(raw_text):
+    text_original = str(raw_text or "")
+    text = _clean_crypto_text(raw_text)
+
+    result = {
+        "geo": "",
+        "fb_login": "",
+        "fb_password": "",
+        "email": "",
+        "email_password": "",
+        "service": "",
+        "twofa": "",
+        "cookies_json": "",
+        "cookies_links": [],
+        "user_agent": "",
+        "docs_links": [],
+        "bm_links": [],
+        "extra_pairs": [],
+        "raw_text": text_original,
+    }
+
+    # -------- FORMAT 1: pipe --------
+    if "|" in text and text.count("|") >= 5 and "login -" not in text.lower():
+        parts = [x.strip() for x in text.split("|")]
+        if len(parts) >= 6:
+            result["fb_login"] = parts[0]
+            result["fb_password"] = parts[1]
+            result["twofa"] = parts[2]
+            result["email"] = parts[3]
+            result["email_password"] = parts[4]
+            result["service"] = parts[5]
+            return result
+
+    # -------- COMMON EXTRACTION --------
+    result["geo"] = _extract_geo_value(text)
+    result["fb_login"] = _extract_login_value(text)
+    result["fb_password"] = _extract_fb_password_value(text)
+    result["user_agent"] = _extract_user_agent(text)
+    result["twofa"] = _extract_twofa_value(text)
+    result["cookies_json"] = _extract_cookie_json_block(text_original)
+    result["docs_links"] = _extract_docs_links(text_original)
+    result["bm_links"] = _extract_bm_links(text_original)
+    result["cookies_links"] = _extract_cookie_links(text_original)
+
+    email_from_block = _extract_email_from_email_block(text)
+    email_password_from_block = _extract_email_password_from_email_block(text)
+
+    all_emails = _extract_all_emails(text)
+    unique_emails = []
+    for em in all_emails:
+        if em not in unique_emails:
+            unique_emails.append(em)
+
+    # email:password пары
+    pair_matches = re.findall(
+        r"([A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,})\s*[:;]\s*([^\s;]+)",
+        text_original
+    )
+    pair_list = []
+    for em, pw in pair_matches:
+        pair = f"{em}:{pw}"
+        if pair not in pair_list:
+            pair_list.append(pair)
+    result["extra_pairs"] = pair_list
+
+    if email_from_block:
+        result["email"] = email_from_block
+    if email_password_from_block:
+        result["email_password"] = email_password_from_block
+
+    # -------- FORMAT 2 / FORMAT 1 fallback by emails --------
+    if unique_emails:
+        if result["fb_login"]:
+            if not result["email"]:
+                result["email"] = unique_emails[0]
+            if len(unique_emails) >= 2 and not result["service"]:
+                result["service"] = unique_emails[1]
+        else:
+            result["fb_login"] = unique_emails[0]
+            if len(unique_emails) >= 2 and not result["email"]:
+                result["email"] = unique_emails[1]
+
+    # -------- FORMAT 3: tab/space structured --------
+    if not result["fb_password"]:
+        # пытаемся поймать пароль фб около email / id
+        tokens = text.split()
+
+        for i, tok in enumerate(tokens):
+            if re.fullmatch(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}", tok):
+                # email найден, часто следующий токен = fb pass или email pass
+                if i + 1 < len(tokens):
+                    nxt = tokens[i + 1].strip()
+                    if re.fullmatch(r"[A-Za-z0-9!@#$%^&*()_\-+=]{6,}", nxt):
+                        # если пароль фб ещё пуст — запишем
+                        if not result["fb_password"]:
+                            result["fb_password"] = nxt
+
+    # email password fallback из найденных пар
+    if not result["email_password"] and result["email"]:
+        for em, pw in pair_matches:
+            if em == result["email"]:
+                result["email_password"] = pw.strip()
+                break
+
+    # service fallback: вторая email:pass пара
+    if not result["service"] and len(pair_list) >= 2:
+        first_pair_email = result["email"]
+        for pair in pair_list:
+            if not first_pair_email or not pair.startswith(first_pair_email + ":"):
+                result["service"] = pair
+                break
+
+    # Если логин не найден, но есть email — по твоему правилу
+    if not result["fb_login"] and unique_emails:
+        result["fb_login"] = unique_emails[0]
+        if len(unique_emails) >= 2 and not result["email"]:
+            result["email"] = unique_emails[1]
+
+    return result
+
+
+def build_crypto_king_octo_description(parsed):
+    lines = [
+        f"GEO - {parsed.get('geo', '')}",
+        "",
+        f"FB Login: {parsed.get('fb_login', '')}",
+        f"FB Password: {parsed.get('fb_password', '')}",
+        "",
+        f"Email: {parsed.get('email', '')}",
+        f"Email's Password: {parsed.get('email_password', '')}",
+        f"Service: {parsed.get('service', '')}",
+        f"2FA: {parsed.get('twofa', '')}",
+        "",
+        "Doc's:",
+    ]
+
+    for link in parsed.get("docs_links", []):
+        lines.append(link)
+
+    for pair in parsed.get("extra_pairs", []):
+        if pair not in lines:
+            lines.append(pair)
+
+    bm_links = parsed.get("bm_links", [])
+    if bm_links:
+        lines.append("")
+        lines.append("BM:")
+        for link in bm_links:
+            lines.append(link)
+
+    cookie_links = parsed.get("cookies_links", [])
+    if cookie_links:
+        lines.append("")
+        lines.append("Cookies links (manual import):")
+        for link in cookie_links:
+            lines.append(link)
+
+    return "\n".join(lines).strip()
 
 def build_octo_description_from_king_data(parsed):
     parsed = parsed or {}
@@ -6624,6 +6972,28 @@ def confirm_crypto_king_issue(chat_id, user_id, username):
             geo_value = str(row[7]).strip()
             data_text = get_full_king_data_from_row(row)
 
+            # -------- PARSE CRYPTO KING DATA --------
+            parsed_crypto = parse_crypto_king_raw_data(data_text)
+
+            # если гео не распарсилось, берём из таблицы
+            if not parsed_crypto.get("geo") and geo_value:
+                parsed_crypto["geo"] = geo_value
+
+            # -------- OCTO CREATE/FIND --------
+            octo_ok = False
+            octo_msg = ""
+            try:
+                octo_ok, octo_result = ensure_octo_profile_for_crypto_king(
+                    profile_name=king_name,
+                    parsed=parsed_crypto,
+                    proxy_data=None
+                )
+                octo_msg = str(octo_result)
+            except Exception as octo_error:
+                logging.exception("Crypto king Octo profile create failed")
+                octo_msg = str(octo_error)
+
+            # -------- UPDATE TABLE --------
             sheet_update_and_refresh(
                 SHEET_CRYPTO_KINGS,
                 f"A{row_index}:L{row_index}",
@@ -6644,7 +7014,7 @@ def confirm_crypto_king_issue(chat_id, user_id, username):
             )
 
             if sync_id:
-                 sync_status_to_basebot(BASEBOT_SHEET_CRYPTO_KINGS, sync_id, "taken")
+                sync_status_to_basebot(BASEBOT_SHEET_CRYPTO_KINGS, sync_id, "taken")
 
             append_king_to_issues_sheet(
                 king_name=king_name,
@@ -6658,6 +7028,7 @@ def confirm_crypto_king_issue(chat_id, user_id, username):
             invalidate_stats_cache()
             clear_state(user_id)
 
+        # -------- SEND MESSAGES AFTER LOCK --------
         tg_send_message(
             chat_id,
             f"Готово ✅\n\n"
@@ -6665,14 +7036,33 @@ def confirm_crypto_king_issue(chat_id, user_id, username):
             f"Название: {king_name}\n"
             f"Для кого: {king_for_whom}\n"
             f"Цена: {row[2]}\n"
-            f"Гео: {geo_value}"
+            f"Гео: {parsed_crypto.get('geo', geo_value)}\n"
+            f"Octo профиль: {'создан/найден' if octo_ok else 'ошибка'}\n"
+            f"Octo детали: {octo_msg}\n"
+            f"FB Login: {parsed_crypto.get('fb_login', '')}\n"
+            f"Email: {parsed_crypto.get('email', '')}\n"
+            f"2FA: {parsed_crypto.get('twofa', '')}"
         )
 
-        tg_send_king_data_as_txt(
-            chat_id=chat_id,
-            king_name=king_name,
-            data_text=data_text
-        )
+        if parsed_crypto.get("bm_links"):
+            tg_send_long_message(
+                chat_id,
+                "По этому crypto king ещё есть BM ссылки:\n\n" + "\n".join(parsed_crypto["bm_links"])
+            )
+
+        if parsed_crypto.get("cookies_links"):
+            tg_send_long_message(
+                chat_id,
+                "Cookies даны ссылкой. Импорт в профиль нужно сделать вручную:\n\n" +
+                "\n".join(parsed_crypto["cookies_links"])
+            )
+
+        # ВРЕМЕННО txt-файл не отправляем, чтобы проверить Octo-выдачу
+        # tg_send_king_data_as_txt(
+        #     chat_id=chat_id,
+        #     king_name=king_name,
+        #     data_text=data_text
+        # )
 
         send_kings_menu(chat_id, "Выбери следующее действие:")
 
@@ -8186,6 +8576,56 @@ def build_octo_profile_payload(profile_name, proxy_data):
 
     return payload
 
+def build_crypto_king_octo_payload(profile_name, parsed, proxy_data=None):
+    payload = {
+        "title": profile_name,
+        "tags": [OCTO_TAG_SIDO, OCTO_TAG_CORBY, OCTO_TAG_ACCOUNT_MANAGERS],
+        "description": build_crypto_king_octo_description(parsed),
+    }
+
+    if proxy_data:
+        payload["proxy"] = {
+            "type": proxy_data.get("type", "socks5"),
+            "host": proxy_data["host"],
+            "port": proxy_data["port"],
+            "login": proxy_data.get("login", ""),
+            "password": proxy_data.get("password", "")
+        }
+
+    if OCTO_FP_TEMPLATE_ID:
+        payload["template_id"] = OCTO_FP_TEMPLATE_ID
+    else:
+        payload["start_pages"] = ["https://www.facebook.com"]
+        payload["bookmarks"] = [
+            {"url": "https://www.facebook.com"},
+            {"url": "https://2fa.cn"}
+        ]
+
+    user_agent = str(parsed.get("user_agent", "")).strip()
+    if user_agent:
+        payload["fingerprint"] = {
+            "os": "win",
+            "navigator": {
+                "user_agent": user_agent
+            }
+        }
+    else:
+        payload["fingerprint"] = {
+            "os": "win"
+        }
+
+    return payload
+
+
+def ensure_octo_profile_for_crypto_king(profile_name, parsed, proxy_data=None):
+    existing = octo_find_profile_by_title(profile_name)
+    if existing:
+        return True, existing
+
+    payload = build_crypto_king_octo_payload(profile_name, parsed, proxy_data)
+    result = octo_create_profile(payload)
+    return True, result
+
 def octo_create_profile(payload):
     headers = {
         "X-Octo-Api-Token": OCTO_API_TOKEN,
@@ -8420,6 +8860,30 @@ def handle_message(msg):
                 tg_send_long_message(chat_id, str(full_profile))
             except Exception as e:
                 tg_send_long_message(chat_id, f"octofulltags error:\n{e}")
+            return
+
+        if text.startswith("/parsecryptoking "):
+            raw_value = text[len("/parsecryptoking "):].strip()
+            parsed = parse_crypto_king_raw_data(raw_value)
+        
+            answer = (
+                "PARSED CRYPTO KING\n\n"
+                f"GEO: {parsed.get('geo')}\n"
+                f"FB Login: {parsed.get('fb_login')}\n"
+                f"FB Password: {parsed.get('fb_password')}\n"
+                f"Email: {parsed.get('email')}\n"
+                f"Email Password: {parsed.get('email_password')}\n"
+                f"Service: {parsed.get('service')}\n"
+                f"2FA: {parsed.get('twofa')}\n"
+                f"User-Agent: {parsed.get('user_agent')}\n"
+                f"Cookies JSON found: {bool(parsed.get('cookies_json'))}\n"
+                f"Cookies links: {parsed.get('cookies_links')}\n"
+                f"Docs links: {parsed.get('docs_links')}\n"
+                f"BM links: {parsed.get('bm_links')}\n"
+                f"Extra pairs: {parsed.get('extra_pairs')}\n"
+            )
+        
+            tg_send_long_message(chat_id, answer)
             return
 
         if text == "/octodebug":
