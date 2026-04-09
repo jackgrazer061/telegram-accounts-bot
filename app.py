@@ -10588,23 +10588,6 @@ def handle_message(msg):
             send_person_menu(chat_id, DEPT_CRYPTO)
             return
 
-        if text == BTN_DOWNLOAD_CRYPTO_KING_TXT:
-            state = get_state(user_id)
-        
-            king_name = str(state.get("last_crypto_king_name", "")).strip()
-            data_text = str(state.get("last_crypto_king_data_text", "")).strip()
-        
-            if not king_name or not data_text:
-                tg_send_message(chat_id, "Нет данных для txt файла.")
-                return
-        
-            tg_send_king_data_as_txt(
-                chat_id=chat_id,
-                king_name=king_name,
-                data_text=data_text
-            )
-            return
-
 
         if state.get("mode") == "awaiting_crypto_king_for_whom":
             if text not in CRYPTO_NAMES:
@@ -11729,12 +11712,7 @@ def handle_message(msg):
                     "last_crypto_king_data_text": data_text,
                 })
         
-                keyboard = [
-                    [{"text": BTN_DOWNLOAD_CRYPTO_KING_TXT}],
-                    [{"text": BTN_CRYPTO_KING_BACK_TO_MENU}],
-                ]
-                
-                tg_send_message(
+                tg_send_inline_message(
                     chat_id,
                     f"Готово ✅\n\n"
                     f"Crypto king выдан.\n"
@@ -11743,19 +11721,19 @@ def handle_message(msg):
                     f"Цена: {row[2]}\n"
                     f"Гео: {parsed_crypto.get('geo', geo_value)}\n"
                     f"Octo профиль: {'создан✅' if octo_ok else 'ошибка❌'}",
-                    keyboard
+                    [[{
+                        "text": "📄 Скачать txt",
+                        "callback_data": f"download_crypto_txt:{user_id}"
+                    }]]
                 )
-
-                if parsed_crypto.get("cookies_json") and parsed_crypto.get("cookies_too_long_for_octo"):
+        
+                if not octo_ok and octo_msg:
+                    tg_send_long_message(chat_id, f"Ошибка Octo:\n{octo_msg}")
+        
+                if parsed_crypto.get("cookies_json"):
                     tg_send_message(
                         chat_id,
-                        "Куки слишком длинные, в Octo автоматически не вставлялись. "
-                        "Нажми «📄 Скачать txt» и вставь их вручную."
-                    )
-                elif parsed_crypto.get("cookies_json"):
-                    tg_send_message(
-                        chat_id,
-                        "Cookies JSON найден. Для надёжности проверь его вручную через «📄 Скачать txt»."
+                        "Куки слишком длинные, в Octo автоматически не вставлялись. Нажми «📄 Скачать txt» и вставь их вручную."
                     )
         
                 if parsed_crypto.get("bm_links"):
@@ -12142,6 +12120,30 @@ def handle_callback_query(callback_query):
                     "text": "Полная статистика",
                     "callback_data": f"fullstats_farmers:{username}"
                 }]]
+            )
+            return
+
+        if data.startswith("download_crypto_txt:"):
+            target_user_id = data.split(":", 1)[1]
+
+            if str(user_id) != str(target_user_id):
+                tg_answer_callback_query(callback_id, "Это не ваша кнопка")
+                return
+
+            state = get_state(user_id)
+
+            king_name = str(state.get("last_crypto_king_name", "")).strip()
+            data_text = str(state.get("last_crypto_king_data_text", "")).strip()
+
+            if not king_name or not data_text:
+                tg_answer_callback_query(callback_id, "Нет данных для txt файла")
+                return
+
+            tg_answer_callback_query(callback_id, "Отправляю txt...")
+            tg_send_king_data_as_txt(
+                chat_id=chat_id,
+                king_name=king_name,
+                data_text=data_text
             )
             return
 
