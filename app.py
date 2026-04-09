@@ -11613,33 +11613,44 @@ def handle_message(msg):
             return
 
         if state.get("mode") == "awaiting_crypto_king_octo_proxy":
-            proxy_raw = text.strip()
-            proxy_data = parse_proxy_input(proxy_raw)
-        
-            if not proxy_data:
-                send_text_input_prompt(
-                    chat_id,
-                    "Неверный формат proxy.\n\nИспользуй:\nip:port\nили\nip:port:login:password"
-                )
-                return
-        
-            king_row = state.get("king_row")
-            king_name = str(state.get("king_name", "")).strip()
-            king_for_whom = str(state.get("king_for_whom", "")).strip()
-            parsed_crypto = state.get("parsed_crypto", {}) or {}
-            geo_value = str(state.get("crypto_geo_value", "")).strip()
-            data_text = str(state.get("crypto_data_text", "")).strip()
-            sync_id = state.get("crypto_sync_id")
-            today = str(state.get("crypto_today", "")).strip()
-            who_took_text = str(state.get("crypto_who_took_text", "")).strip()
-        
-            if not king_row or not king_name or not king_for_whom:
-                clear_state(user_id)
-                send_kings_menu(chat_id, "Потеряны данные crypto king. Начни заново.")
-                return
-        
             try:
+                logging.info("CRYPTO_PROXY_STEP: entered")
+        
+                proxy_raw = text.strip()
+                logging.info(f"CRYPTO_PROXY_STEP: proxy_raw={proxy_raw}")
+        
+                proxy_data = parse_proxy_input(proxy_raw)
+                logging.info(f"CRYPTO_PROXY_STEP: proxy_data={proxy_data}")
+        
+                if not proxy_data:
+                    send_text_input_prompt(
+                        chat_id,
+                        "Неверный формат proxy.\n\nИспользуй:\nip:port\nили\nip:port:login:password"
+                    )
+                    return
+        
+                king_row = state.get("king_row")
+                king_name = str(state.get("king_name", "")).strip()
+                king_for_whom = str(state.get("king_for_whom", "")).strip()
+                parsed_crypto = state.get("parsed_crypto", {}) or {}
+                geo_value = str(state.get("crypto_geo_value", "")).strip()
+                data_text = str(state.get("crypto_data_text", "")).strip()
+                sync_id = state.get("crypto_sync_id")
+                today = str(state.get("crypto_today", "")).strip()
+                who_took_text = str(state.get("crypto_who_took_text", "")).strip()
+        
+                logging.info(
+                    f"CRYPTO_PROXY_STEP: king_row={king_row}, king_name={king_name}, "
+                    f"king_for_whom={king_for_whom}, sync_id={sync_id}"
+                )
+        
+                if not king_row or not king_name or not king_for_whom:
+                    clear_state(user_id)
+                    send_kings_menu(chat_id, "Потеряны данные crypto king. Начни заново.")
+                    return
+        
                 rows = get_sheet_rows_cached(SHEET_CRYPTO_KINGS, force=True)
+                logging.info(f"CRYPTO_PROXY_STEP: rows_count={len(rows)}")
         
                 if king_row - 1 >= len(rows):
                     clear_state(user_id)
@@ -11648,6 +11659,7 @@ def handle_message(msg):
         
                 row = ensure_row_len(rows[king_row - 1], 26)
                 status = str(row[4]).strip().lower()
+                logging.info(f"CRYPTO_PROXY_STEP: current_status={status}")
         
                 if status == "taken":
                     clear_state(user_id)
@@ -11664,8 +11676,12 @@ def handle_message(msg):
                     send_kings_menu(chat_id, "Этот crypto king недоступен.")
                     return
         
+                logging.info("CRYPTO_PROXY_STEP: before ensure_octo_profile_for_crypto_king")
+        
                 octo_ok = False
                 octo_msg = ""
+                octo_result = None
+        
                 try:
                     octo_ok, octo_result = ensure_octo_profile_for_crypto_king(
                         profile_name=king_name,
@@ -11673,9 +11689,12 @@ def handle_message(msg):
                         proxy_data=proxy_data
                     )
                     octo_msg = str(octo_result)
+                    logging.info(f"CRYPTO_PROXY_STEP: octo_ok={octo_ok}, octo_result={octo_result}")
                 except Exception as octo_error:
-                    logging.exception("Crypto king Octo profile create failed")
+                    logging.exception("CRYPTO_PROXY_STEP: Octo create crashed")
                     octo_msg = str(octo_error)
+        
+                logging.info("CRYPTO_PROXY_STEP: before sheet_update_and_refresh")
         
                 sheet_update_and_refresh(
                     SHEET_CRYPTO_KINGS,
@@ -11696,8 +11715,11 @@ def handle_message(msg):
                     ]]
                 )
         
+                logging.info("CRYPTO_PROXY_STEP: after sheet_update_and_refresh")
+        
                 if sync_id:
                     sync_status_to_basebot(BASEBOT_SHEET_CRYPTO_KINGS, sync_id, "taken")
+                    logging.info("CRYPTO_PROXY_STEP: after sync_status_to_basebot")
         
                 append_king_to_issues_sheet(
                     king_name=king_name,
@@ -11708,20 +11730,21 @@ def handle_message(msg):
                     for_whom=king_for_whom
                 )
         
+                logging.info("CRYPTO_PROXY_STEP: after append_king_to_issues_sheet")
+        
                 invalidate_stats_cache()
-                clear_state(user_id)
         
                 set_state(user_id, {
                     "mode": "crypto_king_issued",
                     "last_crypto_king_name": king_name,
                     "last_crypto_king_data_text": data_text,
                 })
-                
+        
                 keyboard = [
                     [{"text": BTN_DOWNLOAD_CRYPTO_KING_TXT}],
                     [{"text": MENU_TO_MENU}]
                 ]
-                
+        
                 tg_send_message(
                     chat_id,
                     f"Готово ✅\n\n"
@@ -11739,14 +11762,14 @@ def handle_message(msg):
                         chat_id,
                         "По этому crypto king ещё есть BM ссылки:\n\n" + "\n".join(parsed_crypto["bm_links"])
                     )
-                
+        
                 if parsed_crypto.get("cookies_links"):
                     tg_send_long_message(
                         chat_id,
                         "Cookies даны ссылкой. Импорт в профиль нужно сделать вручную:\n\n" +
                         "\n".join(parsed_crypto["cookies_links"])
                     )
-                
+        
                 if parsed_crypto.get("docs_links"):
                     tg_send_long_message(
                         chat_id,
