@@ -252,6 +252,7 @@ SUBMENU_CRYPTO_KINGS = 'Крипта кинги'
 ADMIN_ADD_CRYPTO_KINGS = 'Добавить crypto king'
 
 BTN_DOWNLOAD_CRYPTO_KING_TXT = "📄 Скачать txt"
+BTN_CRYPTO_KING_BACK_TO_MENU = "📘 В меню"
 
 ADMIN_ADD_ACCOUNTS = 'Добавить лички'
 ADMIN_ADD_KINGS = 'Добавить кинги'
@@ -2554,22 +2555,23 @@ def count_free_fp_in_warehouse(warehouse_name):
 def notify_admin_fp_warehouse_finished(warehouse_name):
     next_warehouse = get_next_fp_warehouse_name(warehouse_name)
 
-    octo_tag_result = ""
     if next_warehouse:
-        ok, msg = tag_next_octo_fp_warehouse(
-            next_warehouse_name=next_warehouse,
-            tag_name=OCTO_TAG_ACCOUNT_MANAGERS
-        )
-        octo_tag_result = (
-            f"\nOcto тег AccountManagers: {'OK' if ok else 'ERROR'}"
-            f"\nДетали: {msg}"
+        ok, msg = octo_update_profile_tags_by_title(
+            profile_title=next_warehouse,
+            tags_to_add=["Sido", "corby", OCTO_TAG_ACCOUNT_MANAGERS]
         )
 
-        text = (
-            f"Склад {warehouse_name} закончился.\n"
-            f"Нужно открыть доступ к складу {next_warehouse}."
-            f"{octo_tag_result}"
-        )
+        if ok:
+            text = (
+                f"Склад {warehouse_name} закончился.\n"
+                f"Успешно тегнул на {next_warehouse}✅"
+            )
+        else:
+            text = (
+                f"Склад {warehouse_name} закончился.\n"
+                f"Не удалось тегнуть на {next_warehouse}❌\n"
+                f"Детали: {msg}"
+            )
     else:
         text = (
             f"Склад {warehouse_name} закончился.\n"
@@ -2649,22 +2651,23 @@ def get_current_open_farm_fp_warehouse():
 def notify_admin_farm_fp_warehouse_finished(warehouse_name):
     next_warehouse = get_next_farm_fp_warehouse_name(warehouse_name)
 
-    octo_tag_result = ""
     if next_warehouse:
-        ok, msg = tag_next_octo_fp_warehouse(
-            next_warehouse_name=next_warehouse,
-            tag_name=OCTO_TAG_FARMERS
-        )
-        octo_tag_result = (
-            f"\nOcto тег Farmers: {'OK' if ok else 'ERROR'}"
-            f"\nДетали: {msg}"
+        ok, msg = octo_update_profile_tags_by_title(
+            profile_title=next_warehouse,
+            tags_to_add=["Sido", "corby", OCTO_TAG_FARMERS]
         )
 
-        text = (
-            f"Склад {warehouse_name} закончился.\n"
-            f"Нужно открыть доступ к складу {next_warehouse}."
-            f"{octo_tag_result}"
-        )
+        if ok:
+            text = (
+                f"Склад {warehouse_name} закончился.\n"
+                f"Успешно тегнул на {next_warehouse}✅"
+            )
+        else:
+            text = (
+                f"Склад {warehouse_name} закончился.\n"
+                f"Не удалось тегнуть на {next_warehouse}❌\n"
+                f"Детали: {msg}"
+            )
     else:
         text = (
             f"Склад {warehouse_name} закончился.\n"
@@ -8555,19 +8558,6 @@ def build_crypto_king_octo_payload(profile_name, parsed, proxy_data=None):
             {"url": "https://2fa.cn"}
         ]
 
-    user_agent = str(parsed.get("user_agent", "")).strip()
-    if user_agent:
-        payload["fingerprint"] = {
-            "os": "win",
-            "navigator": {
-                "user_agent": user_agent
-            }
-        }
-    else:
-        payload["fingerprint"] = {
-            "os": "win"
-        }
-
     return payload
 
 
@@ -9101,6 +9091,11 @@ def handle_message(msg):
         if text == BTN_BACK_FROM_ACCOUNTANTS:
             clear_state(user_id)
             send_admin_menu(chat_id)
+            return
+
+        if text == BTN_CRYPTO_KING_BACK_TO_MENU:
+            clear_state(user_id)
+            send_main_menu(chat_id, "Главное меню:", user_id=user_id)
             return
 
         if text == MENU_ACCOUNTS:
@@ -11734,9 +11729,9 @@ def handle_message(msg):
         
                 keyboard = [
                     [{"text": BTN_DOWNLOAD_CRYPTO_KING_TXT}],
-                    [{"text": "📘 В меню"}]
+                    [{"text": BTN_CRYPTO_KING_BACK_TO_MENU}],
                 ]
-        
+                
                 tg_send_message(
                     chat_id,
                     f"Готово ✅\n\n"
@@ -11745,8 +11740,8 @@ def handle_message(msg):
                     f"Для кого: {king_for_whom}\n"
                     f"Цена: {row[2]}\n"
                     f"Гео: {parsed_crypto.get('geo', geo_value)}\n"
-                    f"Octo профиль: {'создан✅' if octo_ok else 'ошибка❌'}\n"
-                    f"Детали Octo: {octo_msg}"
+                    f"Octo профиль: {'создан✅' if octo_ok else 'ошибка❌'}",
+                    keyboard
                 )
 
                 if parsed_crypto.get("cookies_json") and parsed_crypto.get("cookies_too_long_for_octo"):
