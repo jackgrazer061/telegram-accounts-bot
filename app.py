@@ -9330,6 +9330,11 @@ def handle_message(msg):
             send_add_kings_instructions(chat_id)
             return
 
+        if text == "📘 В меню":
+            clear_state(user_id)
+            send_main_menu(chat_id, "Главное меню:", user_id=user_id)
+            return
+
         if text == ADMIN_ADD_FARM_BMS:
             if not is_admin(user_id):
                 tg_send_message(chat_id, "У вас нет доступа.")
@@ -11742,7 +11747,7 @@ def handle_message(msg):
         
                 keyboard = [
                     [{"text": BTN_DOWNLOAD_CRYPTO_KING_TXT}],
-                    [{"text": MENU_TO_MENU}]
+                    [{"text": "📘 В меню"}]
                 ]
         
                 tg_send_message(
