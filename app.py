@@ -4570,14 +4570,22 @@ def _extract_fb_password_value(text):
 
 
 def _extract_email_from_email_block(text):
-    m = re.search(r"Email\s*-\s*([^;\s]+)", text, re.IGNORECASE)
+    m = re.search(
+        r"Email\s*-\s*([A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,})",
+        text,
+        re.IGNORECASE
+    )
     if m:
         return m.group(1).strip()
     return ""
 
 
 def _extract_email_password_from_email_block(text):
-    m = re.search(r"Email\s*-\s*[^:;\s]+[:;]([^\s;]+)", text, re.IGNORECASE)
+    m = re.search(
+        r"Email\s*-\s*[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\s*[:;]\s*([^\s;]+)",
+        text,
+        re.IGNORECASE
+    )
     if m:
         return m.group(1).strip()
     return ""
