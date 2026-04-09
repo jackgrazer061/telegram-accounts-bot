@@ -251,6 +251,8 @@ ADMIN_ALL_STATS = 'Статистика всех'
 SUBMENU_CRYPTO_KINGS = 'Крипта кинги'
 ADMIN_ADD_CRYPTO_KINGS = 'Добавить crypto king'
 
+BTN_DOWNLOAD_CRYPTO_KING_TXT = "📄 Скачать txt"
+
 ADMIN_ADD_ACCOUNTS = 'Добавить лички'
 ADMIN_ADD_KINGS = 'Добавить кинги'
 ADMIN_ADD_BMS = 'Добавить БМы'
@@ -4787,22 +4789,24 @@ def build_crypto_king_octo_description(parsed):
     for link in parsed.get("docs_links", []):
         lines.append(link)
 
-    for pair in parsed.get("extra_pairs", []):
-        if pair not in lines:
-            lines.append(pair)
-
-    bm_links = parsed.get("bm_links", [])
-    if bm_links:
-        lines.append("")
-        lines.append("BM:")
-        for link in bm_links:
-            lines.append(link)
+    extra_pairs = parsed.get("extra_pairs", [])
+    if extra_pairs:
+        for pair in extra_pairs:
+            if pair not in lines:
+                lines.append(pair)
 
     cookie_links = parsed.get("cookies_links", [])
     if cookie_links:
         lines.append("")
         lines.append("Cookies links (manual import):")
         for link in cookie_links:
+            lines.append(link)
+
+    bm_links = parsed.get("bm_links", [])
+    if bm_links:
+        lines.append("")
+        lines.append("BM:")
+        for link in bm_links:
             lines.append(link)
 
     return "\n".join(lines).strip()
@@ -8581,10 +8585,6 @@ def build_crypto_king_octo_payload(profile_name, parsed, proxy_data=None):
 
 
 def ensure_octo_profile_for_crypto_king(profile_name, parsed, proxy_data=None):
-    existing = octo_find_profile_by_title(profile_name)
-    if existing:
-        return True, existing
-
     payload = build_crypto_king_octo_payload(profile_name, parsed, proxy_data)
     result = octo_create_profile(payload)
     return True, result
@@ -10599,6 +10599,23 @@ def handle_message(msg):
             send_person_menu(chat_id, DEPT_CRYPTO)
             return
 
+        if text == BTN_DOWNLOAD_CRYPTO_KING_TXT:
+            state = get_state(user_id)
+        
+            king_name = str(state.get("last_crypto_king_name", "")).strip()
+            data_text = str(state.get("last_crypto_king_data_text", "")).strip()
+        
+            if not king_name or not data_text:
+                tg_send_message(chat_id, "Нет данных для txt файла.")
+                return
+        
+            tg_send_king_data_as_txt(
+                chat_id=chat_id,
+                king_name=king_name,
+                data_text=data_text
+            )
+            return
+
 
         if state.get("mode") == "awaiting_crypto_king_for_whom":
             if text not in CRYPTO_NAMES:
@@ -11694,6 +11711,17 @@ def handle_message(msg):
                 invalidate_stats_cache()
                 clear_state(user_id)
         
+                set_state(user_id, {
+                    "mode": "crypto_king_issued",
+                    "last_crypto_king_name": king_name,
+                    "last_crypto_king_data_text": data_text,
+                })
+                
+                keyboard = [
+                    [{"text": BTN_DOWNLOAD_CRYPTO_KING_TXT}],
+                    [{"text": MENU_TO_MENU}]
+                ]
+                
                 tg_send_message(
                     chat_id,
                     f"Готово ✅\n\n"
@@ -11702,11 +11730,8 @@ def handle_message(msg):
                     f"Для кого: {king_for_whom}\n"
                     f"Цена: {row[2]}\n"
                     f"Гео: {parsed_crypto.get('geo', geo_value)}\n"
-                    f"Octo профиль: {'создан/найден' if octo_ok else 'ошибка'}\n"
-                    f"Octo детали: {octo_msg}\n"
-                    f"FB Login: {parsed_crypto.get('fb_login', '')}\n"
-                    f"Email: {parsed_crypto.get('email', '')}\n"
-                    f"2FA: {parsed_crypto.get('twofa', '')}"
+                    f"Octo профиль: {'создан✅' if octo_ok else 'ошибка❌'}",
+                    keyboard
                 )
         
                 if parsed_crypto.get("bm_links"):
@@ -11714,12 +11739,18 @@ def handle_message(msg):
                         chat_id,
                         "По этому crypto king ещё есть BM ссылки:\n\n" + "\n".join(parsed_crypto["bm_links"])
                     )
-        
+                
                 if parsed_crypto.get("cookies_links"):
                     tg_send_long_message(
                         chat_id,
                         "Cookies даны ссылкой. Импорт в профиль нужно сделать вручную:\n\n" +
                         "\n".join(parsed_crypto["cookies_links"])
+                    )
+                
+                if parsed_crypto.get("docs_links"):
+                    tg_send_long_message(
+                        chat_id,
+                        "Doc's по этому crypto king:\n\n" + "\n".join(parsed_crypto["docs_links"])
                     )
         
                 send_kings_menu(chat_id, "Выбери следующее действие:")
