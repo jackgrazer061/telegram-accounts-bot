@@ -8538,6 +8538,14 @@ def build_crypto_king_octo_payload(profile_name, parsed, proxy_data=None):
         "title": profile_name,
         "tags": [OCTO_TAG_SIDO, OCTO_TAG_CORBY, OCTO_TAG_ACCOUNT_MANAGERS],
         "description": build_crypto_king_octo_description(parsed),
+        "fingerprint": {
+            "os": "win"
+        },
+        "start_pages": ["https://www.facebook.com"],
+        "bookmarks": [
+            {"url": "https://www.facebook.com"},
+            {"url": "https://2fa.cn"}
+        ]
     }
 
     if proxy_data:
@@ -8551,12 +8559,6 @@ def build_crypto_king_octo_payload(profile_name, parsed, proxy_data=None):
 
     if OCTO_FP_TEMPLATE_ID:
         payload["template_id"] = OCTO_FP_TEMPLATE_ID
-    else:
-        payload["start_pages"] = ["https://www.facebook.com"]
-        payload["bookmarks"] = [
-            {"url": "https://www.facebook.com"},
-            {"url": "https://2fa.cn"}
-        ]
 
     return payload
 
