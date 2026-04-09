@@ -6934,7 +6934,7 @@ def confirm_crypto_king_issue(chat_id, user_id, username):
                 send_kings_menu(chat_id, "Сначала выбери crypto king заново.")
                 return
 
-            king_for_whom = state.get("king_for_whom", "").strip()
+            king_for_whom = str(state.get("king_for_whom", "")).strip()
             if not king_for_whom:
                 clear_state(user_id)
                 send_kings_menu(chat_id, "Не найдено для кого выдавать crypto king. Начни заново.")
@@ -6953,8 +6953,7 @@ def confirm_crypto_king_issue(chat_id, user_id, username):
                 send_kings_menu(chat_id, "Crypto king не найден в таблице. Начни заново.")
                 return
 
-            row = rows[row_index - 1]
-            row = ensure_row_len(row, 26)
+            row = ensure_row_len(rows[row_index - 1], 26)
             sync_id = row[25]
 
             status = str(row[4]).strip().lower()
@@ -6993,103 +6992,46 @@ def confirm_crypto_king_issue(chat_id, user_id, username):
             geo_value = str(row[7]).strip()
             data_text = get_full_king_data_from_row(row)
 
-            # -------- PARSE CRYPTO KING DATA --------
             parsed_crypto = parse_crypto_king_raw_data(data_text)
 
-            # если гео не распарсилось, берём из таблицы
             if not parsed_crypto.get("geo") and geo_value:
                 parsed_crypto["geo"] = geo_value
 
-            # -------- OCTO CREATE/FIND --------
-            octo_ok = False
-            octo_msg = ""
-            try:
-                octo_ok, octo_result = ensure_octo_profile_for_crypto_king(
-                    profile_name=king_name,
-                    parsed=parsed_crypto,
-                    proxy_data=None
-                )
-                octo_msg = str(octo_result)
-            except Exception as octo_error:
-                logging.exception("Crypto king Octo profile create failed")
-                octo_msg = str(octo_error)
+            set_state(user_id, {
+                "mode": "awaiting_crypto_king_octo_proxy",
+                "king_row": row_index,
+                "king_name": king_name,
+                "king_for_whom": king_for_whom,
+                "parsed_crypto": parsed_crypto,
+                "crypto_geo_value": geo_value,
+                "crypto_data_text": data_text,
+                "crypto_sync_id": sync_id,
+                "crypto_today": today,
+                "crypto_who_took_text": who_took_text,
+            })
 
-            # -------- UPDATE TABLE --------
-            sheet_update_and_refresh(
-                SHEET_CRYPTO_KINGS,
-                f"A{row_index}:L{row_index}",
-                [[
-                    king_name,
-                    row[1],
-                    row[2],
-                    row[3],
-                    "taken",
-                    king_for_whom,
-                    today,
-                    geo_value,
-                    who_took_text,
-                    row[9],
-                    row[10],
-                    row[11]
-                ]]
-            )
-
-            if sync_id:
-                sync_status_to_basebot(BASEBOT_SHEET_CRYPTO_KINGS, sync_id, "taken")
-
-            append_king_to_issues_sheet(
-                king_name=king_name,
-                purchase_date=row[1],
-                price=row[2],
-                transfer_date=today,
-                supplier=row[3],
-                for_whom=king_for_whom
-            )
-
-            invalidate_stats_cache()
-            clear_state(user_id)
-
-        # -------- SEND MESSAGES AFTER LOCK --------
         tg_send_message(
             chat_id,
-            f"Готово ✅\n\n"
-            f"Crypto king выдан.\n"
+            f"Crypto king подготовлен к выдаче.\n\n"
             f"Название: {king_name}\n"
             f"Для кого: {king_for_whom}\n"
             f"Цена: {row[2]}\n"
             f"Гео: {parsed_crypto.get('geo', geo_value)}\n"
-            f"Octo профиль: {'создан/найден' if octo_ok else 'ошибка'}\n"
-            f"Octo детали: {octo_msg}\n"
             f"FB Login: {parsed_crypto.get('fb_login', '')}\n"
             f"Email: {parsed_crypto.get('email', '')}\n"
             f"2FA: {parsed_crypto.get('twofa', '')}"
         )
 
-        if parsed_crypto.get("bm_links"):
-            tg_send_long_message(
-                chat_id,
-                "По этому crypto king ещё есть BM ссылки:\n\n" + "\n".join(parsed_crypto["bm_links"])
-            )
-
-        if parsed_crypto.get("cookies_links"):
-            tg_send_long_message(
-                chat_id,
-                "Cookies даны ссылкой. Импорт в профиль нужно сделать вручную:\n\n" +
-                "\n".join(parsed_crypto["cookies_links"])
-            )
-
-        # ВРЕМЕННО txt-файл не отправляем, чтобы проверить Octo-выдачу
-        # tg_send_king_data_as_txt(
-        #     chat_id=chat_id,
-        #     king_name=king_name,
-        #     data_text=data_text
-        # )
-
-        send_kings_menu(chat_id, "Выбери следующее действие:")
+        send_text_input_prompt(
+            chat_id,
+            f"Теперь пришли proxy для Octo профиля crypto king:\n{king_name}\n\n"
+            f"Формат:\nip:port\nили\nip:port:login:password"
+        )
+        return
 
     except Exception as e:
         logging.exception("confirm_crypto_king_issue crashed")
-        tg_send_message(chat_id, "Ошибка выдачи crypto king. Попробуй ещё раз.")
+        tg_send_message(chat_id, "Ошибка подготовки выдачи crypto king. Попробуй ещё раз.")
         send_kings_menu(chat_id, "Меню кингов:")
 
 def append_king_to_issues_sheet(king_name, purchase_date, price, transfer_date, supplier, for_whom):
@@ -11652,6 +11594,143 @@ def handle_message(msg):
             clear_state(user_id)
             send_farm_fps_menu(chat_id, message)
             return
+
+        if state.get("mode") == "awaiting_crypto_king_octo_proxy":
+            proxy_raw = text.strip()
+            proxy_data = parse_proxy_input(proxy_raw)
+        
+            if not proxy_data:
+                send_text_input_prompt(
+                    chat_id,
+                    "Неверный формат proxy.\n\nИспользуй:\nip:port\nили\nip:port:login:password"
+                )
+                return
+        
+            king_row = state.get("king_row")
+            king_name = str(state.get("king_name", "")).strip()
+            king_for_whom = str(state.get("king_for_whom", "")).strip()
+            parsed_crypto = state.get("parsed_crypto", {}) or {}
+            geo_value = str(state.get("crypto_geo_value", "")).strip()
+            data_text = str(state.get("crypto_data_text", "")).strip()
+            sync_id = state.get("crypto_sync_id")
+            today = str(state.get("crypto_today", "")).strip()
+            who_took_text = str(state.get("crypto_who_took_text", "")).strip()
+        
+            if not king_row or not king_name or not king_for_whom:
+                clear_state(user_id)
+                send_kings_menu(chat_id, "Потеряны данные crypto king. Начни заново.")
+                return
+        
+            try:
+                rows = get_sheet_rows_cached(SHEET_CRYPTO_KINGS, force=True)
+        
+                if king_row - 1 >= len(rows):
+                    clear_state(user_id)
+                    send_kings_menu(chat_id, "Crypto king не найден в таблице. Начни заново.")
+                    return
+        
+                row = ensure_row_len(rows[king_row - 1], 26)
+                status = str(row[4]).strip().lower()
+        
+                if status == "taken":
+                    clear_state(user_id)
+                    send_kings_menu(chat_id, "Этот crypto king уже занят.")
+                    return
+        
+                if status == "ban":
+                    clear_state(user_id)
+                    send_kings_menu(chat_id, "Этот crypto king уже в ban.")
+                    return
+        
+                if status != "free":
+                    clear_state(user_id)
+                    send_kings_menu(chat_id, "Этот crypto king недоступен.")
+                    return
+        
+                octo_ok = False
+                octo_msg = ""
+                try:
+                    octo_ok, octo_result = ensure_octo_profile_for_crypto_king(
+                        profile_name=king_name,
+                        parsed=parsed_crypto,
+                        proxy_data=proxy_data
+                    )
+                    octo_msg = str(octo_result)
+                except Exception as octo_error:
+                    logging.exception("Crypto king Octo profile create failed")
+                    octo_msg = str(octo_error)
+        
+                sheet_update_and_refresh(
+                    SHEET_CRYPTO_KINGS,
+                    f"A{king_row}:L{king_row}",
+                    [[
+                        king_name,
+                        row[1],
+                        row[2],
+                        row[3],
+                        "taken",
+                        king_for_whom,
+                        today,
+                        geo_value,
+                        who_took_text,
+                        row[9],
+                        row[10],
+                        row[11]
+                    ]]
+                )
+        
+                if sync_id:
+                    sync_status_to_basebot(BASEBOT_SHEET_CRYPTO_KINGS, sync_id, "taken")
+        
+                append_king_to_issues_sheet(
+                    king_name=king_name,
+                    purchase_date=row[1],
+                    price=row[2],
+                    transfer_date=today,
+                    supplier=row[3],
+                    for_whom=king_for_whom
+                )
+        
+                invalidate_stats_cache()
+                clear_state(user_id)
+        
+                tg_send_message(
+                    chat_id,
+                    f"Готово ✅\n\n"
+                    f"Crypto king выдан.\n"
+                    f"Название: {king_name}\n"
+                    f"Для кого: {king_for_whom}\n"
+                    f"Цена: {row[2]}\n"
+                    f"Гео: {parsed_crypto.get('geo', geo_value)}\n"
+                    f"Octo профиль: {'создан/найден' if octo_ok else 'ошибка'}\n"
+                    f"Octo детали: {octo_msg}\n"
+                    f"FB Login: {parsed_crypto.get('fb_login', '')}\n"
+                    f"Email: {parsed_crypto.get('email', '')}\n"
+                    f"2FA: {parsed_crypto.get('twofa', '')}"
+                )
+        
+                if parsed_crypto.get("bm_links"):
+                    tg_send_long_message(
+                        chat_id,
+                        "По этому crypto king ещё есть BM ссылки:\n\n" + "\n".join(parsed_crypto["bm_links"])
+                    )
+        
+                if parsed_crypto.get("cookies_links"):
+                    tg_send_long_message(
+                        chat_id,
+                        "Cookies даны ссылкой. Импорт в профиль нужно сделать вручную:\n\n" +
+                        "\n".join(parsed_crypto["cookies_links"])
+                    )
+        
+                send_kings_menu(chat_id, "Выбери следующее действие:")
+                return
+        
+            except Exception as e:
+                logging.exception("awaiting_crypto_king_octo_proxy crashed")
+                clear_state(user_id)
+                tg_send_message(chat_id, "Ошибка выдачи crypto king. Попробуй ещё раз.")
+                send_kings_menu(chat_id, "Меню кингов:")
+                return
 
         if state.get("mode") == "awaiting_octo_proxy_for_warehouse":
             proxy_raw = text.strip()
