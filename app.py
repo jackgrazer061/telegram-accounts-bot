@@ -4592,6 +4592,7 @@ def _extract_email_password_from_email_block(text):
 
 
 def _extract_docs_links(text):
+    text = str(text or "")
     docs = []
 
     m = re.search(
@@ -4602,15 +4603,25 @@ def _extract_docs_links(text):
     if m:
         docs.append(m.group(1).strip())
 
-    for pattern in [
-        r"\bAVA\s+(https?://[^\s]+)",
-        r"\bDOC\s+(https?://[^\s]+)",
-        r"\bzrd\s*=\s*(https?://[^\s]+)",
-    ]:
-        for mm in re.finditer(pattern, text, re.IGNORECASE):
-            val = mm.group(1).strip()
-            if val not in docs:
-                docs.append(val)
+    for mm in re.finditer(r"\bAVA\s+(https?://[^\s]+)", text, re.IGNORECASE):
+        val = mm.group(1).strip()
+        if val not in docs:
+            docs.append(val)
+
+    for mm in re.finditer(r"\bDOC\s+(https?://[^\s]+)", text, re.IGNORECASE):
+        val = mm.group(1).strip()
+        if val not in docs:
+            docs.append(val)
+
+    for mm in re.finditer(r"\bzrd\s*=\s*(https?://[^\s]+)", text, re.IGNORECASE):
+        val = mm.group(1).strip()
+        if val not in docs:
+            docs.append(val)
+
+    for mm in re.finditer(r"https?://drive\.google\.com/[^\s]+", text, re.IGNORECASE):
+        val = mm.group(0).strip()
+        if val not in docs:
+            docs.append(val)
 
     return docs
 
@@ -4618,10 +4629,12 @@ def _extract_docs_links(text):
 def _extract_bm_links(text):
     urls = _extract_all_urls(text)
     result = []
+
     for url in urls:
-        if "business.facebook.com" in url:
+        if "business.facebook.com/invitation/" in url or "business.facebook.com/settings/" in url:
             if url not in result:
                 result.append(url)
+
     return result
 
 
