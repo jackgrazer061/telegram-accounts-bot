@@ -1290,6 +1290,36 @@ def make_safe_txt_filename(name, default_name="king"):
 
     return safe[:120]
 
+import io
+import zipfile
+
+def tg_send_kings_as_zip(chat_id, issued_items, archive_name="kings_bundle.zip"):
+    memory_file = io.BytesIO()
+
+    with zipfile.ZipFile(memory_file, mode="w", compression=zipfile.ZIP_DEFLATED) as zf:
+        for item in issued_items:
+            king_name = str(item.get("king_name", "")).strip() or "king"
+            data_text = str(item.get("data_text", "") or "")
+
+            safe_name = "".join(ch if ch.isalnum() or ch in ("_", "-", ".") else "_" for ch in king_name)
+            filename = f"{safe_name}.txt"
+
+            zf.writestr(filename, data_text)
+
+    memory_file.seek(0)
+
+    files = {
+        "document": (archive_name, memory_file.getvalue(), "application/zip")
+    }
+
+    data = {
+        "chat_id": str(chat_id)
+    }
+
+    url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendDocument"
+    resp = requests.post(url, data=data, files=files, timeout=120)
+    resp.raise_for_status()
+    return resp.json()
 
 def tg_send_king_data_as_txt(chat_id, king_name, data_text, caption=None):
     text = str(data_text or "").strip()
@@ -6863,35 +6893,60 @@ def issue_kings_bulk(chat_id, user_id, username, king_names):
             clear_state(user_id)
 
         # 5. Отправка сообщений уже вне lock
-        txt_failed = []
-
-        for item in issued_items:
-            try:
-                tg_send_message(
-                    chat_id,
-                    f"Готово ✅\n\n"
-                    f"Кинг выдан.\n"
-                    f"Название: {item['king_name']}\n"
-                    f"Для кого: {king_for_whom}\n"
-                    f"Цена: {item['price']}\n"
-                    f"Гео: {item['geo']}"
-                )
-
-                tg_send_king_data_as_txt(
-                    chat_id=chat_id,
-                    king_name=item["king_name"],
-                    data_text=item["data_text"]
-                )
-            except Exception:
-                logging.exception(f"issue_kings_bulk send failed for {item['king_name']}")
-                txt_failed.append(item["king_name"])
-
-        if txt_failed:
+        try:
             tg_send_message(
                 chat_id,
-                "Эти кинги выданы, но txt не удалось отправить:\n" + "\n".join(txt_failed[:20])
+                f"Готово ✅\n\n"
+                f"Выдано кингов: {len(issued_items)}\n"
+                f"Для кого: {king_for_whom}"
             )
-
+        except Exception:
+            logging.exception("issue_kings_bulk summary send failed")
+        
+        if len(issued_items) > 5:
+            try:
+                archive_name = f"kings_{king_for_whom}_{datetime.now(MOSCOW_TZ).strftime('%Y%m%d_%H%M%S')}.zip"
+                tg_send_kings_as_zip(
+                    chat_id=chat_id,
+                    issued_items=issued_items,
+                    archive_name=archive_name
+                )
+            except Exception:
+                logging.exception("issue_kings_bulk zip send failed")
+                tg_send_message(
+                    chat_id,
+                    "Кинги выданы, но zip-архив не удалось отправить."
+                )
+        else:
+            txt_failed = []
+        
+            for item in issued_items:
+                try:
+                    tg_send_message(
+                        chat_id,
+                        f"Готово ✅\n\n"
+                        f"Кинг выдан.\n"
+                        f"Название: {item['king_name']}\n"
+                        f"Для кого: {king_for_whom}\n"
+                        f"Цена: {item['price']}\n"
+                        f"Гео: {item['geo']}"
+                    )
+        
+                    tg_send_king_data_as_txt(
+                        chat_id=chat_id,
+                        king_name=item["king_name"],
+                        data_text=item["data_text"]
+                    )
+                except Exception:
+                    logging.exception(f"issue_kings_bulk send failed for {item['king_name']}")
+                    txt_failed.append(item["king_name"])
+        
+            if txt_failed:
+                tg_send_message(
+                    chat_id,
+                    "Эти кинги выданы, но txt не удалось отправить:\n" + "\n".join(txt_failed[:20])
+                )
+        
         send_kings_menu(chat_id, "Выбери следующее действие:")
 
     except Exception as e:
