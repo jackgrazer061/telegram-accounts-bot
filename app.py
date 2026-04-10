@@ -1853,7 +1853,7 @@ def add_kings_from_txt_content(file_text, target_sheet=SHEET_KINGS):
 
     return message
 
-def add_bms_from_txt_content(file_text):
+def add_bms_from_txt_content(file_text, target_sheet=SHEET_BMS):
     rows, errors = parse_bms_txt(file_text)
 
     if not rows:
@@ -1882,27 +1882,41 @@ def add_bms_from_txt_content(file_text):
         to_append.append(row_to_add)
 
     if to_append:
-        sheet_append_rows_and_refresh(SHEET_BMS, to_append)
+        sheet_append_rows_and_refresh(target_sheet, to_append)
 
-        basebot_rows = []
-        for row in to_append:
-            basebot_rows.append([
-                "bm",     # тип
-                row[3],   # supplier
-                row[4],   # status
-                "",       # geo
-                row[8],   # data
-                "",       # data2
-                "",       # data3
-                row[9],   # sync_id (J)
-            ])
+        if target_sheet == SHEET_BMS:
+            basebot_sheet = BASEBOT_SHEET_BMS
+            bm_type = "bm"
+        elif target_sheet == SHEET_FARM_BMS:
+            basebot_sheet = BASEBOT_SHEET_FARM_BMS
+            bm_type = "farm bm"
+        else:
+            basebot_sheet = None
+            bm_type = "bm"
 
-        basebot_append_rows(BASEBOT_SHEET_BMS, basebot_rows)
+        if basebot_sheet:
+            basebot_rows = []
+            for row in to_append:
+                basebot_rows.append([
+                    bm_type,  # тип
+                    row[3],   # supplier
+                    row[4],   # status
+                    "",       # geo
+                    row[8],   # data
+                    "",       # data2
+                    "",       # data3
+                    row[9],   # sync_id (J)
+                ])
+
+            basebot_append_rows(basebot_sheet, basebot_rows)
+
         invalidate_stats_cache()
+
+    label = "farm BM" if target_sheet == SHEET_FARM_BMS else "BM"
 
     message = (
         f"Готово ✅\n"
-        f"Добавлено BM: {len(to_append)}\n"
+        f"Добавлено {label}: {len(to_append)}\n"
         f"Ошибок: {len(errors)}"
     )
 
