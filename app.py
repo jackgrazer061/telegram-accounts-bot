@@ -12042,8 +12042,6 @@ def handle_message(msg):
                             chat_id,
                             "Cookies автоматически не вставились. Нажми «📄 Скачать txt» и вставь их вручную."
                         )
-                        if cookies_msg:
-                            tg_send_long_message(chat_id, f"Детали cookies:\n{cookies_msg}")
         
                 if parsed_crypto.get("bm_links"):
                     tg_send_long_message(
@@ -12056,12 +12054,6 @@ def handle_message(msg):
                         chat_id,
                         "Cookies даны ссылкой. Импорт в профиль нужно сделать вручную:\n\n" +
                         "\n".join(parsed_crypto["cookies_links"])
-                    )
-        
-                if parsed_crypto.get("docs_links"):
-                    tg_send_long_message(
-                        chat_id,
-                        "Doc's по этому crypto king:\n\n" + "\n".join(parsed_crypto["docs_links"])
                     )
         
                 return
