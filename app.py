@@ -2306,14 +2306,94 @@ def add_fps_from_text(text, target_sheet=SHEET_FPS):
         "new_warehouses": new_warehouses
     }
 
+def parse_pixel_line(block_text):
+    text = str(block_text or "").strip()
+    if not text:
+        return None
+
+    lines = [x.strip() for x in text.splitlines() if x.strip()]
+    if len(lines) < 4:
+        return None
+
+    first_line = lines[0]
+    parts = [x.strip() for x in first_line.split(";")]
+    if len(parts) < 3:
+        return None
+
+    purchase_date = parts[0]
+    price = parts[1].replace(",", ".").strip()
+    supplier = parts[2]
+
+    pixel_name = ""
+    pixel_id = ""
+    token_lines = []
+    token_started = False
+
+    for line in lines[1:]:
+        low = line.lower()
+
+        if low.startswith("имя пикселя:"):
+            pixel_name = line.split(":", 1)[1].strip()
+            continue
+
+        if low.startswith("id пикселя:"):
+            pixel_id = line.split(":", 1)[1].strip()
+            continue
+
+        if "токен" in low and "capi" in low:
+            token_started = True
+            continue
+
+        if token_started:
+            token_lines.append(line)
+
+    token_capi = "\n".join(token_lines).strip()
+
+    data_parts = []
+    if pixel_name:
+        data_parts.append(f"Имя пикселя: {pixel_name}")
+    if pixel_id:
+        data_parts.append(f"ID пикселя: {pixel_id}")
+    if token_capi:
+        data_parts.append("Токен cAPI:")
+        data_parts.append(token_capi)
+
+    data_text = "\n".join(data_parts).strip()
+
+    return {
+        "purchase_date": purchase_date,
+        "price": price,
+        "supplier": supplier,
+        "data_text": data_text
+    }
+
 def add_pixels_from_text(file_text):
-    lines = [line.strip() for line in str(file_text or "").splitlines() if line.strip()]
+    text = str(file_text or "").strip()
+    if not text:
+        return "Ничего не добавил. Пустой текст."
+
+    raw_lines = [line.rstrip() for line in text.splitlines()]
+
+    blocks = []
+    current_block = []
+
+    for line in raw_lines:
+        if line.strip():
+            if ";" in line and current_block:
+                blocks.append("\n".join(current_block).strip())
+                current_block = [line.strip()]
+            else:
+                current_block.append(line.strip())
+
+    if current_block:
+        blocks.append("\n".join(current_block).strip())
+
     errors = []
     to_append = []
 
-    for idx, line in enumerate(lines, start=1):
+    for idx, block in enumerate(blocks, start=1):
         try:
-            parsed = parse_pixel_line(line)
+            parsed = parse_pixel_line(block)
             if not parsed:
                 errors.append(f"Строка {idx}: не удалось разобрать пиксель")
                 continue
