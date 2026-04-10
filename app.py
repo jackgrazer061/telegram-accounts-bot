@@ -12,6 +12,7 @@ import gspread
 from google.oauth2.service_account import Credentials
 import threading
 import uuid
+import tempfile
 
 app = Flask(__name__)
 CORS(app)
@@ -8767,6 +8768,95 @@ def build_crypto_king_octo_payload(profile_name, parsed, proxy_data=None):
 
     return payload
 
+def normalize_crypto_cookies_for_import(cookies_raw):
+    raw = str(cookies_raw or "").strip()
+    if not raw:
+        return None
+
+    try:
+        parsed = json.loads(raw)
+        if isinstance(parsed, list):
+            return {
+                "format": "json",
+                "text": json.dumps(parsed, ensure_ascii=False)
+            }
+    except Exception:
+        pass
+
+    return {
+        "format": "txt",
+        "text": raw
+    }
+
+
+def save_crypto_cookies_temp_file(profile_name, cookies_payload):
+    safe_name = "".join(
+        ch if ch.isalnum() or ch in ("_", "-", ".") else "_"
+        for ch in str(profile_name or "profile")
+    )
+    suffix = ".json" if cookies_payload["format"] == "json" else ".txt"
+
+    tmp = tempfile.NamedTemporaryFile(
+        mode="w",
+        encoding="utf-8",
+        suffix=suffix,
+        prefix=f"{safe_name}_cookies_",
+        delete=False
+    )
+    tmp.write(cookies_payload["text"])
+    tmp.flush()
+    tmp.close()
+    return tmp.name
+
+
+def extract_octo_profile_uuid_from_result(result):
+    if not isinstance(result, dict):
+        return ""
+
+    data = result.get("data")
+    if isinstance(data, dict):
+        return str(data.get("uuid") or data.get("id") or "").strip()
+
+    return str(result.get("uuid") or result.get("id") or "").strip()
+
+
+def try_import_crypto_king_cookies(profile_uuid, cookies_payload):
+    profile_uuid = str(profile_uuid or "").strip()
+    if not profile_uuid:
+        return False, "profile_uuid пустой"
+
+    if not cookies_payload or not cookies_payload.get("text"):
+        return False, "cookies пустые"
+
+    temp_path = save_crypto_cookies_temp_file(profile_uuid, cookies_payload)
+
+    headers = {
+        "X-Octo-Api-Token": OCTO_API_TOKEN,
+    }
+
+    # ВАЖНО:
+    # если этот endpoint у тебя не совпадёт с реальным Octo API,
+    # просто замени URL, а остальная логика уже готова.
+    url = f"{OCTO_API_BASE}/profiles/{profile_uuid}/cookies/import"
+
+    with open(temp_path, "rb") as f:
+        files = {
+            "file": (
+                os.path.basename(temp_path),
+                f.read(),
+                "application/json" if cookies_payload["format"] == "json" else "text/plain"
+            )
+        }
+        resp = requests.post(url, headers=headers, files=files, timeout=120)
+
+    if resp.status_code >= 400:
+        try:
+            err = resp.json()
+        except Exception:
+            err = resp.text
+        return False, f"Octo cookie import error {resp.status_code}: {err}"
+
+    return True, "cookies imported"
 
 def ensure_octo_profile_for_crypto_king(profile_name, parsed, proxy_data=None):
     payload = build_crypto_king_octo_payload(profile_name, parsed, proxy_data)
@@ -11816,27 +11906,20 @@ def handle_message(msg):
                 today = str(state.get("crypto_today", "")).strip()
                 who_took_text = str(state.get("crypto_who_took_text", "")).strip()
         
-                logging.info(
-                    f"CRYPTO_PROXY_STEP: king_row={king_row}, king_name={king_name}, "
-                    f"king_for_whom={king_for_whom}, sync_id={sync_id}"
-                )
-        
                 if not king_row or not king_name or not king_for_whom:
                     clear_state(user_id)
                     send_kings_menu(chat_id, "Потеряны данные crypto king. Начни заново.")
                     return
         
                 rows = get_sheet_rows_cached(SHEET_CRYPTO_KINGS, force=True)
-                logging.info(f"CRYPTO_PROXY_STEP: rows_count={len(rows)}")
         
                 if king_row - 1 >= len(rows):
                     clear_state(user_id)
                     send_kings_menu(chat_id, "Crypto king не найден в таблице. Начни заново.")
                     return
         
-                row = ensure_row_len(rows[king_row - 1], 26)
+                row = ensure_row_len(rows[king_row - 1], 13)
                 status = str(row[4]).strip().lower()
-                logging.info(f"CRYPTO_PROXY_STEP: current_status={status}")
         
                 if status == "taken":
                     clear_state(user_id)
@@ -11853,11 +11936,14 @@ def handle_message(msg):
                     send_kings_menu(chat_id, "Этот crypto king недоступен.")
                     return
         
-                logging.info("CRYPTO_PROXY_STEP: before ensure_octo_profile_for_crypto_king")
-        
                 octo_ok = False
                 octo_msg = ""
                 octo_result = None
+                profile_uuid = ""
+        
+                cookies_ok = False
+                cookies_msg = ""
+                cookies_payload = None
         
                 try:
                     octo_ok, octo_result = ensure_octo_profile_for_crypto_king(
@@ -11871,7 +11957,23 @@ def handle_message(msg):
                     logging.exception("CRYPTO_PROXY_STEP: Octo create crashed")
                     octo_msg = str(octo_error)
         
-                logging.info("CRYPTO_PROXY_STEP: before sheet_update_and_refresh")
+                if octo_ok:
+                    try:
+                        profile_uuid = extract_octo_profile_uuid_from_result(octo_result)
+                        cookies_payload = normalize_crypto_cookies_for_import(
+                            parsed_crypto.get("cookies_json", "")
+                        )
+        
+                        if cookies_payload and profile_uuid:
+                            cookies_ok, cookies_msg = try_import_crypto_king_cookies(
+                                profile_uuid=profile_uuid,
+                                cookies_payload=cookies_payload
+                            )
+                        else:
+                            cookies_msg = "cookies не найдены или profile_uuid пустой"
+                    except Exception as cookies_error:
+                        logging.exception("CRYPTO_PROXY_STEP: cookies import crashed")
+                        cookies_msg = str(cookies_error)
         
                 sheet_update_and_refresh(
                     SHEET_CRYPTO_KINGS,
@@ -11892,11 +11994,8 @@ def handle_message(msg):
                     ]]
                 )
         
-                logging.info("CRYPTO_PROXY_STEP: after sheet_update_and_refresh")
-        
                 if sync_id:
                     sync_status_to_basebot(BASEBOT_SHEET_CRYPTO_KINGS, sync_id, "taken")
-                    logging.info("CRYPTO_PROXY_STEP: after sync_status_to_basebot")
         
                 append_king_to_issues_sheet(
                     king_name=king_name,
@@ -11906,8 +12005,6 @@ def handle_message(msg):
                     supplier=row[3],
                     for_whom=king_for_whom
                 )
-        
-                logging.info("CRYPTO_PROXY_STEP: after append_king_to_issues_sheet")
         
                 invalidate_stats_cache()
         
@@ -11935,11 +12032,16 @@ def handle_message(msg):
                 if not octo_ok and octo_msg:
                     tg_send_long_message(chat_id, f"Ошибка Octo:\n{octo_msg}")
         
-                if parsed_crypto.get("cookies_json"):
-                    tg_send_message(
-                        chat_id,
-                        "Куки слишком длинные, в Octo автоматически не вставлялись. Нажми «📄 Скачать txt» и вставь их вручную."
-                    )
+                if octo_ok:
+                    if cookies_ok:
+                        tg_send_message(chat_id, "Cookies: импортированы✅")
+                    else:
+                        tg_send_message(
+                            chat_id,
+                            "Cookies автоматически не вставились. Нажми «📄 Скачать txt» и вставь их вручную."
+                        )
+                        if cookies_msg:
+                            tg_send_long_message(chat_id, f"Детали cookies:\n{cookies_msg}")
         
                 if parsed_crypto.get("bm_links"):
                     tg_send_long_message(
