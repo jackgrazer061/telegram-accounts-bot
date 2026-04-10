@@ -3742,14 +3742,29 @@ def issue_farm_kings(chat_id, user_id, username, king_names):
         send_farm_kings_menu(chat_id, "Ошибка количества farm кингов. Начни заново.")
         return
 
+    # защита от дублей названий
+    duplicate_names = []
+    for name in king_names:
+        if farm_king_name_exists(name):
+            duplicate_names.append(name)
+
+    if duplicate_names:
+        clear_state(user_id)
+        tg_send_message(
+            chat_id,
+            "Эти названия уже существуют:\n" + "\n".join(duplicate_names[:20])
+        )
+        send_farm_kings_menu(chat_id, "Выдача отменена. Начни заново.")
+        return
+
     today = datetime.now(MOSCOW_TZ).strftime("%d/%m/%Y")
     who_took_text = f"@{username}" if username else "без username"
 
     issue_rows = []
-    messages = []
+    issued_items = []
 
     with issue_lock:
-        current_rows = get_sheet_rows_cached(SHEET_FARM_KINGS)
+        current_rows = get_sheet_rows_cached(SHEET_FARM_KINGS, force=True)
 
         for item, king_name in zip(selected_rows, king_names):
             row_index = item["row_index"]
@@ -3759,9 +3774,7 @@ def issue_farm_kings(chat_id, user_id, username, king_names):
                 send_farm_kings_menu(chat_id, "Ошибка: один из кингов пропал из таблицы.")
                 return
 
-            row = current_rows[row_index - 1]
-            row = ensure_row_len(row, 26)
-            sync_id = row[12]
+            row = ensure_row_len(current_rows[row_index - 1], 13)
 
             if str(row[4]).strip().lower() != "free":
                 clear_state(user_id)
@@ -3770,9 +3783,8 @@ def issue_farm_kings(chat_id, user_id, username, king_names):
 
         for item, king_name in zip(selected_rows, king_names):
             row_index = item["row_index"]
-            row = current_rows[row_index - 1]
-            if len(row) < 12:
-                row = row + [''] * (12 - len(row))
+            row = ensure_row_len(current_rows[row_index - 1], 13)
+            sync_id = row[12]
 
             sheet_update_raw(
                 SHEET_FARM_KINGS,
@@ -3803,11 +3815,13 @@ def issue_farm_kings(chat_id, user_id, username, king_names):
                 "farm"
             ])
 
-            full_data_text = get_full_king_data_from_row(row)
-
-            messages.append({
+            issued_items.append({
                 "king_name": king_name,
-                "data_text": full_data_text,
+                "purchase_date": row[1],
+                "price": row[2],
+                "supplier": row[3],
+                "geo": row[7],
+                "data_text": get_full_king_data_from_row(row),
                 "sync_id": sync_id
             })
 
@@ -3820,7 +3834,7 @@ def issue_farm_kings(chat_id, user_id, username, king_names):
                 value_input_option="USER_ENTERED"
             )
 
-        for item in messages:
+        for item in issued_items:
             if item["sync_id"]:
                 sync_status_to_basebot(BASEBOT_SHEET_FARM_KINGS, item["sync_id"], "taken")
 
@@ -3828,13 +3842,54 @@ def issue_farm_kings(chat_id, user_id, username, king_names):
 
     clear_state(user_id)
 
-    tg_send_message(chat_id, f"Готово ✅\n\nВыдано кингов: {len(king_names)}")
-    for item in messages:
-        tg_send_king_data_as_txt(
-            chat_id=chat_id,
-            king_name=item["king_name"],
-            data_text=item["data_text"]
+    try:
+        tg_send_message(
+            chat_id,
+            f"Готово ✅\n\n"
+            f"Выдано кингов: {len(issued_items)}"
         )
+    except Exception:
+        logging.exception("issue_farm_kings summary send failed")
+
+    if len(issued_items) > 5:
+        try:
+            archive_name = f"farm_kings_{datetime.now(MOSCOW_TZ).strftime('%Y%m%d_%H%M%S')}.zip"
+            tg_send_kings_as_zip(
+                chat_id=chat_id,
+                issued_items=issued_items,
+                archive_name=archive_name
+            )
+        except Exception:
+            logging.exception("issue_farm_kings zip send failed")
+            tg_send_message(chat_id, "Фарм кинги выданы, но zip-архив не удалось отправить.")
+    else:
+        txt_failed = []
+
+        for item in issued_items:
+            try:
+                tg_send_message(
+                    chat_id,
+                    f"Готово ✅\n\n"
+                    f"Кинг выдан.\n"
+                    f"Название: {item['king_name']}\n"
+                    f"Цена: {item['price']}\n"
+                    f"Гео: {item['geo']}"
+                )
+
+                tg_send_king_data_as_txt(
+                    chat_id=chat_id,
+                    king_name=item["king_name"],
+                    data_text=item["data_text"]
+                )
+            except Exception:
+                logging.exception(f"issue_farm_kings send failed for {item['king_name']}")
+                txt_failed.append(item["king_name"])
+
+        if txt_failed:
+            tg_send_message(
+                chat_id,
+                "Эти фарм кинги выданы, но txt не удалось отправить:\n" + "\n".join(txt_failed[:20])
+            )
 
     send_farm_kings_menu(chat_id, "Выбери следующее действие:")
 
