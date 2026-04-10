@@ -4884,6 +4884,7 @@ def build_crypto_king_octo_description(parsed):
         f"Email's Password: {parsed.get('email_password', '')}",
         f"Service: {parsed.get('service', '')}",
         f"2FA: {parsed.get('twofa', '')}",
+        f"User-Agent: {parsed.get('user_agent', '')}",
         "",
         "Doc's:",
     ]
@@ -12017,12 +12018,13 @@ def handle_message(msg):
                 tg_send_inline_message(
                     chat_id,
                     f"Готово ✅\n\n"
-                    f"Crypto king выдан.\n"
                     f"Название: {king_name}\n"
                     f"Для кого: {king_for_whom}\n"
                     f"Цена: {row[2]}\n"
                     f"Гео: {parsed_crypto.get('geo', geo_value)}\n"
-                    f"Octo профиль: {'создан✅' if octo_ok else 'ошибка❌'}",
+                    f"User-Agent: {parsed_crypto.get('user_agent', '')}\n"
+                    f"Octo профиль: {'создан✅' if octo_ok else 'ошибка❌'}\n\n"
+                    f"⚠️Вручную: выставь расширения, cookies и User-Agent⚠️",
                     [[{
                         "text": "📄 Скачать txt",
                         "callback_data": f"download_crypto_txt:{user_id}"
