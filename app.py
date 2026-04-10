@@ -2311,11 +2311,11 @@ def parse_pixel_line(block_text):
     if not text:
         return None
 
-    lines = [x.strip() for x in text.splitlines() if x.strip()]
-    if len(lines) < 4:
+    lines = [x.rstrip() for x in text.splitlines() if x.strip()]
+    if len(lines) < 2:
         return None
 
-    first_line = lines[0]
+    first_line = lines[0].strip()
     parts = [x.strip() for x in first_line.split(";")]
     if len(parts) < 3:
         return None
@@ -2324,41 +2324,10 @@ def parse_pixel_line(block_text):
     price = parts[1].replace(",", ".").strip()
     supplier = parts[2]
 
-    pixel_name = ""
-    pixel_id = ""
-    token_lines = []
-    token_started = False
-
-    for line in lines[1:]:
-        low = line.lower()
-
-        if low.startswith("имя пикселя:"):
-            pixel_name = line.split(":", 1)[1].strip()
-            continue
-
-        if low.startswith("id пикселя:"):
-            pixel_id = line.split(":", 1)[1].strip()
-            continue
-
-        if "токен" in low and "capi" in low:
-            token_started = True
-            continue
-
-        if token_started:
-            token_lines.append(line)
-
-    token_capi = "\n".join(token_lines).strip()
-
-    data_parts = []
-    if pixel_name:
-        data_parts.append(f"Имя пикселя: {pixel_name}")
-    if pixel_id:
-        data_parts.append(f"ID пикселя: {pixel_id}")
-    if token_capi:
-        data_parts.append("Токен cAPI:")
-        data_parts.append(token_capi)
-
-    data_text = "\n".join(data_parts).strip()
+    # Берём весь хвост блока после первой строки как есть,
+    # чтобы не потерять "Токен cAPI" и длинный токен
+    data_lines = lines[1:]
+    data_text = "\n".join(data_lines).strip()
 
     return {
         "purchase_date": purchase_date,
