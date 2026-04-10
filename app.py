@@ -1853,88 +1853,56 @@ def add_kings_from_txt_content(file_text, target_sheet=SHEET_KINGS):
 
     return message
 
-def add_bms_from_txt_content(file_text, target_sheet=SHEET_BMS):
-    parsed_rows, errors = parse_bms_txt(file_text)
+def add_bms_from_txt_content(file_text):
+    rows, errors = parse_bms_txt(file_text)
 
-    if not parsed_rows:
+    if not rows:
         if errors:
             return "Ничего не добавил.\n\nОшибки:\n" + "\n".join(errors[:10])
-        return "Ничего не добавил. Не удалось разобрать текст."
-
-    existing_rows = get_sheet_rows_cached(target_sheet)
-    existing_ids = set()
-
-    for row in existing_rows[1:]:
-        if row and row[0].strip():
-            existing_ids.add(row[0].strip())
+        return "Ничего не добавил. Не удалось разобрать файл."
 
     to_append = []
-    duplicates = 0
 
-    for item in parsed_rows:
-        bm_id = item["bm_id"]
-
-        if bm_id in existing_ids:
-            duplicates += 1
-            continue
-
+    for idx, item in enumerate(rows, start=1):
         sync_id = make_sync_id("bm")
 
         row_to_add = [
-            item["bm_id"],           # A id БМа
+            item["bm_id"],           # A bm id
             item["purchase_date"],   # B дата покупки
             item["price"],           # C цена
             item["supplier"],        # D у кого купили
             "free",                  # E статус
-            "",                      # F для кого
-            "",                      # G кто взял
-            "",                      # H дата выдачи
-            item["data_text"]        # I данные
+            "",                      # F кому выдали
+            "",                      # G дата выдачи
+            "",                      # H кто выдал / кто взял
+            item["data_text"],       # I данные
+            sync_id                  # J sync_id
         ]
-        
-        row_to_add = ensure_row_len(row_to_add, 26)
-        row_to_add[25] = sync_id   
-        
+
         to_append.append(row_to_add)
-        existing_ids.add(bm_id)
 
     if to_append:
-        sheet_append_rows_and_refresh(target_sheet, to_append)
-    
-        if target_sheet == SHEET_BMS:
-            basebot_sheet = BASEBOT_SHEET_BMS
-        elif target_sheet == SHEET_FARM_BMS:
-            basebot_sheet = BASEBOT_SHEET_FARM_BMS
-        else:
-            basebot_sheet = None
-    
-        if basebot_sheet:
-            try:
-                basebot_rows = []
-                for row in to_append:
-                    basebot_rows.append([
-                        "farm bm" if target_sheet == SHEET_FARM_BMS else "bm",
-                        row[0],    # bm_id
-                        row[3],    # supplier
-                        row[4],    # status
-                        row[8],    # data
-                        row[12],   # sync_id (Z)
-                    ])
-        
-                logging.info(f"BM basebot sync start: sheet={basebot_sheet}, rows={len(basebot_rows)}")
-                basebot_append_rows(basebot_sheet, basebot_rows)
-                logging.info("BM basebot sync success")
-        
-            except Exception as e:
-                logging.exception("BM basebot sync failed")
-                raise RuntimeError(f"Ошибка записи в BaseBot BM: {repr(e)}")
-    
+        sheet_append_rows_and_refresh(SHEET_BMS, to_append)
+
+        basebot_rows = []
+        for row in to_append:
+            basebot_rows.append([
+                "bm",     # тип
+                row[3],   # supplier
+                row[4],   # status
+                "",       # geo
+                row[8],   # data
+                "",       # data2
+                "",       # data3
+                row[9],   # sync_id (J)
+            ])
+
+        basebot_append_rows(BASEBOT_SHEET_BMS, basebot_rows)
         invalidate_stats_cache()
 
     message = (
         f"Готово ✅\n"
         f"Добавлено BM: {len(to_append)}\n"
-        f"Дубликатов пропущено: {duplicates}\n"
         f"Ошибок: {len(errors)}"
     )
 
@@ -2294,104 +2262,59 @@ def add_fps_from_text(text, target_sheet=SHEET_FPS):
         "new_warehouses": new_warehouses
     }
 
-def add_pixels_from_text(text, target_sheet=SHEET_PIXELS):
-    lines = text.splitlines()
-
-    blocks = []
-    current_header = None
-    current_data_lines = []
-
-    for raw_line in lines:
-        line = raw_line.rstrip()
-
-        # пустая строка = конец блока
-        if not line.strip():
-            if current_header is not None:
-                blocks.append((current_header, current_data_lines))
-                current_header = None
-                current_data_lines = []
-            continue
-
-        # если header еще не начат — это первая строка блока
-        if current_header is None:
-            current_header = line.strip()
-            current_data_lines = []
-        else:
-            current_data_lines.append(line)
-
-    # последний блок
-    if current_header is not None:
-        blocks.append((current_header, current_data_lines))
-
-    to_append = []
+def add_pixels_from_text(file_text):
+    lines = [line.strip() for line in str(file_text or "").splitlines() if line.strip()]
     errors = []
+    to_append = []
 
-    for i, (header, data_lines) in enumerate(blocks, start=1):
-        fields = [x.strip() for x in header.split(";")]
+    for idx, line in enumerate(lines, start=1):
+        try:
+            parsed = parse_pixel_line(line)
+            if not parsed:
+                errors.append(f"Строка {idx}: не удалось разобрать пиксель")
+                continue
 
-        if len(fields) != 3:
-            errors.append(f"Блок {i}: должно быть 3 поля в первой строке: дата покупки; цена; поставщик")
-            continue
+            sync_id = make_sync_id("pixel")
 
-        purchase_date_raw, price_raw, supplier = fields
+            row_to_add = [
+                parsed["purchase_date"],  # A дата покупки
+                parsed["price"],          # B цена
+                parsed["supplier"],       # C у кого купили
+                "free",                   # D статус
+                "",                       # E кому выдали
+                "",                       # F дата выдачи
+                "",                       # G кто выдал / кто взял
+                parsed["data_text"],      # H данные пикселя
+                sync_id                   # I sync_id
+            ]
 
-        purchase_date = parse_date(purchase_date_raw)
-        if not purchase_date:
-            errors.append(f"Блок {i}: неверная дата покупки '{purchase_date_raw}'")
-            continue
+            to_append.append(row_to_add)
 
-        price = parse_price(price_raw)
-        if price is None:
-            errors.append(f"Блок {i}: неверная цена '{price_raw}'")
-            continue
-
-        if not supplier:
-            errors.append(f"Блок {i}: не указан поставщик")
-            continue
-
-        data_text = "\n".join([x.rstrip() for x in data_lines]).strip()
-        if not data_text:
-            errors.append(f"Блок {i}: не указаны данные Пикселя")
-            continue
-
-        sync_id = make_sync_id("pixel")
-
-        row_to_add = [
-            purchase_date.strftime("%d/%m/%Y"),  # A дата покупки
-            price,                               # B цена
-            supplier,                            # C поставщик
-            "free",                              # D статус
-            "",                                  # E кому выдали
-            "",                                  # F дата взятия
-            "",                                  # G кто взял
-            data_text                            # H данные
-        ]
-        
-        row_to_add = ensure_row_len(row_to_add, 26)
-        row_to_add[25] = sync_id   
-        
-        to_append.append(row_to_add)
+        except Exception as e:
+            errors.append(f"Строка {idx}: {e}")
 
     if to_append:
-        sheet_append_rows_and_refresh(target_sheet, to_append)
-    
-        if target_sheet == SHEET_PIXELS:
-            basebot_rows = []
-            for row in to_append:
-                basebot_rows.append([
-                    "pixel",
-                    row[2],    # supplier
-                    row[3],    # status
-                    row[7],    # data
-                    row[8],   # sync_id (Z)
-                ])
-            basebot_append_rows(BASEBOT_SHEET_PIXELS, basebot_rows)
-    
+        sheet_append_rows_and_refresh(SHEET_PIXELS, to_append)
+
+        basebot_rows = []
+        for row in to_append:
+            basebot_rows.append([
+                "pixel",  # тип
+                row[2],   # supplier
+                row[3],   # status
+                "",       # geo
+                row[7],   # data
+                "",       # data2
+                "",       # data3
+                row[8],   # sync_id (I)
+            ])
+
+        basebot_append_rows(BASEBOT_SHEET_PIXELS, basebot_rows)
         invalidate_stats_cache()
 
     message = (
         f"Готово ✅\n"
-        f"Добавлено Пикселей: {len(to_append)}\n"
+        f"Добавлено пикселей: {len(to_append)}\n"
         f"Ошибок: {len(errors)}"
     )
 
