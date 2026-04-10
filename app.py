@@ -3846,25 +3846,45 @@ def issue_farm_kings(chat_id, user_id, username, king_names):
     with issue_lock:
         current_rows = get_sheet_rows_cached(SHEET_FARM_KINGS, force=True)
 
+        selected_geo = str(state.get("farm_king_geo", "")).strip()
+
         for item, king_name in zip(selected_rows, king_names):
             row_index = item["row_index"]
-
+        
             if row_index - 1 >= len(current_rows):
                 clear_state(user_id)
                 send_farm_kings_menu(chat_id, "Ошибка: один из кингов пропал из таблицы.")
                 return
-
+        
             row = ensure_row_len(current_rows[row_index - 1], 13)
-
+        
             if str(row[4]).strip().lower() != "free":
                 clear_state(user_id)
                 send_farm_kings_menu(chat_id, f"Кинг '{row[0] or king_name}' уже не свободен.")
+                return
+        
+            current_geo = str(row[7]).strip()
+            if selected_geo and current_geo != selected_geo:
+                clear_state(user_id)
+                send_farm_kings_menu(
+                    chat_id,
+                    f"Ошибка GEO: ожидался {selected_geo}, но в строке найден {current_geo}.\nНачни заново."
+                )
                 return
 
         for item, king_name in zip(selected_rows, king_names):
             row_index = item["row_index"]
             row = ensure_row_len(current_rows[row_index - 1], 13)
             sync_id = row[12]
+        
+            current_geo = str(row[7]).strip()
+            if selected_geo and current_geo != selected_geo:
+                clear_state(user_id)
+                send_farm_kings_menu(
+                    chat_id,
+                    f"Ошибка GEO перед записью: ожидался {selected_geo}, но найден {current_geo}.\nВыдача отменена."
+                )
+                return
 
             sheet_update_raw(
                 SHEET_FARM_KINGS,
