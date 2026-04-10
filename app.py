@@ -4740,6 +4740,21 @@ def _extract_bm_links(text):
 
     return result
 
+def _extract_bm_email_pairs(text):
+    text = str(text or "")
+    pairs = []
+
+    matches = re.findall(
+        r"([A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\s*:\s*[^\s]+)",
+        text
+    )
+
+    for pair in matches:
+        clean_pair = re.sub(r"\s+", "", pair).strip()
+        if clean_pair not in pairs:
+            pairs.append(clean_pair)
+
+    return pairs
 
 def _extract_cookie_links(text):
     urls = _extract_all_urls(text)
@@ -4768,6 +4783,7 @@ def parse_crypto_king_raw_data(raw_text):
         "user_agent": "",
         "docs_links": [],
         "bm_links": [],
+        "bm_email_pairs": [],
         "extra_pairs": [],
         "raw_text": text_original,
     }
@@ -4794,6 +4810,7 @@ def parse_crypto_king_raw_data(raw_text):
     result["docs_links"] = _extract_docs_links(text_original)
     result["bm_links"] = _extract_bm_links(text_original)
     result["cookies_links"] = _extract_cookie_links(text_original)
+    result["bm_email_pairs"] = _extract_bm_email_pairs(text_original)
 
     email_from_block = _extract_email_from_email_block(text)
     email_password_from_block = _extract_email_password_from_email_block(text)
@@ -12043,10 +12060,22 @@ def handle_message(msg):
                             "Cookies автоматически не вставились. Нажми «📄 Скачать txt» и вставь их вручную."
                         )
         
-                if parsed_crypto.get("bm_links"):
+                if parsed_crypto.get("bm_links") or parsed_crypto.get("bm_email_pairs"):
+                    bm_parts = []
+                
+                    if parsed_crypto.get("bm_links"):
+                        bm_parts.append("BM ссылки:")
+                        bm_parts.extend(parsed_crypto["bm_links"])
+                
+                    if parsed_crypto.get("bm_email_pairs"):
+                        if bm_parts:
+                            bm_parts.append("")
+                        bm_parts.append("Почты/пароли от BM:")
+                        bm_parts.extend(parsed_crypto["bm_email_pairs"])
+                
                     tg_send_long_message(
                         chat_id,
-                        "По этому crypto king ещё есть BM ссылки:\n\n" + "\n".join(parsed_crypto["bm_links"])
+                        "По этому crypto king ещё есть BM данные:\n\n" + "\n".join(bm_parts)
                     )
         
                 if parsed_crypto.get("cookies_links"):
