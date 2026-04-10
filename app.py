@@ -3810,6 +3810,7 @@ def return_farm_king_to_free(king_name):
 def issue_farm_kings(chat_id, user_id, username, king_names):
     state = get_state(user_id)
     selected_rows = state.get("farm_king_rows", [])
+    selected_geo = str(state.get("farm_king_geo", "")).strip()
 
     if not selected_rows or len(selected_rows) != len(king_names):
         clear_state(user_id)
@@ -3846,23 +3847,22 @@ def issue_farm_kings(chat_id, user_id, username, king_names):
     with issue_lock:
         current_rows = get_sheet_rows_cached(SHEET_FARM_KINGS, force=True)
 
-        selected_geo = str(state.get("farm_king_geo", "")).strip()
-
+        # 1. Полная проверка перед записью
         for item, king_name in zip(selected_rows, king_names):
             row_index = item["row_index"]
-        
+
             if row_index - 1 >= len(current_rows):
                 clear_state(user_id)
                 send_farm_kings_menu(chat_id, "Ошибка: один из кингов пропал из таблицы.")
                 return
-        
+
             row = ensure_row_len(current_rows[row_index - 1], 13)
-        
+
             if str(row[4]).strip().lower() != "free":
                 clear_state(user_id)
                 send_farm_kings_menu(chat_id, f"Кинг '{row[0] or king_name}' уже не свободен.")
                 return
-        
+
             current_geo = str(row[7]).strip()
             if selected_geo and current_geo != selected_geo:
                 clear_state(user_id)
@@ -3872,11 +3872,12 @@ def issue_farm_kings(chat_id, user_id, username, king_names):
                 )
                 return
 
+        # 2. Обновление строк
         for item, king_name in zip(selected_rows, king_names):
             row_index = item["row_index"]
             row = ensure_row_len(current_rows[row_index - 1], 13)
             sync_id = row[12]
-        
+
             current_geo = str(row[7]).strip()
             if selected_geo and current_geo != selected_geo:
                 clear_state(user_id)
@@ -3890,18 +3891,18 @@ def issue_farm_kings(chat_id, user_id, username, king_names):
                 SHEET_FARM_KINGS,
                 f"A{row_index}:L{row_index}",
                 [[
-                    king_name,
-                    row[1],
-                    row[2],
-                    row[3],
-                    "taken",
-                    "farm",
-                    today,
-                    row[7],
-                    who_took_text,
-                    row[9],
-                    row[10],
-                    row[11]
+                    king_name,       # A название
+                    row[1],          # B дата покупки
+                    row[2],          # C цена
+                    row[3],          # D supplier
+                    "taken",         # E статус
+                    "farm",          # F кому выдали
+                    today,           # G дата выдачи
+                    row[7],          # H geo
+                    who_took_text,   # I кто выдал / кто взял
+                    row[9],          # J data1
+                    row[10],         # K data2
+                    row[11]          # L data3
                 ]]
             )
 
@@ -3927,6 +3928,7 @@ def issue_farm_kings(chat_id, user_id, username, king_names):
 
         refresh_sheet_cache(SHEET_FARM_KINGS)
 
+        # 3. Запись в issues
         if issue_rows:
             sheet_append_rows_and_refresh(
                 SHEET_ISSUES,
@@ -3934,6 +3936,7 @@ def issue_farm_kings(chat_id, user_id, username, king_names):
                 value_input_option="USER_ENTERED"
             )
 
+        # 4. Синк в BaseBot
         for item in issued_items:
             if item["sync_id"]:
                 sync_status_to_basebot(BASEBOT_SHEET_FARM_KINGS, item["sync_id"], "taken")
@@ -3951,6 +3954,7 @@ def issue_farm_kings(chat_id, user_id, username, king_names):
     except Exception:
         logging.exception("issue_farm_kings summary send failed")
 
+    # 5. Отправка txt / zip
     if len(issued_items) > 5:
         try:
             archive_name = f"farm_kings_{datetime.now(MOSCOW_TZ).strftime('%Y%m%d_%H%M%S')}.zip"
@@ -6929,6 +6933,8 @@ def issue_kings_bulk(chat_id, user_id, username, king_names):
             state = get_state(user_id)
 
             king_for_whom = str(state.get("king_for_whom", "")).strip()
+            selected_geo = str(state.get("king_geo", "")).strip()
+
             if not king_for_whom:
                 clear_state(user_id)
                 send_kings_menu(chat_id, "Не найдено для кого выдавать кинги. Начни заново.")
@@ -6940,7 +6946,6 @@ def issue_kings_bulk(chat_id, user_id, username, king_names):
                 send_kings_menu(chat_id, "Количество кингов должно быть больше нуля.")
                 return
 
-            # 1. Проверяем дубли названий ещё раз прямо перед выдачей
             duplicate_names = []
             for name in king_names:
                 if king_name_exists(name):
@@ -6963,8 +6968,12 @@ def issue_kings_bulk(chat_id, user_id, username, king_names):
 
                 status = str(row[4]).strip().lower()
                 current_name = str(row[0]).strip()
+                current_geo = str(row[7]).strip()
 
                 if status == "free" and not current_name:
+                    if selected_geo and current_geo != selected_geo:
+                        continue
+
                     selected_rows.append({
                         "row_index": idx,
                         "row": row
@@ -6975,10 +6984,16 @@ def issue_kings_bulk(chat_id, user_id, username, king_names):
 
             if len(selected_rows) < count_needed:
                 clear_state(user_id)
-                send_kings_menu(
-                    chat_id,
-                    f"Недостаточно свободных king. Нужно: {count_needed}, доступно: {len(selected_rows)}"
-                )
+                if selected_geo:
+                    send_kings_menu(
+                        chat_id,
+                        f"Недостаточно свободных king по GEO {selected_geo}. Нужно: {count_needed}, доступно: {len(selected_rows)}"
+                    )
+                else:
+                    send_kings_menu(
+                        chat_id,
+                        f"Недостаточно свободных king. Нужно: {count_needed}, доступно: {len(selected_rows)}"
+                    )
                 return
 
             today = datetime.now(MOSCOW_TZ).strftime("%d/%m/%Y")
@@ -6986,28 +7001,62 @@ def issue_kings_bulk(chat_id, user_id, username, king_names):
 
             issued_items = []
 
-            # 2. Обновляем строки в таблице
+            # Перепроверка перед записью
+            for item, king_name in zip(selected_rows, king_names):
+                row_index = item["row_index"]
+
+                if row_index - 1 >= len(current_rows):
+                    clear_state(user_id)
+                    send_kings_menu(chat_id, "Ошибка: один из кингов пропал из таблицы.")
+                    return
+
+                row = ensure_row_len(current_rows[row_index - 1], 13)
+
+                if str(row[4]).strip().lower() != "free":
+                    clear_state(user_id)
+                    send_kings_menu(chat_id, f"Кинг '{row[0] or king_name}' уже не свободен.")
+                    return
+
+                current_geo = str(row[7]).strip()
+                if selected_geo and current_geo != selected_geo:
+                    clear_state(user_id)
+                    send_kings_menu(
+                        chat_id,
+                        f"Ошибка GEO: ожидался {selected_geo}, но найден {current_geo}. Начни заново."
+                    )
+                    return
+
+            # Обновляем строки
             for item, king_name in zip(selected_rows, king_names):
                 row_index = item["row_index"]
                 row = ensure_row_len(current_rows[row_index - 1], 13)
                 sync_id = row[12]
 
+                current_geo = str(row[7]).strip()
+                if selected_geo and current_geo != selected_geo:
+                    clear_state(user_id)
+                    send_kings_menu(
+                        chat_id,
+                        f"Ошибка GEO перед записью: ожидался {selected_geo}, но найден {current_geo}. Выдача отменена."
+                    )
+                    return
+
                 sheet_update_raw(
                     SHEET_KINGS,
                     f"A{row_index}:L{row_index}",
                     [[
-                        king_name,       # A название
-                        row[1],          # B дата покупки
-                        row[2],          # C цена
-                        row[3],          # D supplier
-                        "taken",         # E статус
-                        king_for_whom,   # F кому выдали
-                        today,           # G дата выдачи
-                        row[7],          # H geo
-                        who_took_text,   # I кто выдал / кто взял
-                        row[9],          # J data1
-                        row[10],         # K data2
-                        row[11]          # L data3
+                        king_name,
+                        row[1],
+                        row[2],
+                        row[3],
+                        "taken",
+                        king_for_whom,
+                        today,
+                        row[7],
+                        who_took_text,
+                        row[9],
+                        row[10],
+                        row[11]
                     ]]
                 )
 
@@ -7023,7 +7072,6 @@ def issue_kings_bulk(chat_id, user_id, username, king_names):
 
             logging.info(f"issue_kings_bulk updated {len(issued_items)} kings for user_id={user_id}")
 
-            # 3. Синк в BaseBot
             for item in issued_items:
                 if item["sync_id"]:
                     try:
@@ -7033,7 +7081,6 @@ def issue_kings_bulk(chat_id, user_id, username, king_names):
                             f"issue_kings_bulk sync failed for {item['king_name']} sync_id={item['sync_id']}"
                         )
 
-            # 4. Запись в issues
             for item in issued_items:
                 append_king_to_issues_sheet(
                     king_name=item["king_name"],
@@ -7047,7 +7094,6 @@ def issue_kings_bulk(chat_id, user_id, username, king_names):
             invalidate_stats_cache()
             clear_state(user_id)
 
-        # 5. Отправка сообщений уже вне lock
         try:
             tg_send_message(
                 chat_id,
@@ -7057,7 +7103,7 @@ def issue_kings_bulk(chat_id, user_id, username, king_names):
             )
         except Exception:
             logging.exception("issue_kings_bulk summary send failed")
-        
+
         if len(issued_items) > 5:
             try:
                 archive_name = f"kings_{king_for_whom}_{datetime.now(MOSCOW_TZ).strftime('%Y%m%d_%H%M%S')}.zip"
@@ -7074,7 +7120,7 @@ def issue_kings_bulk(chat_id, user_id, username, king_names):
                 )
         else:
             txt_failed = []
-        
+
             for item in issued_items:
                 try:
                     tg_send_message(
@@ -7086,7 +7132,7 @@ def issue_kings_bulk(chat_id, user_id, username, king_names):
                         f"Цена: {item['price']}\n"
                         f"Гео: {item['geo']}"
                     )
-        
+
                     tg_send_king_data_as_txt(
                         chat_id=chat_id,
                         king_name=item["king_name"],
@@ -7095,13 +7141,13 @@ def issue_kings_bulk(chat_id, user_id, username, king_names):
                 except Exception:
                     logging.exception(f"issue_kings_bulk send failed for {item['king_name']}")
                     txt_failed.append(item["king_name"])
-        
+
             if txt_failed:
                 tg_send_message(
                     chat_id,
                     "Эти кинги выданы, но txt не удалось отправить:\n" + "\n".join(txt_failed[:20])
                 )
-        
+
         send_kings_menu(chat_id, "Выбери следующее действие:")
 
     except Exception as e:
