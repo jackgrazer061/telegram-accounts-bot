@@ -6,7 +6,7 @@ from datetime import datetime
 import time
 import re
 from zoneinfo import ZoneInfo
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, make_response
 import requests
 import gspread
 from google.oauth2.service_account import Credentials
@@ -12207,9 +12207,20 @@ def webhook():
         notify_admin_about_error("webhook", str(e))
         return jsonify({"ok": True})
 
-@app.route("/fastadscheck-import", methods=["POST"])
+@app.route("/fastadscheck-import", methods=["POST", "OPTIONS"])
 def fastadscheck_import():
+    allowed_origin = "https://app.ffb.vn"
+
+    def _corsify(resp):
+        resp.headers["Access-Control-Allow-Origin"] = allowed_origin
+        resp.headers["Access-Control-Allow-Headers"] = "Content-Type"
+        resp.headers["Access-Control-Allow-Methods"] = "POST, OPTIONS"
+        return resp
+
     try:
+        if request.method == "OPTIONS":
+            return _corsify(make_response("", 204))
+
         payload = request.get_json(silent=True) or {}
 
         token = str(payload.get("token", "")).strip()
@@ -12218,22 +12229,22 @@ def fastadscheck_import():
         expected_token = os.environ.get("FASTADCHECK_IMPORT_TOKEN", "").strip()
 
         if not expected_token:
-            return jsonify({
+            return _corsify(jsonify({
                 "ok": False,
                 "error": "FASTADCHECK_IMPORT_TOKEN не задан на сервере"
-            }), 500
+            })), 500
 
         if token != expected_token:
-            return jsonify({
+            return _corsify(jsonify({
                 "ok": False,
                 "error": "unauthorized"
-            }), 403
+            })), 403
 
         if not isinstance(rows, list) or not rows:
-            return jsonify({
+            return _corsify(jsonify({
                 "ok": False,
                 "error": "rows пустой или неверный формат"
-            }), 400
+            })), 400
 
         with accounts_lock:
             existing_rows = get_sheet_rows_cached(SHEET_ACCOUNTS, force=True)
@@ -12305,21 +12316,21 @@ def fastadscheck_import():
             refresh_sheet_cache(SHEET_ACCOUNTS)
             invalidate_stats_cache()
 
-        return jsonify({
+        return _corsify(jsonify({
             "ok": True,
             "updated": updated,
             "not_found": not_found[:100],
             "skipped": skipped[:100],
             "received": len(rows)
-        }), 200
+        })), 200
 
     except Exception as e:
         logging.exception("fastadscheck_import crashed")
         notify_admin_about_error("fastadscheck_import", str(e))
-        return jsonify({
+        return _corsify(jsonify({
             "ok": False,
             "error": str(e)
-        }), 500
+        })), 500
 
 @app.route("/fastadscheck-add", methods=["POST"])
 def fastadscheck_add():
