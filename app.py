@@ -252,6 +252,9 @@ ADMIN_ALL_STATS = 'Статистика всех'
 SUBMENU_CRYPTO_KINGS = 'Крипта кинги'
 ADMIN_ADD_CRYPTO_KINGS = 'Добавить crypto king'
 
+BTN_CRYPTO_KING_CONFIRM = "✅выдать"
+BTN_CRYPTO_KING_OTHER = "🔄другой"
+
 BTN_DOWNLOAD_CRYPTO_KING_TXT = "📄 Скачать txt"
 BTN_CRYPTO_KING_BACK_TO_MENU = "📘 В меню"
 
@@ -1170,6 +1173,59 @@ def find_free_crypto_king_by_geo(geo, exclude_row=None):
     candidates.sort(key=lambda x: x["purchase_date_obj"])
     return candidates[0]
 
+def find_next_crypto_king_after_row(current_row_index, geo_value):
+    rows = get_sheet_rows_cached(SHEET_CRYPTO_KINGS, force=True)
+
+    geo_value = str(geo_value or "").strip()
+
+    for idx, row in enumerate(rows[1:], start=2):
+        if idx <= int(current_row_index):
+            continue
+
+        row = ensure_row_len(row, 13)
+
+        status = str(row[4]).strip().lower()
+        current_name = str(row[0]).strip()
+        current_geo = str(row[7]).strip()
+
+        if status == "free" and not current_name:
+            if geo_value and current_geo != geo_value:
+                continue
+
+            return {
+                "row_index": idx,
+                "purchase_date": row[1],
+                "price": row[2],
+                "supplier": row[3],
+                "geo": row[7],
+                "row": row
+            }
+
+    # если ниже не нашли — ищем с начала до текущей строки
+    for idx, row in enumerate(rows[1:], start=2):
+        if idx >= int(current_row_index):
+            break
+
+        row = ensure_row_len(row, 13)
+
+        status = str(row[4]).strip().lower()
+        current_name = str(row[0]).strip()
+        current_geo = str(row[7]).strip()
+
+        if status == "free" and not current_name:
+            if geo_value and current_geo != geo_value:
+                continue
+
+            return {
+                "row_index": idx,
+                "purchase_date": row[1],
+                "price": row[2],
+                "supplier": row[3],
+                "geo": row[7],
+                "row": row
+            }
+
+    return None
 
 def show_found_crypto_king(chat_id, user_id, found):
     state = get_state(user_id)
@@ -1179,20 +1235,90 @@ def show_found_crypto_king(chat_id, user_id, found):
     set_state(user_id, state)
 
     text = (
-        "Найден crypto king:\n\n"
-        f"Дата покупки: {found['purchase_date']}\n"
-        f"Цена: {found['price']}\n"
-        f"Гео: {found['geo']}\n"
-        f"Для кого: {state.get('king_for_whom', 'не указано')}\n"
-        f"Название: {state.get('king_name', 'не указано')}"
+        "🔍Найден crypto king:\n\n"
+        f"🗓Дата покупки: {found['purchase_date']}\n"
+        f"💵Цена: {found['price']}\n"
+        f"🌐Гео: {found['geo']}\n"
+        f"👨‍💻Для кого: {state.get('king_for_whom', 'не указано')}\n"
+        f"✏️Название: {state.get('king_name', 'не указано')}"
     )
 
-    keyboard = [
-        [{"text": BTN_KING_CONFIRM}, {"text": BTN_KING_NEXT}],
-        [{"text": MENU_CANCEL}]
-    ]
+    sent = tg_send_inline_message(
+        chat_id,
+        text,
+        [[
+            {
+                "text": "✅выдать",
+                "callback_data": f"confirm_crypto_king:{user_id}"
+            },
+            {
+                "text": "🔄другой",
+                "callback_data": f"other_crypto_king:{user_id}"
+            }
+        ]]
+    )
 
-    tg_send_message(chat_id, text, keyboard)
+    try:
+        if isinstance(sent, dict):
+            message_id = sent.get("result", {}).get("message_id")
+            if message_id:
+                state = get_state(user_id)
+                state["crypto_preview_message_id"] = message_id
+                set_state(user_id, state)
+    except Exception:
+        logging.exception("show_found_crypto_king failed to save preview message_id")
+
+def edit_found_crypto_king_preview(chat_id, message_id, user_id, found):
+    state = get_state(user_id)
+
+    state["mode"] = "crypto_king_found"
+    state["king_row"] = found["row_index"]
+    set_state(user_id, state)
+
+    text = (
+        "🔍Найден crypto king:\n\n"
+        f"🗓Дата покупки: {found['purchase_date']}\n"
+        f"💵Цена: {found['price']}\n"
+        f"🌐Гео: {found['geo']}\n"
+        f"👨‍💻Для кого: {state.get('king_for_whom', 'не указано')}\n"
+        f"✏️Название: {state.get('king_name', 'не указано')}"
+    )
+
+    tg_edit_message_text(
+        chat_id,
+        message_id,
+        text,
+        inline_buttons=[[
+            {
+                "text": "✅выдать",
+                "callback_data": f"confirm_crypto_king:{user_id}"
+            },
+            {
+                "text": "🔄другой",
+                "callback_data": f"other_crypto_king:{user_id}"
+            }
+        ]]
+    )
+
+def mark_crypto_king_preview_as_issued(chat_id, message_id, king_name, king_for_whom, price, geo_value):
+    text = (
+        "✅ Выдано\n\n"
+        f"Crypto king выдан.\n"
+        f"Название: {king_name}\n"
+        f"Для кого: {king_for_whom}\n"
+        f"Цена: {price}\n"
+        f"Гео: {geo_value}"
+    )
+
+    try:
+        tg_edit_message_text(
+            chat_id,
+            message_id,
+            text,
+            inline_buttons=[]
+        )
+    except Exception:
+        logging.exception("mark_crypto_king_preview_as_issued failed")
 
 def send_king_geo_options(chat_id):
     geos = get_free_king_geos()
@@ -12026,22 +12152,28 @@ def handle_message(msg):
         
                 invalidate_stats_cache()
         
+                preview_message_id = state.get("crypto_preview_message_id")
+        
                 set_state(user_id, {
                     "mode": "crypto_king_issued",
                     "last_crypto_king_name": king_name,
                     "last_crypto_king_data_text": data_text,
+                    "crypto_preview_message_id": preview_message_id,
                 })
+        
+                if preview_message_id:
+                    mark_crypto_king_preview_as_issued(
+                        chat_id=chat_id,
+                        message_id=preview_message_id,
+                        king_name=king_name,
+                        king_for_whom=king_for_whom,
+                        price=row[2],
+                        geo_value=parsed_crypto.get("geo", geo_value)
+                    )
         
                 tg_send_inline_message(
                     chat_id,
-                    f"Готово ✅\n\n"
-                    f"Название: {king_name}\n"
-                    f"Для кого: {king_for_whom}\n"
-                    f"Цена: {row[2]}\n"
-                    f"Гео: {parsed_crypto.get('geo', geo_value)}\n"
-                    f"User-Agent: {parsed_crypto.get('user_agent', '')}\n"
-                    f"Octo профиль: {'создан✅' if octo_ok else 'ошибка❌'}\n\n"
-                    f"⚠️Вручную: выставь расширения, cookies и User-Agent⚠️",
+                    "📄 Данные crypto king",
                     [[{
                         "text": "📄 Скачать txt",
                         "callback_data": f"download_crypto_txt:{user_id}"
@@ -12062,17 +12194,17 @@ def handle_message(msg):
         
                 if parsed_crypto.get("bm_links") or parsed_crypto.get("bm_email_pairs"):
                     bm_parts = []
-                
+        
                     if parsed_crypto.get("bm_links"):
                         bm_parts.append("BM ссылки:")
                         bm_parts.extend(parsed_crypto["bm_links"])
-                
+        
                     if parsed_crypto.get("bm_email_pairs"):
                         if bm_parts:
                             bm_parts.append("")
                         bm_parts.append("Почты/пароли от BM:")
                         bm_parts.extend(parsed_crypto["bm_email_pairs"])
-                
+        
                     tg_send_long_message(
                         chat_id,
                         "По этому crypto king ещё есть BM данные:\n\n" + "\n".join(bm_parts)
@@ -12085,13 +12217,6 @@ def handle_message(msg):
                         "\n".join(parsed_crypto["cookies_links"])
                     )
         
-                return
-        
-            except Exception as e:
-                logging.exception("awaiting_crypto_king_octo_proxy crashed")
-                clear_state(user_id)
-                tg_send_message(chat_id, "Ошибка выдачи crypto king. Попробуй ещё раз.")
-                send_kings_menu(chat_id, "Меню кингов:")
                 return
 
         if state.get("mode") == "awaiting_octo_proxy_for_warehouse":
@@ -12474,6 +12599,62 @@ def handle_callback_query(callback_query):
                 chat_id=chat_id,
                 king_name=king_name,
                 data_text=data_text
+            )
+            return
+
+        if data.startswith("confirm_crypto_king:"):
+            target_user_id = data.split(":", 1)[1]
+
+            if str(user_id) != str(target_user_id):
+                tg_answer_callback_query(callback_id, "Это не ваша кнопка")
+                return
+
+            tg_answer_callback_query(callback_id)
+
+            state = get_state(user_id)
+            state["crypto_preview_message_id"] = message_id
+            set_state(user_id, state)
+
+            confirm_crypto_king_issue(
+                chat_id,
+                user_id,
+                callback_query["from"].get("username", "")
+            )
+            return
+            
+        if data.startswith("other_crypto_king:"):
+            target_user_id = data.split(":", 1)[1]
+
+            if str(user_id) != str(target_user_id):
+                tg_answer_callback_query(callback_id, "Это не ваша кнопка")
+                return
+
+            state = get_state(user_id)
+
+            if state.get("mode") != "crypto_king_found":
+                tg_answer_callback_query(callback_id, "Состояние устарело")
+                return
+
+            current_row_index = state.get("king_row")
+            geo_value = str(state.get("king_geo", "")).strip()
+
+            if not current_row_index:
+                tg_answer_callback_query(callback_id, "Не найден текущий crypto king")
+                return
+
+            next_found = find_next_crypto_king_after_row(current_row_index, geo_value)
+
+            if not next_found:
+                tg_answer_callback_query(callback_id, "Больше свободных crypto king не найдено")
+                return
+
+            tg_answer_callback_query(callback_id, "Ищу другой...")
+
+            edit_found_crypto_king_preview(
+                chat_id=chat_id,
+                message_id=message_id,
+                user_id=user_id,
+                found=next_found
             )
             return
 
