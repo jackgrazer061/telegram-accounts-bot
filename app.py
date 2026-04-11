@@ -2997,10 +2997,9 @@ def confirm_fp_issue(chat_id, user_id, username):
             chat_id,
             f"Готово ✅\n\n"
             f"ФП выдано.\n"
-            f"Ссылка: {fp_link}\n"
-            f"Склад: {warehouse_name}\n"
-            f"Для кого: {fp_for_whom}\n"
-            f"Кто взял в боте: {who_took_text}"
+            f"🔗Ссылка: {fp_link}\n"
+            f"🗃Склад: {warehouse_name}\n"
+            f"👨‍💻Для кого: {fp_for_whom}"
         )
 
         send_accounts_main_menu(chat_id, "Меню Accounts:")
@@ -3133,10 +3132,9 @@ def issue_fps_bulk(chat_id, user_id, username, count_needed):
                 chat_id,
                 f"Готово ✅\n\n"
                 f"ФП выдано.\n"
-                f"Ссылка: {item['fp_link']}\n"
-                f"Склад: {item['warehouse']}\n"
-                f"Для кого: {fp_for_whom}\n"
-                f"Кто взял в боте: {who_took_text}"
+                f"🔗Ссылка: {item['fp_link']}\n"
+                f"🗃Склад: {item['warehouse']}\n"
+                f"👨‍💻Для кого: {fp_for_whom}"
             )
 
         send_accounts_main_menu(chat_id, "Меню Accounts:")
@@ -3175,7 +3173,7 @@ def confirm_pixel_issue(chat_id, user_id, username):
                 return
 
             row = rows[row_index - 1]
-            row = ensure_row_len(row, 26)
+            row = ensure_row_len(row, 9)
             sync_id = row[8]
 
             status = str(row[3]).strip().lower()
@@ -3237,9 +3235,8 @@ def confirm_pixel_issue(chat_id, user_id, username):
             chat_id,
             f"Готово ✅\n\n"
             f"Пиксель выдан.\n"
-            f"Имя: {pixel_name}\n"
-            f"Для кого: {pixel_for_whom}\n"
-            f"Кто взял в боте: {who_took_text}"
+            f"🔥id Пикселя: {pixel_id}\n"
+            f"👨‍💻Для кого: {pixel_for_whom}"
         )
 
         if data_text:
@@ -3253,7 +3250,7 @@ def confirm_pixel_issue(chat_id, user_id, username):
         logging.exception("confirm_pixel_issue crashed")
         tg_send_message(chat_id, "Ошибка выдачи Пикселя. Попробуй ещё раз.")
         send_pixels_menu(chat_id, "Меню Пикселей:")
-
+        
 def issue_pixels_bulk(chat_id, user_id, username, count_needed):
     try:
         state = get_state(user_id)
@@ -3297,7 +3294,6 @@ def issue_pixels_bulk(chat_id, user_id, username, count_needed):
         with issue_lock:
             current_rows = get_sheet_rows_cached(SHEET_PIXELS, force=True)
 
-            # повторная проверка перед записью
             for item in found_pixels:
                 row_index = item["row_index"]
 
@@ -3307,7 +3303,7 @@ def issue_pixels_bulk(chat_id, user_id, username, count_needed):
                     return
 
                 row = current_rows[row_index - 1]
-                row = ensure_row_len(row, 26)
+                row = ensure_row_len(row, 9)
                 current_rows[row_index - 1] = row
                 sync_id = row[8]
 
@@ -3317,7 +3313,6 @@ def issue_pixels_bulk(chat_id, user_id, username, count_needed):
                     send_pixels_menu(chat_id, "Один из Пикселей уже не свободен. Начни заново.")
                     return
 
-            # обновляем каждый пиксель
             for item in found_pixels:
                 row_index = item["row_index"]
                 row = current_rows[row_index - 1]
@@ -3331,7 +3326,6 @@ def issue_pixels_bulk(chat_id, user_id, username, count_needed):
                 pixel_id = extract_pixel_id_from_data(data_text)
                 issue_pixel_value = pixel_id or pixel_name
 
-                # D статус, E кому, F дата, G кто взял
                 sheet_update_raw(
                     SHEET_PIXELS,
                     f"D{row_index}:G{row_index}",
@@ -3343,7 +3337,6 @@ def issue_pixels_bulk(chat_id, user_id, username, count_needed):
                     ]]
                 )
 
-                # обновляем локальный кеш-слепок
                 row[3] = "taken"
                 row[4] = pixel_for_whom
                 row[5] = today
@@ -3361,11 +3354,11 @@ def issue_pixels_bulk(chat_id, user_id, username, count_needed):
 
                 issued_messages.append({
                     "pixel_name": pixel_name,
+                    "pixel_id": pixel_id,
                     "data_text": data_text,
                     "sync_id": sync_id
                 })
 
-            # одним добавлением пишем в Простые лички 26
             if issue_rows:
                 sheet_append_rows_and_refresh(
                     SHEET_ISSUES,
@@ -3373,7 +3366,6 @@ def issue_pixels_bulk(chat_id, user_id, username, count_needed):
                     value_input_option="USER_ENTERED"
                 )
 
-            # после всех изменений обновляем кеш пикселей
             with table_cache_lock:
                 table_cache[SHEET_PIXELS]["rows"] = current_rows
                 table_cache[SHEET_PIXELS]["updated_at"] = time.time()
@@ -3389,14 +3381,14 @@ def issue_pixels_bulk(chat_id, user_id, username, count_needed):
         tg_send_message(
             chat_id,
             f"Готово ✅\n\n"
-            f"Выдано Пикселей: {len(issued_messages)}\n"
-            f"Для кого: {pixel_for_whom}\n"
-            f"Кто взял в боте: {who_took_text}"
+            f"🔢Выдано Пикселей: {len(issued_messages)}\n"
+            f"👨‍💻Для кого: {pixel_for_whom}"
         )
 
         for i, item in enumerate(issued_messages, start=1):
             text_to_send = (
-                f"Пиксель {i}: {item['pixel_name']}\n\n"
+                f"Пиксель {i}: {item['pixel_name']}\n"
+                f"🔥id Пикселя: {item['pixel_id']}\n\n"
                 f"{item['data_text']}"
             )
             tg_send_long_message(chat_id, text_to_send)
@@ -4271,7 +4263,7 @@ def issue_farm_bm(chat_id, user_id, username):
             return
 
         row = rows[row_index - 1]
-        row = ensure_row_len(row, 26)
+        row = ensure_row_len(row, 10)
         sync_id = row[9]
 
         if str(row[4]).strip().lower() != "free":
@@ -4310,7 +4302,9 @@ def issue_farm_bm(chat_id, user_id, username):
 
     tg_send_message(
         chat_id,
-        f"Готово ✅\n\nBM выдан.\nID BM: {row[0]}\nКому передали: farm"
+        f"Готово ✅\n\n"
+        f"BM выдан.\n"
+        f"🔥ID BM: {row[0]}"
     )
 
     if len(row) > 8 and row[8]:
@@ -4560,8 +4554,8 @@ def issue_farm_fps(chat_id, user_id, username, count_needed):
         tg_send_message(
             chat_id,
             f"Готово ✅\n\n"
-            f"Выдано FP: {len(messages)}\n"
-            f"Склад: {current_warehouse}"
+            f"🔢Выдано FP: {len(messages)}\n"
+            f"🗃Склад: {current_warehouse}"
         )
 
         for msg_text in messages:
@@ -6635,13 +6629,13 @@ def show_found_bm(chat_id, user_id, found):
     state = get_state(user_id)
     state["mode"] = "bm_found"
     state["bm_row"] = found["row_index"]
-    state["found_bm_id"] = found["bm_id"]
     set_state(user_id, state)
 
     text = (
-        "Найден БМ:\n\n"
-        f"ID БМа: {found['bm_id']}\n"
-        f"Для кого: {state.get('bm_for_whom', 'не указано')}"
+        "🔍Найден БМ:\n\n"
+        f"🔥ID БМа: {found['bm_id']}\n"
+        f"💵цена: {found['price']}\n"
+        f"👨‍💻Для кого: {state.get('bm_for_whom', 'не указано')}"
     )
 
     keyboard = [
@@ -6673,7 +6667,7 @@ def confirm_bm_issue(chat_id, user_id, username):
                 send_bms_menu(chat_id, "Не найден выбранный БМ. Начни заново.")
                 return
 
-            rows = get_sheet_rows_cached(SHEET_BMS)
+            rows = get_sheet_rows_cached(SHEET_BMS, force=True)
 
             if row_index - 1 >= len(rows):
                 clear_state(user_id)
@@ -6681,24 +6675,19 @@ def confirm_bm_issue(chat_id, user_id, username):
                 return
 
             row = rows[row_index - 1]
-            row = ensure_row_len(row, 26)
+            row = ensure_row_len(row, 10)
             sync_id = row[9]
-
-            # A id БМа
-            # B дата покупки
-            # C цена
-            # D у кого купили
-            # E статус
-            # F для кого
-            # G кто взял
-            # H дата выдачи
-            # I данные
 
             status = str(row[4]).strip().lower()
 
             if status == "taken":
                 clear_state(user_id)
                 send_bms_menu(chat_id, "Этот БМ уже занят.")
+                return
+
+            if status == "ban":
+                clear_state(user_id)
+                send_bms_menu(chat_id, "Этот БМ уже в ban.")
                 return
 
             if status != "free":
@@ -6710,6 +6699,8 @@ def confirm_bm_issue(chat_id, user_id, username):
             purchase_date = row[1]
             price = row[2]
             supplier = row[3]
+            data_text = row[8]
+
             today = datetime.now(MOSCOW_TZ).strftime("%d/%m/%Y")
             who_took_text = f"@{username}" if username else "без username"
 
@@ -6741,7 +6732,6 @@ def confirm_bm_issue(chat_id, user_id, username):
                 value_input_option="USER_ENTERED"
             )
 
-            data_text = row[8] if len(row) > 8 else ""
             invalidate_stats_cache()
             clear_state(user_id)
 
@@ -6749,9 +6739,8 @@ def confirm_bm_issue(chat_id, user_id, username):
             chat_id,
             f"Готово ✅\n\n"
             f"БМ выдан.\n"
-            f"ID БМа: {bm_id}\n"
-            f"Для кого: {bm_for_whom}\n"
-            f"Кто взял в боте: {who_took_text}"
+            f"🔥ID БМа: {bm_id}\n"
+            f"👨‍💻Для кого: {bm_for_whom}"
         )
 
         if data_text:
@@ -6759,12 +6748,12 @@ def confirm_bm_issue(chat_id, user_id, username):
         else:
             tg_send_message(chat_id, "Данные БМа не найдены.")
 
-        send_accounts_main_menu(chat_id, "Меню Accounts:")
+        send_bms_menu(chat_id, "Выбери следующее действие:")
 
-    except Exception as e:
+    except Exception:
         logging.exception("confirm_bm_issue crashed")
-        tg_send_message(chat_id, "Ошибка выдачи БМа. Попробуй ещё раз.")
-        send_accounts_main_menu(chat_id, "Меню Accounts:")
+        tg_send_message(chat_id, "Ошибка выдачи БМ. Попробуй ещё раз.")
+        send_bms_menu(chat_id, "Меню БМов:")
 
 def issue_bms_bulk(chat_id, user_id, username, count_needed):
     try:
@@ -12203,20 +12192,12 @@ def handle_message(msg):
                     f"Вручную проверь и выставь:\n"
                     f"• User-Agent\n"
                     f"• расширения\n\n"
+                    f"• куки\n\n"
                     f"User-Agent:\n{parsed_crypto.get('user_agent', '')}"
                 )
         
                 if not octo_ok and octo_msg:
                     tg_send_long_message(chat_id, f"Ошибка Octo:\n{octo_msg}")
-        
-                if octo_ok:
-                    if cookies_ok:
-                        tg_send_message(chat_id, "Cookies: импортированы✅")
-                    else:
-                        tg_send_message(
-                            chat_id,
-                            "Cookies автоматически не вставились. Нажми «📄 Скачать txt» и вставь их вручную."
-                        )
         
                 if parsed_crypto.get("bm_links") or parsed_crypto.get("bm_email_pairs"):
                     bm_parts = []
