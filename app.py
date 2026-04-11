@@ -5027,7 +5027,6 @@ def build_crypto_king_octo_description(parsed):
         f"Email's Password: {parsed.get('email_password', '')}",
         f"Service: {parsed.get('service', '')}",
         f"2FA: {parsed.get('twofa', '')}",
-        f"User-Agent: {parsed.get('user_agent', '')}",
         "",
         "Doc's:",
     ]
