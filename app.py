@@ -29,7 +29,7 @@ BASEBOT_SPREADSHEET_ID = os.environ.get("BASEBOT_SPREADSHEET_ID", "")
 EXCHANGE_API_BASE = os.environ.get("EXCHANGE_API_BASE", "https://api.exchangerate.host")
 OCTO_API_TOKEN = os.environ.get("OCTO_API_TOKEN", "").strip()
 OCTO_API_BASE = "https://app.octobrowser.net/api/v2/automation"
-OCTO_BASE_EXTENSIONS_UUID = os.environ.get("OCTO_BASE_EXTENSIONS_UUID", "").strip()
+OCTO_FP_TEMPLATE_ID = os.environ.get("OCTO_FP_TEMPLATE_ID", "").strip()
 OCTO_TAG_SIDO = "Sido"
 OCTO_TAG_CORBY = "corby"
 OCTO_TAG_ACCOUNT_MANAGERS = "AccountManagers"
@@ -5046,32 +5046,6 @@ def build_crypto_king_octo_description(parsed):
 
     return text
 
-def build_crypto_king_octo_update_payload(profile_name, parsed, proxy_data=None):
-    payload = {
-        "title": profile_name,
-        "tags": [OCTO_TAG_SIDO, OCTO_TAG_CORBY, OCTO_TAG_ACCOUNT_MANAGERS],
-        "description": build_crypto_king_octo_description(parsed),
-        "fingerprint": {
-            "os": "win"
-        },
-        "start_pages": ["https://www.facebook.com"],
-        "bookmarks": [
-            {"url": "https://www.facebook.com"},
-            {"url": "https://2fa.cn"}
-        ]
-    }
-
-    if proxy_data:
-        payload["proxy"] = {
-            "type": proxy_data.get("type", "socks5"),
-            "host": proxy_data["host"],
-            "port": proxy_data["port"],
-            "login": proxy_data.get("login", ""),
-            "password": proxy_data.get("password", "")
-        }
-
-    return payload
-
 def build_octo_description_from_king_data(parsed):
     parsed = parsed or {}
 
@@ -9034,35 +9008,18 @@ def try_import_crypto_king_cookies(profile_uuid, cookies_payload):
     return True, "cookies imported"
 
 def ensure_octo_profile_for_crypto_king(profile_name, parsed, proxy_data=None):
-    base_uuid = str(OCTO_BASE_EXTENSIONS_UUID or "").strip()
-    if not base_uuid:
-        return False, "OCTO_BASE_EXTENSIONS_UUID не задан"
+    existing = octo_find_profile_by_title(profile_name)
+    if existing:
+        return True, existing
 
-    try:
-        clone_result = octo_clone_profile(base_uuid, profile_name)
-        profile_uuid = extract_octo_profile_uuid_from_result(clone_result)
+    payload = build_crypto_king_octo_payload(
+        profile_name=profile_name,
+        parsed=parsed,
+        proxy_data=proxy_data
+    )
 
-        if not profile_uuid:
-            return False, f"Не удалось получить uuid клона: {clone_result}"
-
-        update_payload = build_crypto_king_octo_update_payload(
-            profile_name=profile_name,
-            parsed=parsed,
-            proxy_data=proxy_data
-        )
-
-        update_result = octo_update_profile(profile_uuid, update_payload)
-
-        return True, {
-            "clone_result": clone_result,
-            "update_result": update_result,
-            "data": {
-                "uuid": profile_uuid
-            }
-        }
-    except Exception as e:
-        logging.exception("ensure_octo_profile_for_crypto_king clone/update failed")
-        return False, str(e)
+    result = octo_create_profile(payload)
+    return True, result
 
 def octo_create_profile(payload):
     headers = {
@@ -9088,34 +9045,6 @@ def octo_create_profile(payload):
     if resp.status_code >= 400:
         raise RuntimeError(f"Octo API error {resp.status_code}: {resp.text}")
 
-    return resp.json()
-
-def octo_clone_profile(base_uuid, new_title):
-    headers = {
-        "X-Octo-Api-Token": OCTO_API_TOKEN,
-        "Content-Type": "application/json",
-    }
-
-    url = f"{OCTO_API_BASE}/profiles/{base_uuid}/clone"
-
-    payload = {
-        "title": new_title
-    }
-
-    resp = requests.post(url, json=payload, headers=headers, timeout=120)
-    resp.raise_for_status()
-    return resp.json()
-
-def octo_update_profile(profile_uuid, payload):
-    headers = {
-        "X-Octo-Api-Token": OCTO_API_TOKEN,
-        "Content-Type": "application/json",
-    }
-
-    url = f"{OCTO_API_BASE}/profiles/{profile_uuid}"
-
-    resp = requests.patch(url, json=payload, headers=headers, timeout=120)
-    resp.raise_for_status()
     return resp.json()
 
 def ensure_octo_profile_for_warehouse(profile_name, proxy_data):
