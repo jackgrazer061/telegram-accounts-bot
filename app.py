@@ -7368,8 +7368,10 @@ def confirm_crypto_king_issue(chat_id, user_id, username):
 
         send_text_input_prompt(
             chat_id,
-            f"Теперь пришли proxy для Octo профиля crypto king:\n{king_name}\n\n"
-            f"Формат:\nip:port\nили\nip:port:login:password"
+            f"Теперь пришли proxy для Octo профиля:\n"
+            f"{king_name}\n\n"
+            f"Формат:\n"
+            f"socks5://login:password@host:port"
         )
         return
 
@@ -12036,7 +12038,7 @@ def handle_message(msg):
                 if not proxy_data:
                     send_text_input_prompt(
                         chat_id,
-                        "Неверный формат proxy.\n\nИспользуй:\nip:port\nили\nip:port:login:password"
+                        "Неверный формат proxy.\n\nИспользуй:\nsocks5://login:password@host:port"
                     )
                     return
         
@@ -12173,11 +12175,23 @@ def handle_message(msg):
         
                 tg_send_inline_message(
                     chat_id,
-                    "📄 Данные crypto king",
+                    f"✅ Кинг заведен в Octo\n\n"
+                    f"✏️Название: {king_name}\n"
+                    f"👨‍💻Для кого: {king_for_whom}\n"
+                    f"💵Цена: {row[2]}\n"
+                    f"🌐Гео: {parsed_crypto.get('geo', geo_value)}",
                     [[{
                         "text": "📄 Скачать txt",
                         "callback_data": f"download_crypto_txt:{user_id}"
                     }]]
+                )
+
+                tg_send_message(
+                    chat_id,
+                    f"Вручную проверь и выставь:\n"
+                    f"• User-Agent\n"
+                    f"• расширения\n\n"
+                    f"User-Agent:\n{parsed_crypto.get('user_agent', '')}"
                 )
         
                 if not octo_ok and octo_msg:
