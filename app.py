@@ -12216,12 +12216,12 @@ def handle_message(msg):
                         "Cookies даны ссылкой. Импорт в профиль нужно сделать вручную:\n\n" +
                         "\n".join(parsed_crypto["cookies_links"])
                     )
-
-                except Exception as e:
-                    logging.exception("crypto king issue crashed")
-                    tg_send_message(chat_id, "Ошибка выдачи crypto king")
         
                 return
+
+            except Exception as e:
+                 logging.exception("crypto king issue crashed")
+                 tg_send_message(chat_id, "Ошибка выдачи crypto king")
 
         if state.get("mode") == "awaiting_octo_proxy_for_warehouse":
             proxy_raw = text.strip()
