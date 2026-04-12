@@ -1385,6 +1385,16 @@ def start_crypto_kings_bulk_proxy_step(chat_id, user_id):
         finish_crypto_kings_bulk(chat_id, user_id)
         return
 
+    # если уже выбрали пропустить все прокси — не спрашиваем больше
+    if state.get("crypto_bulk_skip_all_proxies"):
+        process_crypto_bulk_proxy_step(
+            chat_id=chat_id,
+            user_id=user_id,
+            username=state.get("crypto_bulk_username", ""),
+            proxy_text="__SKIP_ALL_PROXIES__"
+        )
+        return
+
     current_item = queue[current_index]
     king_name = current_item.get("king_name", "")
     geo = current_item.get("geo", "")
@@ -1399,13 +1409,15 @@ def start_crypto_kings_bulk_proxy_step(chat_id, user_id):
         f"login:password@host:port"
     )
 
-    tg_send_message(
+    tg_send_inline_message(
         chat_id,
         text,
-        keyboard=[
-            [{"text": "Пропустить прокси"}],
-            [{"text": BTN_BACK_STEP}, {"text": MENU_CANCEL}]
-        ]
+        [[
+            {
+                "text": "⏭️ Пропустить все прокси",
+                "callback_data": f"crypto_bulk_skip_all_proxies:{user_id}"
+            }
+        ]]
     )
 
     state["mode"] = CRYPTO_BULK_MODE_PROXY
@@ -7896,16 +7908,21 @@ def process_crypto_bulk_proxy_step(chat_id, user_id, username, proxy_text):
     row_index = current_item.get("row_index")
 
     proxy_raw = str(proxy_text or "").strip()
-    skip_proxy = proxy_raw.lower() == "пропустить прокси"
+
+    skip_all = (
+        proxy_raw == "__SKIP_ALL_PROXIES__"
+        or state.get("crypto_bulk_skip_all_proxies") is True
+    )
 
     proxy_data = None
-    if not skip_proxy:
+
+    if not skip_all:
         proxy_data = parse_proxy_input(proxy_raw)
         if not proxy_data:
             tg_send_message(
                 chat_id,
                 f"Не удалось разобрать proxy для кинга {king_name}.\n"
-                f"Пришли proxy заново или нажми «Пропустить прокси»."
+                f"Пришли proxy заново."
             )
             set_state_with_custom_ttl(user_id, state, CRYPTO_BULK_PROXY_TTL)
             return
@@ -7992,12 +8009,13 @@ def process_crypto_bulk_proxy_step(chat_id, user_id, username, proxy_text):
 
             current_item["octo_ok"] = ok
             current_item["error_text"] = error_text
-            current_item["proxy_skipped"] = skip_proxy
+            current_item["proxy_skipped"] = skip_all
 
     results = state.get("crypto_bulk_results", [])
     results.append(current_item)
     state["crypto_bulk_results"] = results
     state["crypto_bulk_current_index"] = current_index + 1
+    state["crypto_bulk_username"] = username
 
     set_state_with_custom_ttl(user_id, state, CRYPTO_BULK_PROXY_TTL)
 
@@ -13468,6 +13486,24 @@ def handle_callback_query(callback_query):
             except Exception:
                 logging.exception("download_crypto_bulk_txt failed")
                 tg_answer_callback_query(query_id, "Не удалось отправить txt")
+        
+            return jsonify({"ok": True})
+
+        if data == f"crypto_bulk_skip_all_proxies:{user_id}":
+            query_id = callback_query["id"]
+        
+            state = get_state(user_id)
+            state["crypto_bulk_skip_all_proxies"] = True
+            set_state_with_custom_ttl(user_id, state, CRYPTO_BULK_PROXY_TTL)
+        
+            tg_answer_callback_query(query_id, "Все оставшиеся прокси будут пропущены")
+        
+            process_crypto_bulk_proxy_step(
+                chat_id=chat_id,
+                user_id=user_id,
+                username=state.get("crypto_bulk_username", ""),
+                proxy_text="__SKIP_ALL_PROXIES__"
+            )
         
             return jsonify({"ok": True})
 
