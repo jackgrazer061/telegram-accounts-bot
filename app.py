@@ -1385,7 +1385,6 @@ def start_crypto_kings_bulk_proxy_step(chat_id, user_id):
         finish_crypto_kings_bulk(chat_id, user_id)
         return
 
-    # если уже выбрали пропустить все прокси — не спрашиваем больше
     if state.get("crypto_bulk_skip_all_proxies"):
         process_crypto_bulk_proxy_step(
             chat_id=chat_id,
@@ -1400,16 +1399,16 @@ def start_crypto_kings_bulk_proxy_step(chat_id, user_id):
     geo = current_item.get("geo", "")
 
     text = (
-        f"Скинь proxy для кинга {king_name}\n\n"
+        f"Скинь socks5 proxy для кинга {king_name}\n\n"
         f"Гео: {geo}\n"
         f"Шаг {current_index + 1} из {len(queue)}\n\n"
         f"Формат:\n"
-        f"host:port:login:password\n"
+        f"socks5://login:password@host:port\n"
         f"или\n"
-        f"login:password@host:port"
+        f"socks5://host:port"
     )
 
-    tg_send_inline_message(
+    sent = tg_send_inline_message(
         chat_id,
         text,
         [[
@@ -1421,6 +1420,15 @@ def start_crypto_kings_bulk_proxy_step(chat_id, user_id):
     )
 
     state["mode"] = CRYPTO_BULK_MODE_PROXY
+
+    try:
+        if isinstance(sent, dict):
+            message_id = sent.get("result", {}).get("message_id")
+            if message_id:
+                state["crypto_bulk_proxy_message_id"] = message_id
+    except Exception:
+        logging.exception("start_crypto_kings_bulk_proxy_step failed to save message_id")
+
     set_state_with_custom_ttl(user_id, state, CRYPTO_BULK_PROXY_TTL)
 
 def send_king_geo_options(chat_id):
@@ -13491,10 +13499,24 @@ def handle_callback_query(callback_query):
 
         if data == f"crypto_bulk_skip_all_proxies:{user_id}":
             query_id = callback_query["id"]
+            message = callback_query.get("message", {})
+            message_id = message.get("message_id")
         
             state = get_state(user_id)
             state["crypto_bulk_skip_all_proxies"] = True
+        
+            if message_id:
+                state["crypto_bulk_proxy_message_id"] = message_id
+        
             set_state_with_custom_ttl(user_id, state, CRYPTO_BULK_PROXY_TTL)
+        
+            if message_id:
+                tg_edit_message_text(
+                    chat_id=chat_id,
+                    message_id=message_id,
+                    text="✅ Прокси пропущены",
+                    inline_buttons=[]
+                )
         
             tg_answer_callback_query(query_id, "Все оставшиеся прокси будут пропущены")
         
