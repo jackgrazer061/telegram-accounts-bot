@@ -5775,7 +5775,7 @@ def build_farmer_stats_text(username):
     
 def get_state(user_id):
     with state_lock:
-        state = user_states.get(user_id, {})
+        state = user_states.get(str(user_id), {})
 
     if not state:
         return {}
@@ -5787,20 +5787,22 @@ def get_state(user_id):
         if now > float(custom_expires_at):
             clear_state(user_id)
             return {}
-        return state
+        return dict(state)
 
-    updated_at = state.get("updated_at", 0)
-    if updated_at and now - updated_at > STATE_TTL:
+    state_time = state.get("_time", 0)
+    if state_time and now - state_time > STATE_TTL:
         clear_state(user_id)
         return {}
 
-    return state
+    return dict(state)
 
 def set_state_with_custom_ttl(user_id, state, ttl_seconds):
     state = dict(state or {})
+    state["_time"] = time.time()
     state["_custom_expires_at"] = time.time() + int(ttl_seconds)
 
     with state_lock:
+        user_states[str(user_id)] = state
         user_states[user_id] = state
 
 def cleanup_states():
