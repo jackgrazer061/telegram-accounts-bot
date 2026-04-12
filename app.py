@@ -11737,25 +11737,13 @@ def handle_message(msg):
         
             state["crypto_bulk_geo"] = geo
             state["crypto_bulk_selected_rows"] = free_items
-            state["mode"] = "awaiting_crypto_king_department_bulk"
-            set_state(user_id, state)
-        
-            send_department_menu(chat_id, "Выбери отдел для crypto king:")
-            return
-
-        if state.get("mode") == "awaiting_crypto_king_department_bulk":
-            if text not in [DEPT_CRYPTO, DEPT_GAMBLA]:
-                send_department_menu(chat_id, "Выбери отдел для crypto king:")
-                return
-        
-            state["crypto_bulk_department"] = text
+            state["crypto_bulk_department"] = DEPT_CRYPTO
             state["mode"] = "awaiting_crypto_king_person_bulk"
             set_state(user_id, state)
-        
-            send_person_menu(chat_id, text)
+            
+            send_person_menu(chat_id, DEPT_CRYPTO)
             return
-        
-        
+                
         if state.get("mode") == "awaiting_crypto_king_person_bulk":
             department = state.get("crypto_bulk_department")
         
@@ -13433,12 +13421,14 @@ def handle_callback_query(callback_query):
             return
 
         if data == f"download_crypto_bulk_zip:{user_id}":
+            query_id = callback_query["id"]
+        
             state = get_state(user_id)
             results = state.get("crypto_bulk_results", [])
         
             success_items = [x for x in results if x.get("octo_ok")]
             if not success_items:
-                tg_answer_callback_query(callback_query_id, "Нет файлов для скачивания")
+                tg_answer_callback_query(query_id, "Нет файлов для скачивания")
                 return jsonify({"ok": True})
         
             try:
@@ -13448,21 +13438,23 @@ def handle_callback_query(callback_query):
                     issued_items=success_items,
                     archive_name=archive_name
                 )
-                tg_answer_callback_query(callback_query_id, "Zip отправлен")
+                tg_answer_callback_query(query_id, "Zip отправлен")
             except Exception:
                 logging.exception("download_crypto_bulk_zip failed")
-                tg_answer_callback_query(callback_query_id, "Не удалось отправить zip")
+                tg_answer_callback_query(query_id, "Не удалось отправить zip")
         
             return jsonify({"ok": True})
         
         
         if data.startswith(f"download_crypto_bulk_txt:{user_id}:"):
+            query_id = callback_query["id"]
+        
             state = get_state(user_id)
             results = state.get("crypto_bulk_results", [])
         
             success_items = [x for x in results if x.get("octo_ok")]
             if not success_items:
-                tg_answer_callback_query(callback_query_id, "Нет txt для скачивания")
+                tg_answer_callback_query(query_id, "Нет txt для скачивания")
                 return jsonify({"ok": True})
         
             try:
@@ -13472,10 +13464,10 @@ def handle_callback_query(callback_query):
                     king_name=item.get("king_name", "king"),
                     data_text=item.get("data_text", "")
                 )
-                tg_answer_callback_query(callback_query_id, "Txt отправлен")
+                tg_answer_callback_query(query_id, "Txt отправлен")
             except Exception:
                 logging.exception("download_crypto_bulk_txt failed")
-                tg_answer_callback_query(callback_query_id, "Не удалось отправить txt")
+                tg_answer_callback_query(query_id, "Не удалось отправить txt")
         
             return jsonify({"ok": True})
 
