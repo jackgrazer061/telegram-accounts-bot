@@ -200,8 +200,8 @@ SUBMENU_RETURN_PIXEL = '↩️Вернуть Пиксель'
 SUBMENU_ACCOUNTS_MAIN = 'Лички'
 SUBMENU_BACK_MAIN = 'В меню'
 
-DEPT_CRYPTO = 'Крипта'
-DEPT_GAMBLA = 'Гембла'
+DEPT_CRYPTO = '₿Крипта'
+DEPT_GAMBLA = '🎰Гембла'
 
 CRYPTO_NAMES = [
     '№3 dasha', '№5 mark', '№20 misha',
@@ -326,7 +326,13 @@ MOSCOW_TZ = ZoneInfo("Europe/Moscow")
 last_user_action = {}
 ACTION_COOLDOWN = 0.2
 
-STATE_TTL = 600  # 10 минут
+STATE_TTL = 600  # обычный ttl
+
+CRYPTO_BULK_PROXY_TTL = 60 * 60 * 6  # 6 часов
+
+CRYPTO_BULK_MODE_COUNT = "awaiting_crypto_kings_count"
+CRYPTO_BULK_MODE_NAMES = "awaiting_crypto_kings_names_bulk"
+CRYPTO_BULK_MODE_PROXY = "awaiting_crypto_kings_proxy_bulk"
 
 last_request_time = time.time()
 last_background_time = time.time()
@@ -730,7 +736,12 @@ def tg_send_inline_message(chat_id, text, inline_buttons):
             logging.warning(f"Telegram inline send failed: {resp.text}")
             return None
 
-        return resp.json()
+        data = resp.json()
+        if not data.get("ok"):
+            logging.warning(f"Telegram inline send api error: {data}")
+            return None
+
+        return data
 
     except Exception as e:
         logging.error(f"tg_send_inline_message error: {e}")
@@ -1177,6 +1188,44 @@ def find_free_crypto_king_by_geo(geo, exclude_row=None):
     candidates.sort(key=lambda x: x["purchase_date_obj"])
     return candidates[0]
 
+def find_free_crypto_kings_by_geo(count_needed, geo):
+    rows = get_sheet_rows_cached(SHEET_CRYPTO_KINGS)
+
+    candidates = []
+
+    for idx, row in enumerate(rows[1:], start=2):
+        row = ensure_row_len(row, 13)
+
+        status = str(row[4]).strip().lower()
+        row_geo = str(row[7]).strip()
+        current_name = str(row[0]).strip()
+
+        if status != "free":
+            continue
+
+        if row_geo != str(geo).strip():
+            continue
+
+        # свободный crypto king должен быть без названия
+        if current_name:
+            continue
+
+        purchase_date = parse_date(row[1]) or datetime.max
+
+        candidates.append({
+            "row_index": idx,
+            "purchase_date_obj": purchase_date,
+            "purchase_date": row[1],
+            "price": row[2],
+            "supplier": row[3],
+            "geo": row[7],
+            "data_text": get_full_king_data_from_row(row),
+            "row": row
+        })
+
+    candidates.sort(key=lambda x: x["purchase_date_obj"])
+    return candidates[:count_needed]
+
 def find_next_crypto_king_after_row(current_row_index, geo_value):
     rows = get_sheet_rows_cached(SHEET_CRYPTO_KINGS, force=True)
 
@@ -1324,6 +1373,41 @@ def mark_crypto_king_preview_as_issued(chat_id, message_id, king_name, king_for_
     except Exception:
         logging.exception("mark_crypto_king_preview_as_issued failed")
 
+def start_crypto_kings_bulk_proxy_step(chat_id, user_id):
+    state = get_state(user_id)
+
+    queue = state.get("crypto_bulk_queue", [])
+    current_index = int(state.get("crypto_bulk_current_index", 0))
+
+    if current_index >= len(queue):
+        finish_crypto_kings_bulk(chat_id, user_id)
+        return
+
+    current_item = queue[current_index]
+    king_name = current_item.get("king_name", "")
+    geo = current_item.get("geo", "")
+
+    text = (
+        f"Скинь proxy для кинга {king_name}\n\n"
+        f"Гео: {geo}\n"
+        f"Шаг {current_index + 1} из {len(queue)}\n\n"
+        f"Формат:\n"
+        f"host:port:login:password\n"
+        f"или\n"
+        f"login:password@host:port"
+    )
+
+    tg_send_message(
+        chat_id,
+        text,
+        keyboard=[
+            [{"text": BTN_BACK_STEP}, {"text": MENU_CANCEL}]
+        ]
+    )
+
+    state["mode"] = CRYPTO_BULK_MODE_PROXY
+    set_state_with_custom_ttl(user_id, state, CRYPTO_BULK_PROXY_TTL)
+
 def send_king_geo_options(chat_id):
     geos = get_free_king_geos()
 
@@ -1451,6 +1535,129 @@ def tg_send_kings_as_zip(chat_id, issued_items, archive_name="kings_bundle.zip")
     resp = requests.post(url, data=data, files=files, timeout=120)
     resp.raise_for_status()
     return resp.json()
+
+def build_crypto_bulk_result_text(results, for_whom):
+    success_items = [x for x in results if x.get("octo_ok")]
+    failed_items = [x for x in results if not x.get("octo_ok")]
+
+    if success_items and not failed_items:
+        header = "✅ Кинги заведены в Octo"
+    elif failed_items and not success_items:
+        header = "❌ Кинги не заведены в Octo"
+    else:
+        header = "✅ Кинги заведены в Octo"
+
+    all_names = " | ".join(
+        str(x.get("king_name", "")).strip()
+        for x in results
+        if str(x.get("king_name", "")).strip()
+    )
+
+    geo_value = ""
+    price_value = ""
+
+    if success_items:
+        geo_value = str(success_items[0].get("geo", "")).strip()
+        price_value = str(success_items[0].get("price", "")).strip()
+    elif results:
+        geo_value = str(results[0].get("geo", "")).strip()
+        price_value = str(results[0].get("price", "")).strip()
+
+    lines = [header]
+
+    for item in failed_items:
+        lines.append(f"❌не получилось завести кинг: {item.get('king_name', '')}")
+
+    lines.append(f"✏️Название: {all_names}")
+    lines.append(f"👨‍💻Для кого: {for_whom}")
+    lines.append(f"💵Цена: {price_value}")
+    lines.append(f"🌐Гео: {geo_value}")
+
+    return "\n".join(lines)
+
+def send_crypto_bulk_followup_messages(chat_id, results):
+    tg_send_message(
+        chat_id,
+        "Вручную проверь и выставь:\n"
+        "• User-Agent\n"
+        "• расширения\n"
+        "• куки"
+    )
+
+    ua_lines = []
+    bm_lines = []
+
+    for item in results:
+        if not item.get("octo_ok"):
+            continue
+
+        king_name = item.get("king_name", "")
+        parsed = item.get("parsed_crypto", {}) or {}
+
+        user_agent = str(parsed.get("user_agent", "")).strip()
+        bm_links = parsed.get("bm_links", []) or []
+        bm_email_pairs = parsed.get("bm_email_pairs", []) or []
+
+        if user_agent:
+            ua_lines.append(f"у кинга {king_name} есть User-Agent✅")
+
+        if bm_links or bm_email_pairs:
+            bm_lines.append(f"у кинга {king_name} есть BM✅")
+
+    if ua_lines:
+        tg_send_message(chat_id, "\n".join(ua_lines))
+
+    if bm_lines:
+        tg_send_message(chat_id, "\n".join(bm_lines))
+
+def finish_crypto_kings_bulk(chat_id, user_id):
+    state = get_state(user_id)
+
+    results = state.get("crypto_bulk_results", [])
+    for_whom = state.get("king_for_whom", "")
+
+    if not results:
+        clear_state(user_id)
+        send_kings_menu(chat_id, "Не удалось выдать ни одного crypto king.")
+        return
+
+    text = build_crypto_bulk_result_text(results, for_whom)
+
+    success_items = [x for x in results if x.get("octo_ok")]
+
+    inline_buttons = []
+
+    if len(success_items) == 1:
+        inline_buttons = [[
+            {
+                "text": "📄 Скачать txt",
+                "callback_data": f"download_crypto_bulk_txt:{user_id}:0"
+            }
+        ]]
+    elif len(success_items) >= 2:
+        inline_buttons = [[
+            {
+                "text": "📦 Скачать zip",
+                "callback_data": f"download_crypto_bulk_zip:{user_id}"
+            }
+        ]]
+
+    if inline_buttons:
+        tg_send_inline_message(chat_id, text, inline_buttons)
+    else:
+        tg_send_message(chat_id, text)
+
+    send_crypto_bulk_followup_messages(chat_id, results)
+
+    # сохраняем только данные для скачивания
+    download_state = {
+        "mode": "crypto_bulk_done",
+        "crypto_bulk_results": results,
+        "updated_at": time.time()
+    }
+    set_state(user_id, download_state)
+
+    send_kings_menu(chat_id, "Выбери следующее действие:")
 
 def tg_send_king_data_as_txt(chat_id, king_name, data_text, caption=None):
     text = str(data_text or "").strip()
@@ -5566,30 +5773,62 @@ def build_farmer_stats_text(username):
     
 def get_state(user_id):
     with state_lock:
-        state = user_states.get(str(user_id))
+        state = user_states.get(user_id, {})
 
-        if not state:
+    if not state:
+        return {}
+
+    now = time.time()
+
+    custom_expires_at = state.get("_custom_expires_at")
+    if custom_expires_at:
+        if now > float(custom_expires_at):
+            clear_state(user_id)
             return {}
+        return state
 
-        state_time = state.get("_time", 0)
+    updated_at = state.get("updated_at", 0)
+    if updated_at and now - updated_at > STATE_TTL:
+        clear_state(user_id)
+        return {}
 
-        if time.time() - state_time > STATE_TTL:
-            user_states.pop(str(user_id), None)
-            return {}
+    return state
 
-        return dict(state)
+def set_state_with_custom_ttl(user_id, state, ttl_seconds):
+    state = dict(state or {})
+    state["_custom_expires_at"] = time.time() + int(ttl_seconds)
+
+    with state_lock:
+        user_states[user_id] = state
 
 def cleanup_states():
     now = time.time()
-    to_delete = []
 
     with state_lock:
-        for uid, state in user_states.items():
-            if now - state.get("_time", 0) > STATE_TTL:
-                to_delete.append(uid)
+        to_delete = []
 
-        for uid in to_delete:
-            user_states.pop(uid, None)
+        for user_id, state in user_states.items():
+            if not state:
+                to_delete.append(user_id)
+                continue
+
+            custom_expires_at = state.get("_custom_expires_at")
+            if custom_expires_at:
+                try:
+                    if now > float(custom_expires_at):
+                        to_delete.append(user_id)
+                    continue
+                except Exception:
+                    to_delete.append(user_id)
+                    continue
+
+            updated_at = state.get("updated_at", 0)
+            if updated_at and now - updated_at > STATE_TTL:
+                to_delete.append(user_id)
+
+        for user_id in to_delete:
+            user_states.pop(user_id, None)
+            user_state_history.pop(user_id, None)
 
 def cleanup_processed_updates():
     now = time.time()
@@ -7371,6 +7610,130 @@ def confirm_crypto_king_issue(chat_id, user_id, username):
         logging.exception("confirm_crypto_king_issue crashed")
         tg_send_message(chat_id, "Ошибка подготовки выдачи crypto king. Попробуй ещё раз.")
         send_kings_menu(chat_id, "Меню кингов:")
+
+def process_crypto_bulk_proxy_step(chat_id, user_id, username, proxy_text):
+    state = get_state(user_id)
+
+    if state.get("mode") != CRYPTO_BULK_MODE_PROXY:
+        send_kings_menu(chat_id, "Сначала начни выдачу crypto king заново.")
+        return
+
+    queue = state.get("crypto_bulk_queue", [])
+    current_index = int(state.get("crypto_bulk_current_index", 0))
+
+    if current_index >= len(queue):
+        finish_crypto_kings_bulk(chat_id, user_id)
+        return
+
+    current_item = queue[current_index]
+    king_name = current_item.get("king_name", "")
+    row_index = current_item.get("row_index")
+
+    proxy_data = parse_proxy_input(proxy_text)
+    if not proxy_data:
+        tg_send_message(
+            chat_id,
+            f"Не удалось разобрать proxy для кинга {king_name}.\n"
+            f"Пришли заново."
+        )
+        set_state_with_custom_ttl(user_id, state, CRYPTO_BULK_PROXY_TTL)
+        return
+
+    rows = get_sheet_rows_cached(SHEET_CRYPTO_KINGS, force=True)
+
+    if row_index - 1 >= len(rows):
+        current_item["octo_ok"] = False
+        current_item["error_text"] = "строка пропала из таблицы"
+    else:
+        row = ensure_row_len(rows[row_index - 1], 13)
+
+        if str(row[4]).strip().lower() != "free":
+            current_item["octo_ok"] = False
+            current_item["error_text"] = "king уже не free"
+        else:
+            data_text = get_full_king_data_from_row(row)
+            parsed = parse_crypto_king_raw_data(data_text)
+
+            current_item["data_text"] = data_text
+            current_item["parsed_crypto"] = parsed
+
+            ok = False
+            error_text = ""
+
+            try:
+                octo_ok, octo_result = ensure_octo_profile_for_crypto_king(
+                    profile_name=king_name,
+                    parsed=parsed,
+                    proxy_data=proxy_data
+                )
+
+                if octo_ok:
+                    ok = True
+
+                    today = datetime.now(MOSCOW_TZ).strftime("%d/%m/%Y")
+                    who_took_text = f"@{username}" if username else "без username"
+                    sync_id = row[12]
+
+                    sheet_update_raw(
+                        SHEET_CRYPTO_KINGS,
+                        f"A{row_index}:I{row_index}",
+                        [[
+                            king_name,          # A
+                            row[1],             # B дата покупки
+                            row[2],             # C цена
+                            row[3],             # D supplier
+                            "taken",            # E статус
+                            state.get("king_for_whom", ""),  # F для кого
+                            today,              # G дата выдачи
+                            row[7],             # H geo
+                            who_took_text       # I кто выдал
+                        ]]
+                    )
+
+                    if sync_id:
+                        sync_status_to_basebot(
+                            BASEBOT_SHEET_CRYPTO_KINGS,
+                            sync_id,
+                            "taken"
+                        )
+
+                    sheet_append_row_and_refresh(
+                        SHEET_ISSUES,
+                        [
+                            king_name,
+                            "KING",
+                            row[1],
+                            normalize_numeric_for_sheet(row[2]),
+                            today,
+                            row[3],
+                            state.get("king_for_whom", "")
+                        ],
+                        value_input_option="USER_ENTERED"
+                    )
+
+                    invalidate_stats_cache()
+                else:
+                    error_text = str(octo_result)
+
+            except Exception as e:
+                logging.exception("process_crypto_bulk_proxy_step crashed")
+                error_text = str(e)
+
+            current_item["octo_ok"] = ok
+            current_item["error_text"] = error_text
+
+    results = state.get("crypto_bulk_results", [])
+    results.append(current_item)
+    state["crypto_bulk_results"] = results
+    state["crypto_bulk_current_index"] = current_index + 1
+
+    set_state_with_custom_ttl(user_id, state, CRYPTO_BULK_PROXY_TTL)
+
+    if state["crypto_bulk_current_index"] >= len(queue):
+        finish_crypto_kings_bulk(chat_id, user_id)
+        return
+
+    start_crypto_kings_bulk_proxy_step(chat_id, user_id)
 
 def append_king_to_issues_sheet(king_name, purchase_date, price, transfer_date, supplier, for_whom):
     sheet_append_row_and_refresh(
@@ -9985,9 +10348,18 @@ def handle_message(msg):
             return
 
         if text == SUBMENU_CRYPTO_KINGS:
-            clear_state(user_id)
-            update_state(user_id, mode="awaiting_crypto_king_geo")
-            send_crypto_king_geo_options(chat_id)
+            state = {
+                "mode": CRYPTO_BULK_MODE_COUNT
+            }
+            set_state(user_id, state)
+        
+            tg_send_message(
+                chat_id,
+                "Сколько crypto king нужно?",
+                keyboard=[
+                    [{"text": BTN_BACK_STEP}, {"text": MENU_CANCEL}]
+                ]
+            )
             return
 
         if text == BTN_KING_CONFIRM:
@@ -11012,7 +11384,137 @@ def handle_message(msg):
             ]
             tg_send_message(chat_id, "Выбери для кого crypto king:", keyboard)
             return
+
+        if state.get("mode") == CRYPTO_BULK_MODE_COUNT:
+            count_text = str(text).strip()
         
+            if not count_text.isdigit():
+                tg_send_message(chat_id, "Пришли количество числом.")
+                return
+        
+            count_needed = int(count_text)
+            if count_needed <= 0:
+                tg_send_message(chat_id, "Количество должно быть больше нуля.")
+                return
+        
+            state["crypto_kings_count"] = count_needed
+            state["mode"] = "awaiting_crypto_king_geo_bulk"
+            set_state(user_id, state)
+        
+            send_crypto_king_geo_options(chat_id)
+            return
+
+        if state.get("mode") == CRYPTO_BULK_MODE_PROXY:
+            process_crypto_bulk_proxy_step(
+                chat_id=chat_id,
+                user_id=user_id,
+                username=username,
+                proxy_text=text
+            )
+            return
+
+        if state.get("mode") == "awaiting_crypto_king_geo_bulk":
+            geo = str(text).strip()
+        
+            free_items = find_free_crypto_kings_by_geo(
+                state.get("crypto_kings_count", 0),
+                geo
+            )
+        
+            if len(free_items) < int(state.get("crypto_kings_count", 0)):
+                tg_send_message(
+                    chat_id,
+                    f"Недостаточно свободных crypto king по GEO {geo}.\n"
+                    f"Доступно: {len(free_items)}"
+                )
+                return
+        
+            state["crypto_bulk_geo"] = geo
+            state["crypto_bulk_selected_rows"] = free_items
+            state["mode"] = CRYPTO_BULK_MODE_NAMES
+            set_state(user_id, state)
+        
+            tg_send_message(
+                chat_id,
+                f"Пришли названия для {len(free_items)} crypto king.\n"
+                f"Каждое название с новой строки."
+            )
+            return
+
+        if state.get("mode") == CRYPTO_BULK_MODE_NAMES:
+            raw_lines = [x.strip() for x in str(text).splitlines() if x.strip()]
+        
+            count_needed = int(state.get("crypto_kings_count", 0))
+            selected_rows = state.get("crypto_bulk_selected_rows", [])
+        
+            if len(raw_lines) != count_needed:
+                tg_send_message(
+                    chat_id,
+                    f"Нужно прислать ровно {count_needed} названий.\n"
+                    f"Сейчас получено: {len(raw_lines)}"
+                )
+                return
+        
+            duplicates_inside = []
+            seen = set()
+        
+            for name in raw_lines:
+                low = name.lower()
+                if low in seen:
+                    duplicates_inside.append(name)
+                seen.add(low)
+        
+            if duplicates_inside:
+                tg_send_message(
+                    chat_id,
+                    "Есть дубли названий внутри списка:\n" +
+                    "\n".join(duplicates_inside[:20])
+                )
+                return
+        
+            already_exists = []
+            for name in raw_lines:
+                if crypto_king_name_exists(name):
+                    already_exists.append(name)
+        
+            if already_exists:
+                tg_send_message(
+                    chat_id,
+                    "Эти названия уже существуют:\n" +
+                    "\n".join(already_exists[:20])
+                )
+                return
+        
+            queue = []
+            for row_item, king_name in zip(selected_rows, raw_lines):
+                queue.append({
+                    "row_index": row_item["row_index"],
+                    "purchase_date": row_item["purchase_date"],
+                    "price": row_item["price"],
+                    "supplier": row_item["supplier"],
+                    "geo": row_item["geo"],
+                    "data_text": row_item["data_text"],
+                    "king_name": king_name
+                })
+        
+            state["crypto_bulk_queue"] = queue
+            state["crypto_bulk_current_index"] = 0
+            state["crypto_bulk_results"] = []
+            state["mode"] = CRYPTO_BULK_MODE_PROXY
+        
+            set_state_with_custom_ttl(user_id, state, CRYPTO_BULK_PROXY_TTL)
+        
+            start_crypto_kings_bulk_proxy_step(chat_id, user_id)
+            return
+
+        if state.get("mode") == CRYPTO_BULK_MODE_PROXY:
+            process_crypto_bulk_proxy_step(
+                chat_id=chat_id,
+                user_id=user_id,
+                username=username,
+                proxy_text=text
+            )
+            return
 
         if state.get("mode") == "awaiting_crypto_king_department":
             if text != DEPT_CRYPTO:
@@ -12588,6 +13090,53 @@ def handle_callback_query(callback_query):
                 }]]
             )
             return
+
+        if data == f"download_crypto_bulk_zip:{user_id}":
+            state = get_state(user_id)
+            results = state.get("crypto_bulk_results", [])
+        
+            success_items = [x for x in results if x.get("octo_ok")]
+            if not success_items:
+                tg_answer_callback_query(callback_query_id, "Нет файлов для скачивания")
+                return jsonify({"ok": True})
+        
+            try:
+                archive_name = f"crypto_kings_{datetime.now(MOSCOW_TZ).strftime('%Y%m%d_%H%M%S')}.zip"
+                tg_send_kings_as_zip(
+                    chat_id=chat_id,
+                    issued_items=success_items,
+                    archive_name=archive_name
+                )
+                tg_answer_callback_query(callback_query_id, "Zip отправлен")
+            except Exception:
+                logging.exception("download_crypto_bulk_zip failed")
+                tg_answer_callback_query(callback_query_id, "Не удалось отправить zip")
+        
+            return jsonify({"ok": True})
+        
+        
+        if data.startswith(f"download_crypto_bulk_txt:{user_id}:"):
+            state = get_state(user_id)
+            results = state.get("crypto_bulk_results", [])
+        
+            success_items = [x for x in results if x.get("octo_ok")]
+            if not success_items:
+                tg_answer_callback_query(callback_query_id, "Нет txt для скачивания")
+                return jsonify({"ok": True})
+        
+            try:
+                item = success_items[0]
+                tg_send_king_data_as_txt(
+                    chat_id=chat_id,
+                    king_name=item.get("king_name", "king"),
+                    data_text=item.get("data_text", "")
+                )
+                tg_answer_callback_query(callback_query_id, "Txt отправлен")
+            except Exception:
+                logging.exception("download_crypto_bulk_txt failed")
+                tg_answer_callback_query(callback_query_id, "Не удалось отправить txt")
+        
+            return jsonify({"ok": True})
 
         if data.startswith("download_crypto_txt:"):
             target_user_id = data.split(":", 1)[1]
