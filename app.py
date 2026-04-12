@@ -73,6 +73,8 @@ FARM_FP_WAREHOUSE_NOTIFY_ADMIN_IDS = [
 BOT_ERROR_NOTIFY_ADMIN_ID = 7573650707
 BOT_ERROR_NOTIFY_ADMIN_NAME = "JackGrazer_Deputy_Head_Account"
 
+bot_diagnostics_lock = threading.Lock()
+bot_diagnostics_running = False
 last_error_notifications = {}
 error_notify_lock = threading.Lock()
 ERROR_NOTIFY_COOLDOWN = 300  # 5 минут на одинаковую ошибку
@@ -8460,7 +8462,7 @@ def run_bot_diagnostics():
         else:
             fail_count += 1
 
-    # 1. Проверка токена и Telegram API
+    # 1. Telegram
     try:
         if BOT_TOKEN and BASE_URL.startswith("https://api.telegram.org/bot"):
             add_result("Подключение к Telegram настроено", True)
@@ -8469,14 +8471,14 @@ def run_bot_diagnostics():
     except Exception as e:
         add_result("Подключение к Telegram настроено", False, str(e))
 
-    # 2. Проверка Google credentials
+    # 2. Google auth
     try:
         client = get_gspread_client()
         add_result("Авторизация в Google Sheets", client is not None)
     except Exception as e:
         add_result("Авторизация в Google Sheets", False, str(e))
 
-    # 3. Проверка основной таблицы
+    # 3. Основная таблица
     try:
         client = get_gspread_client()
         spreadsheet = client.open_by_key(SPREADSHEET_ID)
@@ -8484,7 +8486,15 @@ def run_bot_diagnostics():
     except Exception as e:
         add_result("Основная таблица открывается", False, str(e))
 
-    # 4. Проверка всех листов
+    # 4. Backup таблица
+    try:
+        client = get_gspread_client()
+        backup_spreadsheet = client.open_by_key(BACKUP_SPREADSHEET_ID)
+        add_result("Бэкап таблица открывается", True, f"Название: {backup_spreadsheet.title}")
+    except Exception as e:
+        add_result("Бэкап таблица открывается", False, str(e))
+
+    # 5. Проверка всех основных листов (без BaseBot)
     sheets_to_check = [
         SHEET_ACCOUNTS,
         SHEET_ISSUES,
@@ -8506,31 +8516,18 @@ def run_bot_diagnostics():
         except Exception as e:
             add_result(f"Лист '{sheet_name}' доступен", False, str(e))
 
-    # 5. Проверка backup таблицы
+    # 6. ENV Octo
     try:
-        client = get_gspread_client()
-        backup_spreadsheet = client.open_by_key(BACKUP_SPREADSHEET_ID)
-        add_result("Бэкап таблица открывается", True, f"Название: {backup_spreadsheet.title}")
+        add_result("OCTO_API_TOKEN задан", bool(str(OCTO_API_TOKEN).strip()))
     except Exception as e:
-        add_result("Бэкап таблица открывается", False, str(e))
+        add_result("OCTO_API_TOKEN задан", False, str(e))
 
-    # 6. Проверка кеша
     try:
-        refresh_sheet_cache(SHEET_ACCOUNTS)
-        refresh_sheet_cache(SHEET_ISSUES)
-        refresh_sheet_cache(SHEET_KINGS)
-        refresh_sheet_cache(SHEET_CRYPTO_KINGS)
-        refresh_sheet_cache(SHEET_BMS)
-        refresh_sheet_cache(SHEET_FPS)
-        refresh_sheet_cache(SHEET_PIXELS)
-        refresh_sheet_cache(SHEET_FARM_KINGS)
-        refresh_sheet_cache(SHEET_FARM_BMS)
-        refresh_sheet_cache(SHEET_FARM_FPS)
-        add_result("Кеш таблиц обновляется", True)
+        add_result("OCTO_API_BASE задан", bool(str(OCTO_API_BASE).strip()))
     except Exception as e:
-        add_result("Кеш таблиц обновляется", False, str(e))
+        add_result("OCTO_API_BASE задан", False, str(e))
 
-    # 7. Проверка вспомогательных функций
+    # 7. Базовые функции
     try:
         parse_date("15/02/2026")
         parse_price("123.45")
@@ -8543,7 +8540,7 @@ def run_bot_diagnostics():
     except Exception as e:
         add_result("Базовые функции работают", False, str(e))
 
-    # 8. Проверка логики поиска
+    # 8. Поисковые функции
     try:
         get_free_king_geos()
         get_free_crypto_king_geos()
@@ -8554,14 +8551,13 @@ def run_bot_diagnostics():
     except Exception as e:
         add_result("Поисковые функции работают", False, str(e))
 
-    # 9. Проверка общей статистики
+    # 9. Статистика
     try:
         build_stats_text()
         add_result("Общая статистика собирается", True)
     except Exception as e:
         add_result("Общая статистика собирается", False, str(e))
 
-    # 10. Проверка статистики accounts
     try:
         build_manager_stats_summary_text("test_user")
         build_manager_stats_text("test_user")
@@ -8569,7 +8565,6 @@ def run_bot_diagnostics():
     except Exception as e:
         add_result("Статистика accounts собирается", False, str(e))
 
-    # 11. Проверка статистики farmers
     try:
         build_farmer_stats_summary_text("test_user")
         build_farmer_stats_text("test_user")
@@ -8577,7 +8572,7 @@ def run_bot_diagnostics():
     except Exception as e:
         add_result("Статистика farmers собирается", False, str(e))
 
-    # 12. Проверка структуры таблиц
+    # 10. Структура таблиц
     try:
         structure_result = run_sheet_structure_checks()
         report.extend(structure_result["report"])
@@ -8586,7 +8581,7 @@ def run_bot_diagnostics():
     except Exception as e:
         add_result("Проверка структуры таблиц", False, str(e))
 
-    # 13. Проверка дублей ID / BM / pixel ID
+    # 11. Дубли
     try:
         duplicates_result = run_duplicates_checks()
         report.extend(duplicates_result["report"])
@@ -8594,8 +8589,8 @@ def run_bot_diagnostics():
         fail_count += duplicates_result["fail_count"]
     except Exception as e:
         add_result("Проверка дублей ID / BM / pixel ID", False, str(e))
-        
-    # 13. Проверка складов ФП
+
+    # 12. Склады ФП
     try:
         rows = get_sheet_rows_cached(SHEET_FPS)
         warehouses = sorted({
@@ -8604,11 +8599,11 @@ def run_bot_diagnostics():
             if len(row) > 4 and str(row[4]).strip()
         }, key=extract_warehouse_sort_key)
 
-        add_result("Склады accounts ФП читаются", True, f"Найдено складов: {len(warehouses)}")
+        add_result("Склады ФП читаются", True, f"Складов: {len(warehouses)}")
     except Exception as e:
-        add_result("Склады accounts ФП читаются", False, str(e))
+        add_result("Склады ФП читаются", False, str(e))
 
-    # 14. Проверка складов farm ФП
+    # 13. Склады farm FP
     try:
         rows = get_sheet_rows_cached(SHEET_FARM_FPS)
         warehouses = sorted({
@@ -8617,19 +8612,63 @@ def run_bot_diagnostics():
             if len(row) > 4 and str(row[4]).strip()
         }, key=extract_warehouse_sort_key)
 
-        add_result("Склады farm ФП читаются", True, f"Найдено складов: {len(warehouses)}")
+        add_result("Склады farm FP читаются", True, f"Складов: {len(warehouses)}")
     except Exception as e:
-        add_result("Склады farm ФП читаются", False, str(e))
+        add_result("Склады farm FP читаются", False, str(e))
 
-    summary = (
-        "Проверка бота завершена\n\n"
-        f"Успешно: {ok_count}\n"
-        f"Ошибок: {fail_count}\n\n"
-        "Что именно проверено:\n"
-        + "\n".join(report)
-    )
+    # 14. Crypto bulk helpers
+    try:
+        build_crypto_bulk_result_text([], "test")
+        send_crypto_bulk_followup_messages
+        finish_crypto_kings_bulk
+        process_crypto_bulk_proxy_step
+        add_result("Bulk crypto функции подключены", True)
+    except Exception as e:
+        add_result("Bulk crypto функции подключены", False, str(e))
 
-    return summary
+    # 15. Проверка state helper под long proxy wait
+    try:
+        test_state = {"mode": "test"}
+        set_state_with_custom_ttl(999999, test_state, 60)
+        loaded = get_state(999999)
+        clear_state(999999)
+        add_result("Custom TTL состояний работает", loaded.get("mode") == "test")
+    except Exception as e:
+        add_result("Custom TTL состояний работает", False, str(e))
+
+    report.append("")
+    report.append(f"Итого: ✅ {ok_count} | ❌ {fail_count}")
+
+    return "\n".join(report)
+
+def run_bot_diagnostics_async(chat_id):
+    global bot_diagnostics_running
+
+    acquired = bot_diagnostics_lock.acquire(blocking=False)
+    if not acquired:
+        tg_send_message(chat_id, "Проверка бота уже запущена. Дождись завершения.")
+        return
+
+    bot_diagnostics_running = True
+
+    def worker():
+        global bot_diagnostics_running
+        try:
+            tg_send_message(chat_id, "Запускаю полную проверку бота...")
+            result = run_bot_diagnostics()
+            tg_send_long_message(chat_id, result)
+            send_admin_menu(chat_id, "Меню Admin:")
+        except Exception as e:
+            logging.exception("run_bot_diagnostics_async crashed")
+            tg_send_message(chat_id, f"Ошибка проверки бота:\n{e}")
+        finally:
+            bot_diagnostics_running = False
+            try:
+                bot_diagnostics_lock.release()
+            except Exception:
+                pass
+
+    threading.Thread(target=worker, daemon=True).start()
 
 def run_sheet_structure_checks():
     report = []
@@ -9883,11 +9922,8 @@ def handle_message(msg):
             if not is_admin(user_id):
                 tg_send_message(chat_id, "У вас нет доступа.")
                 return
-
-            tg_send_message(chat_id, "Запускаю полную проверку бота...")
-            result = run_bot_diagnostics()
-            tg_send_long_message(chat_id, result)
-            send_admin_menu(chat_id, "Меню Admin:")
+        
+            run_bot_diagnostics_async(chat_id)
             return
 
         if text == BTN_BACK_FROM_ADMIN:
