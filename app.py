@@ -202,7 +202,7 @@ SUBMENU_RETURN_PIXEL = '↩️Вернуть Пиксель'
 SUBMENU_ACCOUNTS_MAIN = 'Лички'
 SUBMENU_BACK_MAIN = 'В меню'
 
-DEPT_CRYPTO = '₿Крипта'
+DEPT_CRYPTO = '🪙Крипта'
 DEPT_GAMBLA = '🎰Гембла'
 
 CRYPTO_NAMES = [
@@ -1403,6 +1403,7 @@ def start_crypto_kings_bulk_proxy_step(chat_id, user_id):
         chat_id,
         text,
         keyboard=[
+            [{"text": "Пропустить прокси"}],
             [{"text": BTN_BACK_STEP}, {"text": MENU_CANCEL}]
         ]
     )
@@ -1571,7 +1572,7 @@ def build_crypto_bulk_result_text(results, for_whom):
         lines.append(f"❌не получилось завести кинг: {item.get('king_name', '')}")
 
     lines.append(f"✏️Название: {all_names}")
-    lines.append(f"👨‍💻Для кого: {for_whom}")
+    lines.append(f"👨‍💻Для кого: {for_whom or 'не указано'}")
     lines.append(f"💵Цена: {price_value}")
     lines.append(f"🌐Гео: {geo_value}")
 
@@ -4873,13 +4874,6 @@ def parse_king_data_block(raw_text):
 
     return result
 
-def _clean_crypto_text(text):
-    text = str(text or "").strip().strip('"').strip()
-    text = text.replace("\r", " ").replace("\n", " ").replace("\t", " ")
-    text = re.sub(r"\s+", " ", text)
-    return text.strip()
-
-
 def _extract_first_match(pattern, text, flags=re.IGNORECASE):
     m = re.search(pattern, text, flags)
     return m.group(1).strip() if m else ""
@@ -4978,18 +4972,124 @@ def _extract_geo_value(text):
     return ""
 
 
-def _extract_login_value(text):
-    # 1) явный login -
-    m = re.search(r"login\s*-\s*([A-Za-z0-9._@+-]+)", text, re.IGNORECASE)
+def _clean_crypto_text(text):
+    text = str(text or "")
+    text = text.replace("\ufeff", "")
+    text = text.replace("\u200b", "")
+    text = text.replace("\u200c", "")
+    text = text.replace("\u200d", "")
+    text = text.replace("\xa0", " ")
+    text = text.replace("：", ":")
+    text = text.replace("—", "-")
+    text = text.replace("–", "-")
+    text = re.sub(r"[ \t]+", " ", text)
+    return text.strip()
+
+
+def _normalize_crypto_lines(text):
+    text = _clean_crypto_text(text)
+    lines = [line.strip() for line in text.splitlines()]
+    return [line for line in lines if line]
+
+
+def _extract_all_emails(text):
+    text = str(text or "")
+    return re.findall(r"[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}", text)
+
+
+def _extract_all_urls(text):
+    text = str(text or "")
+    return re.findall(r"https?://[^\s]+", text)
+
+
+def _dedupe_keep_order(items):
+    result = []
+    seen = set()
+
+    for item in items:
+        val = str(item or "").strip()
+        if not val:
+            continue
+        key = val.lower()
+        if key not in seen:
+            seen.add(key)
+            result.append(val)
+
+    return result
+
+
+def _extract_labeled_value(text, labels, allow_spaces=True):
+    text = str(text or "")
+    value_pattern = r"([^\n\r]+)" if allow_spaces else r"([^\s]+)"
+
+    for label in labels:
+        pattern = rf"(?:^|\n)\s*{label}\s*[:\-]\s*{value_pattern}"
+        m = re.search(pattern, text, re.IGNORECASE)
+        if m:
+            return m.group(1).strip()
+
+    return ""
+
+
+def _extract_geo_value(text):
+    text = str(text or "").strip().strip('"').strip()
+    if not text:
+        return ""
+
+    # 1) явное GEO:
+    m = re.search(r"(?:^|\n)\s*GEO\s*[:\-]\s*([^\n\r]+)", text, re.IGNORECASE)
     if m:
         return m.group(1).strip()
+
+    # 2) Country:
+    m = re.search(r"(?:^|\n)\s*Country\s*[:\-]\s*([^\n\r]+)", text, re.IGNORECASE)
+    if m:
+        return m.group(1).strip()
+
+    # 3) первое слово, если это реально похоже на geo
+    first_token = text.split()[0].strip() if text.split() else ""
+    if first_token and re.fullmatch(r"[A-Za-zА-Яа-яЁё]{2,30}", first_token):
+        if first_token.lower() not in {
+            "login", "fb", "facebook", "password", "email", "service",
+            "cookie", "cookies", "2fa", "user-agent", "doc", "docs"
+        }:
+            return first_token
+
+    return ""
+
+
+def _extract_login_value(text):
+    text = str(text or "")
+
+    # 1) FB Login / Facebook Login / Login
+    labels = [
+        r"FB\s*Login",
+        r"Facebook\s*Login",
+        r"Login",
+    ]
+
+    for label in labels:
+        m = re.search(
+            rf"(?:^|\n)\s*{label}\s*[:\-]\s*([^\n\r]+)",
+            text,
+            re.IGNORECASE
+        )
+        if m:
+            value = m.group(1).strip()
+
+            # отрезаем хвост после ; если есть
+            value = value.split(";")[0].strip()
+
+            # если там есть email или id/логин — возвращаем
+            if value:
+                return value
 
     # 2) profile.php?id=
     m = re.search(r"profile\.php\?id=\s*([0-9]{8,20})", text, re.IGNORECASE)
     if m:
         return m.group(1).strip()
 
-    # 3) просто длинный numeric id
+    # 3) длинный numeric id как fallback
     m = re.search(r"\b([0-9]{8,20})\b", text)
     if m:
         return m.group(1).strip()
@@ -4998,32 +5098,151 @@ def _extract_login_value(text):
 
 
 def _extract_fb_password_value(text):
-    m = re.search(r"password\s*-\s*([^\s]+)", text, re.IGNORECASE)
-    if m:
-        return m.group(1).strip()
+    text = str(text or "")
+
+    labels = [
+        r"FB\s*Password",
+        r"Facebook\s*Password",
+        r"Password",
+    ]
+
+    for label in labels:
+        m = re.search(
+            rf"(?:^|\n)\s*{label}\s*[:\-]\s*([^\n\r]+)",
+            text,
+            re.IGNORECASE
+        )
+        if m:
+            value = m.group(1).strip().split()[0].strip()
+            if value:
+                return value
 
     return ""
 
 
 def _extract_email_from_email_block(text):
-    m = re.search(
-        r"Email\s*-\s*([A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,})",
-        text,
-        re.IGNORECASE
-    )
-    if m:
-        return m.group(1).strip()
+    text = str(text or "")
+
+    labels = [
+        r"Email",
+        r"Mail",
+    ]
+
+    for label in labels:
+        m = re.search(
+            rf"(?:^|\n)\s*{label}\s*[:\-]\s*([A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{{2,}})",
+            text,
+            re.IGNORECASE
+        )
+        if m:
+            return m.group(1).strip()
+
     return ""
 
 
 def _extract_email_password_from_email_block(text):
-    m = re.search(
-        r"Email\s*-\s*[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\s*[:;]\s*([^\s;]+)",
-        text,
-        re.IGNORECASE
-    )
+    text = str(text or "")
+
+    labels = [
+        r"Email'?s\s*Password",
+        r"Email\s*Password",
+        r"Mail\s*Password",
+    ]
+
+    for label in labels:
+        m = re.search(
+            rf"(?:^|\n)\s*{label}\s*[:\-]\s*([^\n\r]+)",
+            text,
+            re.IGNORECASE
+        )
+        if m:
+            value = m.group(1).strip().split()[0].strip()
+            if value:
+                return value
+
+    return ""
+
+
+def _extract_service_value(text):
+    text = str(text or "")
+
+    labels = [
+        r"Service",
+        r"Reserve\s*Mail",
+        r"Backup\s*Mail",
+    ]
+
+    for label in labels:
+        m = re.search(
+            rf"(?:^|\n)\s*{label}\s*[:\-]\s*([^\n\r]+)",
+            text,
+            re.IGNORECASE
+        )
+        if m:
+            value = m.group(1).strip()
+            if value:
+                return value
+
+    return ""
+
+
+def _extract_twofa_value(text):
+    text = str(text or "")
+
+    # 1) 2FA: ABCD EFGH ...
+    m = re.search(r"(?:^|\n)\s*2FA\s*[:\-]\s*([A-Z2-7\s]{16,})", text, re.IGNORECASE)
+    if m:
+        return re.sub(r"\s+", " ", m.group(1)).strip()
+
+    # 2) 2FA: ссылка
+    m = re.search(r"(?:^|\n)\s*2FA\s*[:\-]\s*(https?://[^\s]+)", text, re.IGNORECASE)
+    if m:
+        url = m.group(1).strip()
+
+        key_match = re.search(r"[?&]key=([A-Z2-7]+)", url, re.IGNORECASE)
+        if key_match:
+            return key_match.group(1).strip()
+
+        tail_match = re.search(r"/([A-Z2-7]{16,})$", url, re.IGNORECASE)
+        if tail_match:
+            return tail_match.group(1).strip()
+
+        return url
+
+    # 3) fallback: просто длинная base32-строка
+    m = re.search(r"\b([A-Z2-7]{16,})\b", text)
     if m:
         return m.group(1).strip()
+
+    return ""
+
+
+def _extract_user_agent(text):
+    text = str(text or "")
+
+    # сначала явный label
+    m = re.search(r"(?:^|\n)\s*User-Agent\s*[:\-]\s*(Mozilla/5\.0[^\n\r]+)", text, re.IGNORECASE)
+    if m:
+        return m.group(1).strip()
+
+    # потом fallback по самому UA
+    m = re.search(r"(Mozilla/5\.0[^\n\r]+?Safari/[0-9.]+)", text)
+    return m.group(1).strip() if m else ""
+
+
+def _extract_cookie_json_block(text):
+    text = str(text or "")
+
+    # 1) блок JSON массива cookies
+    m = re.search(r"(\[\s*\{.*?\}\s*\])", text, re.DOTALL)
+    if m:
+        return m.group(1).strip()
+
+    # 2) блок JSON объекта cookies/storage
+    m = re.search(r"(\{\s*\".*?cookies.*?\})", text, re.DOTALL | re.IGNORECASE)
+    if m:
+        return m.group(1).strip()
+
     return ""
 
 
@@ -5040,26 +5259,18 @@ def _extract_docs_links(text):
         docs.append(m.group(1).strip())
 
     for mm in re.finditer(r"\bAVA\s+(https?://[^\s]+)", text, re.IGNORECASE):
-        val = mm.group(1).strip()
-        if val not in docs:
-            docs.append(val)
+        docs.append(mm.group(1).strip())
 
-    for mm in re.finditer(r"\bDOC\s+(https?://[^\s]+)", text, re.IGNORECASE):
-        val = mm.group(1).strip()
-        if val not in docs:
-            docs.append(val)
+    for mm in re.finditer(r"\bDOC\S*\s*[:=\-]?\s*(https?://[^\s]+)", text, re.IGNORECASE):
+        docs.append(mm.group(1).strip())
 
     for mm in re.finditer(r"\bzrd\s*=\s*(https?://[^\s]+)", text, re.IGNORECASE):
-        val = mm.group(1).strip()
-        if val not in docs:
-            docs.append(val)
+        docs.append(mm.group(1).strip())
 
     for mm in re.finditer(r"https?://drive\.google\.com/[^\s]+", text, re.IGNORECASE):
-        val = mm.group(0).strip()
-        if val not in docs:
-            docs.append(val)
+        docs.append(mm.group(0).strip())
 
-    return docs
+    return _dedupe_keep_order(docs)
 
 
 def _extract_bm_links(text):
@@ -5068,35 +5279,77 @@ def _extract_bm_links(text):
 
     for url in urls:
         if "business.facebook.com/invitation/" in url or "business.facebook.com/settings/" in url:
-            if url not in result:
-                result.append(url)
+            result.append(url)
 
-    return result
+    return _dedupe_keep_order(result)
+
 
 def _extract_bm_email_pairs(text):
     text = str(text or "")
     pairs = []
 
     matches = re.findall(
-        r"([A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\s*:\s*[^\s]+)",
+        r"([A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}\s*:\s*[^\s]+)",
         text
     )
 
     for pair in matches:
         clean_pair = re.sub(r"\s+", "", pair).strip()
-        if clean_pair not in pairs:
-            pairs.append(clean_pair)
+        pairs.append(clean_pair)
 
-    return pairs
+    return _dedupe_keep_order(pairs)
+
 
 def _extract_cookie_links(text):
     urls = _extract_all_urls(text)
     result = []
+
     for url in urls:
         if "drive.google.com" in url:
-            if url not in result:
-                result.append(url)
-    return result
+            result.append(url)
+
+    return _dedupe_keep_order(result)
+
+
+def _validate_email(value):
+    value = str(value or "").strip()
+    if re.fullmatch(r"[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}", value):
+        return value
+    return ""
+
+
+def _validate_2fa(value):
+    value = str(value or "").strip()
+    if not value:
+        return ""
+
+    # ссылка тоже допустима
+    if value.lower().startswith("http://") or value.lower().startswith("https://"):
+        return value
+
+    compact = re.sub(r"\s+", "", value).upper()
+    if re.fullmatch(r"[A-Z2-7]{16,}", compact):
+        return re.sub(r"\s+", " ", value).strip()
+
+    return ""
+
+
+def _sanitize_login(value):
+    value = str(value or "").strip()
+    if not value:
+        return ""
+
+    # если это email — тоже ок, не режем
+    if _validate_email(value):
+        return value
+
+    # если это profile.php?id=...
+    m = re.search(r"profile\.php\?id=\s*([0-9]{8,20})", value, re.IGNORECASE)
+    if m:
+        return m.group(1).strip()
+
+    # обычный id / login
+    return value.split()[0].strip()
 
 
 def parse_crypto_king_raw_data(raw_text):
@@ -5121,105 +5374,114 @@ def parse_crypto_king_raw_data(raw_text):
         "raw_text": text_original,
     }
 
-    # -------- FORMAT 1: pipe --------
+    # ---------- FORMAT 1: pipe ----------
     if "|" in text and text.count("|") >= 5 and "login -" not in text.lower():
         parts = [x.strip() for x in text.split("|")]
         if len(parts) >= 6:
-            result["fb_login"] = parts[0]
-            result["fb_password"] = parts[1]
-            result["twofa"] = parts[2]
-            result["email"] = parts[3]
-            result["email_password"] = parts[4]
-            result["service"] = parts[5]
+            result["fb_login"] = _sanitize_login(parts[0])
+            result["fb_password"] = parts[1].strip()
+            result["twofa"] = _validate_2fa(parts[2])
+            result["email"] = _validate_email(parts[3])
+            result["email_password"] = parts[4].strip()
+            result["service"] = parts[5].strip()
+
+            result["cookies_json"] = _extract_cookie_json_block(text_original)
+            result["docs_links"] = _extract_docs_links(text_original)
+            result["bm_links"] = _extract_bm_links(text_original)
+            result["cookies_links"] = _extract_cookie_links(text_original)
+            result["bm_email_pairs"] = _extract_bm_email_pairs(text_original)
+            result["user_agent"] = _extract_user_agent(text_original)
+
             return result
 
-    # -------- COMMON EXTRACTION --------
+    # ---------- COMMON EXTRACTION ----------
     result["geo"] = _extract_geo_value(text)
-    result["fb_login"] = _extract_login_value(text)
+    result["fb_login"] = _sanitize_login(_extract_login_value(text))
     result["fb_password"] = _extract_fb_password_value(text)
-    result["user_agent"] = _extract_user_agent(text)
-    result["twofa"] = _extract_twofa_value(text)
+    result["email"] = _validate_email(_extract_email_from_email_block(text))
+    result["email_password"] = _extract_email_password_from_email_block(text)
+    result["service"] = _extract_service_value(text)
+    result["twofa"] = _validate_2fa(_extract_twofa_value(text))
+    result["user_agent"] = _extract_user_agent(text_original)
     result["cookies_json"] = _extract_cookie_json_block(text_original)
     result["docs_links"] = _extract_docs_links(text_original)
     result["bm_links"] = _extract_bm_links(text_original)
     result["cookies_links"] = _extract_cookie_links(text_original)
     result["bm_email_pairs"] = _extract_bm_email_pairs(text_original)
 
-    email_from_block = _extract_email_from_email_block(text)
-    email_password_from_block = _extract_email_password_from_email_block(text)
+    # ---------- EMAILS ----------
+    all_emails = _dedupe_keep_order(_extract_all_emails(text_original))
 
-    all_emails = _extract_all_emails(text)
-    unique_emails = []
-    for em in all_emails:
-        if em not in unique_emails:
-            unique_emails.append(em)
-
-    # email:password пары
     pair_matches = re.findall(
-        r"([A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,})\s*[:;]\s*([^\s;]+)",
+        r"([A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,})\s*[:;]\s*([^\s;]+)",
         text_original
     )
     pair_list = []
     for em, pw in pair_matches:
-        pair = f"{em}:{pw}"
-        if pair not in pair_list:
-            pair_list.append(pair)
-    result["extra_pairs"] = pair_list
+        pair_list.append(f"{em}:{pw}")
+    result["extra_pairs"] = _dedupe_keep_order(pair_list)
 
-    if email_from_block:
-        result["email"] = email_from_block
-    if email_password_from_block:
-        result["email_password"] = email_password_from_block
-
-    # -------- FORMAT 2 / FORMAT 1 fallback by emails --------
-    if unique_emails:
-        if result["fb_login"]:
-            if not result["email"]:
-                result["email"] = unique_emails[0]
-            if len(unique_emails) >= 2 and not result["service"]:
-                result["service"] = unique_emails[1]
+    # если явно email не найден, пробуем из списка email'ов
+    if not result["email"] and all_emails:
+        # если fb_login уже email, то email берем следующий
+        if result["fb_login"] and _validate_email(result["fb_login"]):
+            for em in all_emails:
+                if em.lower() != result["fb_login"].lower():
+                    result["email"] = em
+                    break
         else:
-            result["fb_login"] = unique_emails[0]
-            if len(unique_emails) >= 2 and not result["email"]:
-                result["email"] = unique_emails[1]
+            result["email"] = all_emails[0]
 
-    # -------- FORMAT 3: tab/space structured --------
-    if not result["fb_password"]:
-        # пытаемся поймать пароль фб около email / id
-        tokens = text.split()
+    # если логин пустой — пробуем первым email
+    if not result["fb_login"] and all_emails:
+        result["fb_login"] = all_emails[0]
 
-        for i, tok in enumerate(tokens):
-            if re.fullmatch(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}", tok):
-                # email найден, часто следующий токен = fb pass или email pass
-                if i + 1 < len(tokens):
-                    nxt = tokens[i + 1].strip()
-                    if re.fullmatch(r"[A-Za-z0-9!@#$%^&*()_\-+=]{6,}", nxt):
-                        # если пароль фб ещё пуст — запишем
-                        if not result["fb_password"]:
-                            result["fb_password"] = nxt
-
-    # email password fallback из найденных пар
+    # если email_password пустой — ищем email:password пары
     if not result["email_password"] and result["email"]:
-        for em, pw in pair_matches:
-            if em == result["email"]:
+        for pair in result["extra_pairs"]:
+            if ":" not in pair:
+                continue
+            em, pw = pair.split(":", 1)
+            if em.lower() == result["email"].lower():
                 result["email_password"] = pw.strip()
                 break
 
-    # service fallback: вторая email:pass пара
-    if not result["service"] and len(pair_list) >= 2:
-        first_pair_email = result["email"]
-        for pair in pair_list:
-            if not first_pair_email or not pair.startswith(first_pair_email + ":"):
-                result["service"] = pair
-                break
+    # если service пустой — пробуем второй email
+    if not result["service"] and len(all_emails) >= 2:
+        for em in all_emails:
+            if result["email"] and em.lower() == result["email"].lower():
+                continue
+            if result["fb_login"] and _validate_email(result["fb_login"]) and em.lower() == result["fb_login"].lower():
+                continue
+            result["service"] = em
+            break
 
-    # Если логин не найден, но есть email — по твоему правилу
-    if not result["fb_login"] and unique_emails:
-        result["fb_login"] = unique_emails[0]
-        if len(unique_emails) >= 2 and not result["email"]:
-            result["email"] = unique_emails[1]
+    # ---------- FALLBACK PASSWORD LOGIC ----------
+    if not result["fb_password"]:
+        lines = _normalize_crypto_lines(text_original)
+        for idx, line in enumerate(lines):
+            if re.search(r"FB\s*Login|Facebook\s*Login|^Login\s*[:\-]", line, re.IGNORECASE):
+                if idx + 1 < len(lines):
+                    nxt = lines[idx + 1]
+                    if not re.search(r"Email|2FA|Service|Cookie|User-Agent|Doc", nxt, re.IGNORECASE):
+                        candidate = nxt.split()[0].strip()
+                        if candidate and len(candidate) >= 4:
+                            result["fb_password"] = candidate
+                            break
 
-    result["cookies_too_long_for_octo"] = len(result.get("cookies_json", "")) > 400
+    # ---------- FINAL SANITY ----------
+    result["fb_login"] = _sanitize_login(result["fb_login"])
+    result["email"] = _validate_email(result["email"])
+    result["twofa"] = _validate_2fa(result["twofa"])
+
+    # если email случайно попал в fb_password — чистим
+    if _validate_email(result["fb_password"]):
+        result["fb_password"] = ""
+
+    # если email_password случайно выглядит как email — чистим
+    if _validate_email(result["email_password"]):
+        result["email_password"] = ""
+
     return result
 
 
@@ -7629,19 +7891,24 @@ def process_crypto_bulk_proxy_step(chat_id, user_id, username, proxy_text):
         finish_crypto_kings_bulk(chat_id, user_id)
         return
 
-    current_item = queue[current_index]
+    current_item = dict(queue[current_index])
     king_name = current_item.get("king_name", "")
     row_index = current_item.get("row_index")
 
-    proxy_data = parse_proxy_input(proxy_text)
-    if not proxy_data:
-        tg_send_message(
-            chat_id,
-            f"Не удалось разобрать proxy для кинга {king_name}.\n"
-            f"Пришли заново."
-        )
-        set_state_with_custom_ttl(user_id, state, CRYPTO_BULK_PROXY_TTL)
-        return
+    proxy_raw = str(proxy_text or "").strip()
+    skip_proxy = proxy_raw.lower() == "пропустить прокси"
+
+    proxy_data = None
+    if not skip_proxy:
+        proxy_data = parse_proxy_input(proxy_raw)
+        if not proxy_data:
+            tg_send_message(
+                chat_id,
+                f"Не удалось разобрать proxy для кинга {king_name}.\n"
+                f"Пришли proxy заново или нажми «Пропустить прокси»."
+            )
+            set_state_with_custom_ttl(user_id, state, CRYPTO_BULK_PROXY_TTL)
+            return
 
     rows = get_sheet_rows_cached(SHEET_CRYPTO_KINGS, force=True)
 
@@ -7682,15 +7949,15 @@ def process_crypto_bulk_proxy_step(chat_id, user_id, username, proxy_text):
                         SHEET_CRYPTO_KINGS,
                         f"A{row_index}:I{row_index}",
                         [[
-                            king_name,          # A
-                            row[1],             # B дата покупки
-                            row[2],             # C цена
-                            row[3],             # D supplier
-                            "taken",            # E статус
-                            state.get("king_for_whom", ""),  # F для кого
-                            today,              # G дата выдачи
-                            row[7],             # H geo
-                            who_took_text       # I кто выдал
+                            king_name,
+                            row[1],
+                            row[2],
+                            row[3],
+                            "taken",
+                            state.get("king_for_whom", ""),
+                            today,
+                            row[7],
+                            who_took_text
                         ]]
                     )
 
@@ -7725,6 +7992,7 @@ def process_crypto_bulk_proxy_step(chat_id, user_id, username, proxy_text):
 
             current_item["octo_ok"] = ok
             current_item["error_text"] = error_text
+            current_item["proxy_skipped"] = skip_proxy
 
     results = state.get("crypto_bulk_results", [])
     results.append(current_item)
@@ -11469,12 +11737,47 @@ def handle_message(msg):
         
             state["crypto_bulk_geo"] = geo
             state["crypto_bulk_selected_rows"] = free_items
+            state["mode"] = "awaiting_crypto_king_department_bulk"
+            set_state(user_id, state)
+        
+            send_department_menu(chat_id, "Выбери отдел для crypto king:")
+            return
+
+        if state.get("mode") == "awaiting_crypto_king_department_bulk":
+            if text not in [DEPT_CRYPTO, DEPT_GAMBLA]:
+                send_department_menu(chat_id, "Выбери отдел для crypto king:")
+                return
+        
+            state["crypto_bulk_department"] = text
+            state["mode"] = "awaiting_crypto_king_person_bulk"
+            set_state(user_id, state)
+        
+            send_person_menu(chat_id, text)
+            return
+        
+        
+        if state.get("mode") == "awaiting_crypto_king_person_bulk":
+            department = state.get("crypto_bulk_department")
+        
+            allowed_names = []
+            if department == DEPT_CRYPTO:
+                allowed_names = CRYPTO_NAMES
+            elif department == DEPT_GAMBLA:
+                allowed_names = GAMBLA_NAMES
+        
+            if text not in allowed_names:
+                send_person_menu(chat_id, department)
+                return
+        
+            state["king_for_whom"] = normalize_person_name(text)
             state["mode"] = CRYPTO_BULK_MODE_NAMES
             set_state(user_id, state)
         
+            selected_rows = state.get("crypto_bulk_selected_rows", [])
+        
             tg_send_message(
                 chat_id,
-                f"Пришли названия для {len(free_items)} crypto king.\n"
+                f"Пришли названия для {len(selected_rows)} crypto king.\n"
                 f"Каждое название с новой строки."
             )
             return
