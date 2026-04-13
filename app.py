@@ -207,8 +207,8 @@ DEPT_GAMBLA = '🎰Гембла'
 
 CRYPTO_NAMES = [
     '№3 dasha', '№5 mark', '№20 misha',
-    '№32 alex', '№34 anton', '№37 vladimir2', '№333 danilacc', '№42 aleksandr2',
-    '№43 maksim3', '№44 nikita3', '№45 anton2', '№46 yan', '№4 nikita', '№57 VD3'
+    '№32 alex', '№34 anton', '№37 vladimir2',
+    '№4 nikita', '№57 VD3', '№60 MSH5'
 ]
 
 GAMBLA_NAMES = [
@@ -216,7 +216,7 @@ GAMBLA_NAMES = [
     '№27 denis', '№29 ivansh', '№14 evgen', '№777 asim',
     '№30 maksim2', '№39 alex_gambl', '№47 daniil', '№48 semen', '№49 ivan2',
     '№50 andrey2', '№51 vitaliy', '№21 vladimir1', '№22 andrey', '№52 gleb', '№53 dasha2', '№54 vladimir3',
-    '№000 richard', '№55 artem2', '№56 IC1', '№58 KM2', '№60 MSH5', '№59 AH6'
+    '№000 richard', '№55 artem2', '№56 IC1', '№58 KM2', '№59 AH6', '№43 maksim3', '№45 anton2', '№61 SN1'
 ]
 
 SUBMENU_GET = '➡️Выдать лички'
