@@ -480,6 +480,43 @@ def sheet_update_and_refresh(sheet_name, cell_range, values):
     google_write_with_retry(_do)
     mark_sheet_cache_stale(sheet_name)
 
+def append_issue_row_fixed(row):
+    rows = get_sheet_rows_cached(SHEET_ISSUES, force=True)
+
+    next_row = len(rows) + 1
+    values = list(row or [])
+
+    if len(values) < 7:
+        values = values + [""] * (7 - len(values))
+    else:
+        values = values[:7]
+
+    sheet_update_and_refresh(
+        SHEET_ISSUES,
+        f"A{next_row}:G{next_row}",
+        [values]
+    )
+
+def append_issue_rows_fixed(rows_to_add):
+    rows = [list(x or [])[:7] for x in (rows_to_add or []) if x]
+    if not rows:
+        return
+
+    normalized = []
+    for row in rows:
+        if len(row) < 7:
+            row = row + [""] * (7 - len(row))
+        normalized.append(row[:7])
+
+    current_rows = get_sheet_rows_cached(SHEET_ISSUES, force=True)
+    start_row = len(current_rows) + 1
+    end_row = start_row + len(normalized) - 1
+
+    sheet_update_and_refresh(
+        SHEET_ISSUES,
+        f"A{start_row}:G{end_row}",
+        normalized
+    )
 
 def sheet_update_raw(sheet_name, cell_range, values):
     def _do():
@@ -510,6 +547,23 @@ def sheet_append_row_and_refresh(sheet_name, row, value_input_option="USER_ENTER
 
     google_write_with_retry(_do)
     mark_sheet_cache_stale(sheet_name)
+
+def append_issue_row_fixed(row):
+    rows = get_sheet_rows_cached(SHEET_ISSUES, force=True)
+
+    next_row = len(rows) + 1
+    values = list(row or [])
+
+    if len(values) < 7:
+        values = values + [""] * (7 - len(values))
+    else:
+        values = values[:7]
+
+    sheet_update_and_refresh(
+        SHEET_ISSUES,
+        f"A{next_row}:G{next_row}",
+        [values]
+    )
 
 def sheet_delete_row_and_refresh(sheet_name, row_index):
     def _do():
@@ -3800,19 +3854,15 @@ def confirm_pixel_issue(chat_id, user_id, username):
             if sync_id:
                 sync_status_to_basebot(BASEBOT_SHEET_PIXELS, sync_id, "taken")
 
-            sheet_append_row_and_refresh(
-                SHEET_ISSUES,
-                [
-                    issue_pixel_value,
-                    "PIXEL",
-                    row[0],
-                    normalize_numeric_for_sheet(row[1]),
-                    today,
-                    row[2],
-                    pixel_for_whom
-                ],
-                value_input_option="USER_ENTERED"
-            )
+            append_issue_row_fixed([
+                issue_pixel_value,
+                "PIXEL",
+                row[0],
+                normalize_numeric_for_sheet(row[1]),
+                today,
+                row[2],
+                pixel_for_whom
+            ])
 
             invalidate_stats_cache()
             clear_state(user_id)
@@ -3946,11 +3996,7 @@ def issue_pixels_bulk(chat_id, user_id, username, count_needed):
                 })
 
             if issue_rows:
-                sheet_append_rows_and_refresh(
-                    SHEET_ISSUES,
-                    issue_rows,
-                    value_input_option="USER_ENTERED"
-                )
+                append_issue_rows_fixed(issue_rows)
 
             with table_cache_lock:
                 table_cache[SHEET_PIXELS]["rows"] = current_rows
@@ -4870,19 +4916,15 @@ def issue_farm_bm(chat_id, user_id, username):
         if sync_id:
             sync_status_to_basebot(BASEBOT_SHEET_FARM_BMS, sync_id, "taken")
 
-        sheet_append_row_and_refresh(
-            SHEET_ISSUES,
-            [
-                row[0],
-                "БМ",
-                row[1],
-                normalize_numeric_for_sheet(row[2]),
-                today,
-                row[3],
-                "farm"
-            ],
-            value_input_option="USER_ENTERED"
-        )
+        append_issue_row_fixed([
+            row[0],
+            "БМ",
+            row[1],
+            normalize_numeric_for_sheet(row[2]),
+            today,
+            row[3],
+            "farm"
+        ])
 
         invalidate_stats_cache()
 
@@ -5119,11 +5161,7 @@ def issue_farm_fps(chat_id, user_id, username, count_needed):
             refresh_sheet_cache(SHEET_FARM_FPS)
 
             if issue_rows:
-                sheet_append_rows_and_refresh(
-                    SHEET_ISSUES,
-                    issue_rows,
-                    value_input_option="USER_ENTERED"
-                )
+                append_issue_rows_fixed(issue_rows)
 
             invalidate_stats_cache()
 
@@ -8378,19 +8416,15 @@ def confirm_bm_issue(chat_id, user_id, username):
             if sync_id:
                 sync_status_to_basebot(BASEBOT_SHEET_BMS, sync_id, "taken")
 
-            sheet_append_row_and_refresh(
-                SHEET_ISSUES,
-                [
-                    bm_id,
-                    "БМ",
-                    purchase_date,
-                    normalize_numeric_for_sheet(price),
-                    today,
-                    supplier,
-                    bm_for_whom
-                ],
-                value_input_option="USER_ENTERED"
-            )
+            append_issue_row_fixed([
+                bm_id,
+                "БМ",
+                purchase_date,
+                normalize_numeric_for_sheet(price),
+                today,
+                supplier,
+                bm_for_whom
+            ])
 
             invalidate_stats_cache()
             clear_state(user_id)
@@ -9128,19 +9162,15 @@ def process_crypto_bulk_proxy_step(chat_id, user_id, username, proxy_text):
                             "taken"
                         )
 
-                    sheet_append_row_and_refresh(
-                        SHEET_ISSUES,
-                        [
-                            king_name,
-                            "KING",
-                            row[1],
-                            normalize_numeric_for_sheet(row[2]),
-                            today,
-                            row[3],
-                            state.get("king_for_whom", "")
-                        ],
-                        value_input_option="USER_ENTERED"
-                    )
+                    append_issue_row_fixed([
+                        king_name,
+                        "KING",
+                        row[1],
+                        normalize_numeric_for_sheet(row[2]),
+                        today,
+                        row[3],
+                        state.get("king_for_whom", "")
+                    ])
 
                     invalidate_stats_cache()
                 else:
@@ -9169,19 +9199,15 @@ def process_crypto_bulk_proxy_step(chat_id, user_id, username, proxy_text):
     start_crypto_kings_bulk_proxy_step(chat_id, user_id)
 
 def append_king_to_issues_sheet(king_name, purchase_date, price, transfer_date, supplier, for_whom):
-    sheet_append_row_and_refresh(
-        SHEET_ISSUES,
-        [
-            king_name,
-            "KING",
-            purchase_date,
-            normalize_numeric_for_sheet(price),
-            transfer_date,
-            supplier,
-            for_whom
-        ],
-        value_input_option="USER_ENTERED"
-    )
+    append_issue_row_fixed([
+        king_name,
+        "KING",
+        purchase_date,
+        normalize_numeric_for_sheet(price),
+        transfer_date,
+        supplier,
+        for_whom
+    ])
 
 def find_last_king_issue_row(king_name):
     rows = get_sheet_rows_cached(SHEET_ISSUES)
