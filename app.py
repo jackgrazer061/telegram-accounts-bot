@@ -7806,13 +7806,29 @@ def confirm_king_octo_issue(chat_id, user_id, username):
             f"2FA: {parsed_king.get('twofa', '')}"
         )
 
-        send_text_input_prompt(
+        sent = tg_send_inline_message(
             chat_id,
             f"Теперь пришли proxy для Octo профиля:\n"
             f"{king_name}\n\n"
             f"Формат:\n"
-            f"socks5://login:password@host:port"
+            f"socks5://login:password@host:port",
+            [[
+                {
+                    "text": "⏭️ Пропустить прокси",
+                    "callback_data": f"king_skip_proxy:{user_id}"
+                }
+            ]]
         )
+        
+        try:
+            if isinstance(sent, dict):
+                proxy_message_id = sent.get("result", {}).get("message_id")
+                if proxy_message_id:
+                    state = get_state(user_id)
+                    state["king_proxy_message_id"] = proxy_message_id
+                    set_state(user_id, state)
+        except Exception:
+            logging.exception("confirm_king_octo_issue failed to save proxy message_id")
         return
 
     except Exception:
@@ -14278,15 +14294,18 @@ def handle_message(msg):
         if state.get("mode") == KING_OCTO_MODE_SINGLE_PROXY:
             try:
                 proxy_raw = text.strip()
-        
-                proxy_data = parse_proxy_input(proxy_raw)
-        
-                if not proxy_data:
-                    send_text_input_prompt(
-                        chat_id,
-                        "Неверный формат proxy.\n\nИспользуй:\nsocks5://login:password@host:port"
-                    )
-                    return
+
+                if proxy_raw == "__SKIP_PROXY_SINGLE__":
+                    proxy_data = None
+                else:
+                    proxy_data = parse_proxy_input(proxy_raw)
+                
+                    if not proxy_data:
+                        send_text_input_prompt(
+                            chat_id,
+                            "Неверный формат proxy.\n\nИспользуй:\nsocks5://login:password@host:port"
+                        )
+                        return
         
                 king_row = state.get("king_row")
                 king_name = str(state.get("king_name", "")).strip()
@@ -15092,6 +15111,30 @@ def handle_callback_query(callback_query):
                 logging.exception("download_king_bulk_txt failed")
                 tg_answer_callback_query(query_id, "Не удалось отправить txt")
 
+            return jsonify({"ok": True})
+
+        if data.startswith("king_skip_proxy:"):
+            target_user_id = data.split(":", 1)[1]
+        
+            if str(user_id) != str(target_user_id):
+                tg_answer_callback_query(callback_id, "Это не ваша кнопка")
+                return
+        
+            tg_answer_callback_query(callback_id, "Прокси пропущен")
+        
+            if message_id:
+                tg_edit_message_text(
+                    chat_id,
+                    message_id,
+                    "✅ Прокси пропущен",
+                    inline_buttons=[]
+                )
+        
+            state = get_state(user_id)
+            state["king_skip_proxy"] = True
+            set_state(user_id, state)
+        
+            tg_send_message(chat_id, "__SKIP_PROXY_SINGLE__")
             return jsonify({"ok": True})
 
         if data == f"kings_bulk_skip_all_proxies:{user_id}":
