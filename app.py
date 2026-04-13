@@ -1497,6 +1497,56 @@ def send_crypto_bulk_found_preview(chat_id, user_id):
 
     tg_send_message(chat_id, "\n".join(lines))
 
+def send_crypto_bulk_found_preview_once(chat_id, user_id):
+    state = get_state(user_id)
+
+    queue = state.get("crypto_bulk_queue", [])
+    if not queue:
+        send_kings_menu(chat_id, "Не удалось собрать список crypto king.")
+        return
+
+    lines = [
+        "🔍Найдены crypto king:",
+        "",
+        f"👨‍💻Для кого: {state.get('king_for_whom', 'не указано')}",
+        ""
+    ]
+
+    for i, item in enumerate(queue, start=1):
+        lines.append(f"📦Кинг {i} из {len(queue)}")
+        lines.append(f"✏️Название: {item.get('king_name', 'не указано')}")
+        lines.append(f"💵Цена: {item.get('price', '')}")
+        lines.append(f"🌐Гео: {item.get('geo', '')}")
+        lines.append(f"🗓Дата покупки: {item.get('purchase_date', '')}")
+        lines.append("")
+
+    sent = tg_send_inline_message(
+        chat_id,
+        "\n".join(lines).strip(),
+        [[
+            {
+                "text": "✅выдать",
+                "callback_data": f"confirm_crypto_bulk_item:{user_id}"
+            },
+            {
+                "text": "❌отмена",
+                "callback_data": f"cancel_crypto_bulk:{user_id}"
+            }
+        ]]
+    )
+
+    state["mode"] = CRYPTO_BULK_MODE_CONFIRM
+
+    try:
+        if isinstance(sent, dict):
+            message_id = sent.get("result", {}).get("message_id")
+            if message_id:
+                state["crypto_bulk_confirm_message_id"] = message_id
+    except Exception:
+        logging.exception("send_crypto_bulk_found_preview_once failed to save message_id")
+
+    set_state_with_custom_ttl(user_id, state, CRYPTO_BULK_PROXY_TTL)
+
 def show_found_crypto_king(chat_id, user_id, found):
     state = get_state(user_id)
 
@@ -1600,41 +1650,49 @@ def start_crypto_kings_bulk_proxy_step(chat_id, user_id):
         finish_crypto_kings_bulk(chat_id, user_id)
         return
 
-    current_item = queue[current_index]
+    if state.get("crypto_bulk_skip_all_proxies"):
+        process_crypto_bulk_proxy_step(
+            chat_id=chat_id,
+            user_id=user_id,
+            username=state.get("crypto_bulk_username", ""),
+            proxy_text="__SKIP_ALL_PROXIES__"
+        )
+        return
 
-    lines = [
-        "🔍Найден crypto king:",
-        "",
-        f"🗓Дата покупки: {current_item.get('purchase_date', '')}",
-        f"💵Цена: {current_item.get('price', '')}",
-        f"🌐Гео: {current_item.get('geo', '')}",
-        f"👨‍💻Для кого: {state.get('king_for_whom', 'не указано')}",
-        f"✏️Название: {current_item.get('king_name', 'не указано')}",
-        f"📦Шаг {current_index + 1} из {len(queue)}"
-    ]
+    current_item = queue[current_index]
+    king_name = current_item.get("king_name", "")
+    geo = current_item.get("geo", "")
+    price = current_item.get("price", "")
+
+    text = (
+        f"Скинь socks5 proxy для кинга {king_name}\n\n"
+        f"Цена: {price}\n"
+        f"Гео: {geo}\n"
+        f"Шаг {current_index + 1} из {len(queue)}\n\n"
+        f"Формат:\n"
+        f"socks5://login:password@host:port\n"
+        f"или\n"
+        f"socks5://host:port"
+    )
 
     sent = tg_send_inline_message(
         chat_id,
-        "\n".join(lines),
+        text,
         [[
             {
-                "text": "✅выдать",
-                "callback_data": f"confirm_crypto_bulk_item:{user_id}"
-            },
-            {
-                "text": "❌отмена",
-                "callback_data": f"cancel_crypto_bulk:{user_id}"
+                "text": "⏭️ Пропустить все прокси",
+                "callback_data": f"crypto_bulk_skip_all_proxies:{user_id}"
             }
         ]]
     )
 
-    state["mode"] = CRYPTO_BULK_MODE_CONFIRM
+    state["mode"] = CRYPTO_BULK_MODE_PROXY
 
     try:
         if isinstance(sent, dict):
             message_id = sent.get("result", {}).get("message_id")
             if message_id:
-                state["crypto_bulk_confirm_message_id"] = message_id
+                state["crypto_bulk_proxy_message_id"] = message_id
     except Exception:
         logging.exception("start_crypto_kings_bulk_proxy_step failed to save message_id")
 
@@ -12147,8 +12205,8 @@ def handle_message(msg):
             state["crypto_bulk_current_index"] = 0
             state["crypto_bulk_username"] = username
             set_state_with_custom_ttl(user_id, state, CRYPTO_BULK_PROXY_TTL)
-
-            start_crypto_kings_bulk_proxy_step(chat_id, user_id)
+            
+            send_crypto_bulk_found_preview_once(chat_id, user_id)
             return
 
         if state.get("mode") == CRYPTO_BULK_MODE_PROXY:
@@ -13844,51 +13902,19 @@ def handle_callback_query(callback_query):
             tg_answer_callback_query(callback_id)
 
             state = get_state(user_id)
+
             if message_id:
                 state["crypto_bulk_confirm_message_id"] = message_id
                 set_state_with_custom_ttl(user_id, state, CRYPTO_BULK_PROXY_TTL)
 
-            current_index = int(state.get("crypto_bulk_current_index", 0))
-            queue = state.get("crypto_bulk_queue", [])
+                tg_edit_message_text(
+                    chat_id,
+                    message_id,
+                    "✅ Список crypto king подтверждён",
+                    inline_buttons=[]
+                )
 
-            if current_index >= len(queue):
-                finish_crypto_kings_bulk(chat_id, user_id)
-                return
-
-            current_item = queue[current_index]
-            king_name = current_item.get("king_name", "")
-            geo = current_item.get("geo", "")
-            price = current_item.get("price", "")
-
-            sent = tg_send_inline_message(
-                chat_id,
-                f"Скинь socks5 proxy для кинга {king_name}\n\n"
-                f"Цена: {price}\n"
-                f"Гео: {geo}\n"
-                f"Шаг {current_index + 1} из {len(queue)}\n\n"
-                f"Формат:\n"
-                f"socks5://login:password@host:port\n"
-                f"или\n"
-                f"socks5://host:port",
-                [[
-                    {
-                        "text": "⏭️ Пропустить все прокси",
-                        "callback_data": f"crypto_bulk_skip_all_proxies:{user_id}"
-                    }
-                ]]
-            )
-
-            state["mode"] = CRYPTO_BULK_MODE_PROXY
-
-            try:
-                if isinstance(sent, dict):
-                    proxy_message_id = sent.get("result", {}).get("message_id")
-                    if proxy_message_id:
-                        state["crypto_bulk_proxy_message_id"] = proxy_message_id
-            except Exception:
-                logging.exception("confirm_crypto_bulk_item failed to save proxy message_id")
-
-            set_state_with_custom_ttl(user_id, state, CRYPTO_BULK_PROXY_TTL)
+            start_crypto_kings_bulk_proxy_step(chat_id, user_id)
             return jsonify({"ok": True})
 
 
