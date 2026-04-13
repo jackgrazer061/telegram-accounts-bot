@@ -1634,19 +1634,84 @@ def build_crypto_bulk_result_text(results, for_whom):
     ]
 
     for item in results:
-        status_icon = "✅" if item.get("octo_ok") else "❌"
-        king_name = str(item.get("king_name", "")).strip() or "без названия"
+        king_name = str(item.get("king_name", "")).strip() or "не указано"
         price = str(item.get("price", "")).strip() or "не указана"
+        geo = str(item.get("geo", "")).strip() or "не указано"
 
-        line = f"{status_icon} кинг с названием {king_name} цена {price}"
+        lines.append(f"✏️Название: {king_name}")
+        lines.append(f"💵Цена: {price}")
+        lines.append(f"🌐Гео: {geo}")
 
-        error_text = str(item.get("error_text", "")).strip()
-        if not item.get("octo_ok") and error_text:
-            line += f" — ошибка: {error_text}"
-
-        lines.append(line)
+        if not item.get("octo_ok"):
+            error_text = str(item.get("error_text", "")).strip() or "не удалось завести в Octo"
+            lines.append(f"❌Ошибка: {error_text}")
 
     return "\n".join(lines)
+
+def build_crypto_bulk_result_messages(results, for_whom, max_len=3500):
+    success_items = [x for x in results if x.get("octo_ok")]
+    failed_items = [x for x in results if not x.get("octo_ok")]
+
+    if success_items and not failed_items:
+        header = "✅ Кинги заведены в Octo"
+    elif failed_items and not success_items:
+        header = "❌ Кинги не заведены в Octo"
+    else:
+        header = "⚠️ Часть кингов заведена в Octo"
+
+    header_text = (
+        f"{header}\n"
+        f"👨‍💻Для кого: {for_whom or 'не указано'}"
+    )
+
+    blocks = []
+
+    for item in results:
+        king_name = str(item.get("king_name", "")).strip() or "не указано"
+        price = str(item.get("price", "")).strip() or "не указана"
+        geo = str(item.get("geo", "")).strip() or "не указано"
+
+        block_lines = [
+            f"✏️Название: {king_name}",
+            f"💵Цена: {price}",
+            f"🌐Гео: {geo}",
+        ]
+
+        if not item.get("octo_ok"):
+            error_text = str(item.get("error_text", "")).strip() or "не удалось завести в Octo"
+            block_lines.append(f"❌Ошибка: {error_text}")
+
+        blocks.append("\n".join(block_lines))
+
+    messages = []
+    current = header_text
+    first_block = True
+
+    for block in blocks:
+        if first_block:
+            separator = "\n\n"
+        elif current:
+            separator = "\n"
+        else:
+            separator = ""
+
+        candidate = f"{current}{separator}{block}" if current else block
+
+        if len(candidate) <= max_len:
+            current = candidate
+            first_block = False
+            continue
+
+        if current:
+            messages.append(current)
+
+        current = block
+        first_block = False
+
+    if current:
+        messages.append(current)
+
+    return messages
 
 def send_crypto_bulk_followup_messages(chat_id, results):
     tg_send_message(
@@ -1694,10 +1759,9 @@ def finish_crypto_kings_bulk(chat_id, user_id):
         send_kings_menu(chat_id, "Не удалось выдать ни одного crypto king.")
         return
 
-    text = build_crypto_bulk_result_text(results, for_whom)
+    message_parts = build_crypto_bulk_result_messages(results, for_whom)
 
     success_items = [x for x in results if x.get("octo_ok")]
-
     inline_buttons = []
 
     if len(success_items) == 1:
@@ -1715,14 +1779,14 @@ def finish_crypto_kings_bulk(chat_id, user_id):
             }
         ]]
 
-    if inline_buttons:
-        tg_send_inline_message(chat_id, text, inline_buttons)
-    else:
-        tg_send_message(chat_id, text)
+    tg_send_inline_message_parts(
+        chat_id=chat_id,
+        message_parts=message_parts,
+        inline_buttons=inline_buttons
+    )
 
     send_crypto_bulk_followup_messages(chat_id, results)
 
-    # сохраняем только данные для скачивания
     download_state = {
         "mode": "crypto_bulk_done",
         "crypto_bulk_results": results,
@@ -9276,6 +9340,19 @@ def sync_status_to_basebot(basebot_sheet_name, sync_id, new_status):
     row_index = found["row_index"]
     basebot_update_range(basebot_sheet_name, f"{status_col}{row_index}", [[new_status]])
     return True
+
+def tg_send_inline_message_parts(chat_id, message_parts, inline_buttons=None):
+    parts = [str(x).strip() for x in (message_parts or []) if str(x).strip()]
+    if not parts:
+        return
+
+    for part in parts[:-1]:
+        tg_send_message(chat_id, part)
+
+    if inline_buttons:
+        tg_send_inline_message(chat_id, parts[-1], inline_buttons)
+    else:
+        tg_send_message(chat_id, parts[-1])
 
 def tg_send_long_message(chat_id, text, chunk_size=3500):
     text = str(text or "").strip()
