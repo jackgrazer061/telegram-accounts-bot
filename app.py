@@ -1517,7 +1517,6 @@ def send_crypto_bulk_found_preview_once(chat_id, user_id):
         lines.append(f"✏️Название: {item.get('king_name', 'не указано')}")
         lines.append(f"💵Цена: {item.get('price', '')}")
         lines.append(f"🌐Гео: {item.get('geo', '')}")
-        lines.append(f"🗓Дата покупки: {item.get('purchase_date', '')}")
         lines.append("")
 
     sent = tg_send_inline_message(
