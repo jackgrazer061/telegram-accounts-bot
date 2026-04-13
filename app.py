@@ -1282,6 +1282,58 @@ def find_next_crypto_king_after_row(current_row_index, geo_value):
 
     return None
 
+def send_crypto_bulk_found_preview(chat_id, user_id):
+    state = get_state(user_id)
+
+    queue = state.get("crypto_bulk_queue", [])
+    if not queue:
+        return
+
+    king_for_whom = state.get("king_for_whom", "не указано")
+
+    if len(queue) == 1:
+        item = queue[0]
+
+        text = (
+            "🔍Найден crypto king:\n\n"
+            f"🗓Дата покупки: {item.get('purchase_date', '')}\n"
+            f"💵Цена: {item.get('price', '')}\n"
+            f"🌐Гео: {item.get('geo', '')}\n"
+            f"👨‍💻Для кого: {king_for_whom}\n"
+            f"✏️Название: {item.get('king_name', 'не указано')}"
+        )
+
+        tg_send_message(chat_id, text)
+        return
+
+    lines = [
+        "🔍Найдены crypto king:",
+        "",
+        f"👨‍💻Для кого: {king_for_whom}",
+        ""
+    ]
+
+    for item in queue:
+        king_name = str(item.get("king_name", "")).strip() or "не указано"
+        price = str(item.get("price", "")).strip() or "не указана"
+        geo = str(item.get("geo", "")).strip()
+        purchase_date = str(item.get("purchase_date", "")).strip()
+
+        line = f"• кинг с названием {king_name} цена {price}"
+
+        extra_parts = []
+        if geo:
+            extra_parts.append(f"гео {geo}")
+        if purchase_date:
+            extra_parts.append(f"дата {purchase_date}")
+
+        if extra_parts:
+            line += " " + ", ".join(extra_parts)
+
+        lines.append(line)
+
+    tg_send_message(chat_id, "\n".join(lines))
+
 def show_found_crypto_king(chat_id, user_id, found):
     state = get_state(user_id)
 
@@ -1385,6 +1437,14 @@ def start_crypto_kings_bulk_proxy_step(chat_id, user_id):
         finish_crypto_kings_bulk(chat_id, user_id)
         return
 
+    current_item = queue[current_index]
+    king_name = current_item.get("king_name", "")
+    geo = current_item.get("geo", "")
+    price = current_item.get("price", "")
+
+    if current_index == 0:
+        send_crypto_bulk_found_preview(chat_id, user_id)
+
     if state.get("crypto_bulk_skip_all_proxies"):
         process_crypto_bulk_proxy_step(
             chat_id=chat_id,
@@ -1394,12 +1454,9 @@ def start_crypto_kings_bulk_proxy_step(chat_id, user_id):
         )
         return
 
-    current_item = queue[current_index]
-    king_name = current_item.get("king_name", "")
-    geo = current_item.get("geo", "")
-
     text = (
         f"Скинь socks5 proxy для кинга {king_name}\n\n"
+        f"Цена: {price}\n"
         f"Гео: {geo}\n"
         f"Шаг {current_index + 1} из {len(queue)}\n\n"
         f"Формат:\n"
@@ -1568,33 +1625,26 @@ def build_crypto_bulk_result_text(results, for_whom):
     elif failed_items and not success_items:
         header = "❌ Кинги не заведены в Octo"
     else:
-        header = "✅ Кинги заведены в Octo"
+        header = "⚠️ Часть кингов заведена в Octo"
 
-    all_names = " | ".join(
-        str(x.get("king_name", "")).strip()
-        for x in results
-        if str(x.get("king_name", "")).strip()
-    )
+    lines = [
+        header,
+        f"👨‍💻Для кого: {for_whom or 'не указано'}",
+        ""
+    ]
 
-    geo_value = ""
-    price_value = ""
+    for item in results:
+        status_icon = "✅" if item.get("octo_ok") else "❌"
+        king_name = str(item.get("king_name", "")).strip() or "без названия"
+        price = str(item.get("price", "")).strip() or "не указана"
 
-    if success_items:
-        geo_value = str(success_items[0].get("geo", "")).strip()
-        price_value = str(success_items[0].get("price", "")).strip()
-    elif results:
-        geo_value = str(results[0].get("geo", "")).strip()
-        price_value = str(results[0].get("price", "")).strip()
+        line = f"{status_icon} кинг с названием {king_name} цена {price}"
 
-    lines = [header]
+        error_text = str(item.get("error_text", "")).strip()
+        if not item.get("octo_ok") and error_text:
+            line += f" — ошибка: {error_text}"
 
-    for item in failed_items:
-        lines.append(f"❌не получилось завести кинг: {item.get('king_name', '')}")
-
-    lines.append(f"✏️Название: {all_names}")
-    lines.append(f"👨‍💻Для кого: {for_whom or 'не указано'}")
-    lines.append(f"💵Цена: {price_value}")
-    lines.append(f"🌐Гео: {geo_value}")
+        lines.append(line)
 
     return "\n".join(lines)
 
