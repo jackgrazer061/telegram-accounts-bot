@@ -1552,7 +1552,7 @@ def send_crypto_bulk_found_preview_once(chat_id, user_id):
 
 def has_bm_in_king_data(data_text):
     try:
-        parsed = parse_crypto_king_data(data_text) or {}
+        parsed = parse_crypto_king_raw_data(data_text) or {}
         bm_links = parsed.get("bm_links", []) or []
         bm_email_pairs = parsed.get("bm_email_pairs", []) or []
         return bool(bm_links or bm_email_pairs)
