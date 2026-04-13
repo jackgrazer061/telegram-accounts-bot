@@ -1517,6 +1517,10 @@ def send_crypto_bulk_found_preview_once(chat_id, user_id):
         lines.append(f"✏️Название: {item.get('king_name', 'не указано')}")
         lines.append(f"💵Цена: {item.get('price', '')}")
         lines.append(f"🌐Гео: {item.get('geo', '')}")
+    
+        if has_bm_in_king_data(item.get("data_text", "")):
+            lines.append("✅Есть BM")
+    
         lines.append("")
 
     sent = tg_send_inline_message(
@@ -1545,6 +1549,19 @@ def send_crypto_bulk_found_preview_once(chat_id, user_id):
         logging.exception("send_crypto_bulk_found_preview_once failed to save message_id")
 
     set_state_with_custom_ttl(user_id, state, CRYPTO_BULK_PROXY_TTL)
+
+def has_bm_in_king_data(data_text):
+    text = str(data_text or "").lower()
+
+    bm_keywords = [
+        "bm:",
+        "business manager",
+        "business_manager",
+        "bm link",
+        "bm_link"
+    ]
+
+    return any(k in text for k in bm_keywords)
 
 def show_found_crypto_king(chat_id, user_id, found):
     state = get_state(user_id)
