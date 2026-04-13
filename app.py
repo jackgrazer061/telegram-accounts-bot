@@ -14275,211 +14275,211 @@ def handle_message(msg):
             send_farm_fps_menu(chat_id, message)
             return
 
-if state.get("mode") == KING_OCTO_MODE_SINGLE_PROXY:
-    try:
-        proxy_raw = text.strip()
-
-        proxy_data = parse_proxy_input(proxy_raw)
-
-        if not proxy_data:
-            send_text_input_prompt(
-                chat_id,
-                "Неверный формат proxy.\n\nИспользуй:\nsocks5://login:password@host:port"
-            )
-            return
-
-        king_row = state.get("king_row")
-        king_name = str(state.get("king_name", "")).strip()
-        king_for_whom = str(state.get("king_for_whom", "")).strip()
-        parsed_king = state.get("parsed_king", {}) or {}
-        geo_value = str(state.get("king_geo_value", "")).strip()
-        data_text = str(state.get("king_data_text", "")).strip()
-        sync_id = state.get("king_sync_id")
-        today = str(state.get("king_today", "")).strip()
-        who_took_text = str(state.get("king_who_took_text", "")).strip()
-
-        if not king_row or not king_name or not king_for_whom:
-            clear_state(user_id)
-            send_kings_menu(chat_id, "Потеряны данные king. Начни заново.")
-            return
-
-        rows = get_sheet_rows_cached(SHEET_KINGS, force=True)
-
-        if king_row - 1 >= len(rows):
-            clear_state(user_id)
-            send_kings_menu(chat_id, "King не найден в таблице. Начни заново.")
-            return
-
-        row = ensure_row_len(rows[king_row - 1], 13)
-        status = str(row[4]).strip().lower()
-
-        if status == "taken":
-            clear_state(user_id)
-            send_kings_menu(chat_id, "Этот king уже занят.")
-            return
-
-        if status == "ban":
-            clear_state(user_id)
-            send_kings_menu(chat_id, "Этот king уже в ban.")
-            return
-
-        if status != "free":
-            clear_state(user_id)
-            send_kings_menu(chat_id, "Этот king недоступен.")
-            return
-
-        octo_ok = False
-        octo_msg = ""
-        octo_result = None
-        profile_uuid = ""
-
-        cookies_ok = False
-        cookies_msg = ""
-        cookies_payload = None
-
-        try:
-            octo_ok, octo_result = ensure_octo_profile_for_crypto_king(
-                profile_name=king_name,
-                parsed=parsed_king,
-                proxy_data=proxy_data
-            )
-            octo_msg = str(octo_result)
-        except Exception as octo_error:
-            logging.exception("KING_PROXY_STEP: Octo create crashed")
-            octo_msg = str(octo_error)
-
-        # ❗ КРИТИЧЕСКИЙ ФИКС
-        if not octo_ok:
-            tg_send_long_message(
-                chat_id,
-                f"❌ Не удалось создать Octo профиль\n{octo_msg or 'неизвестная ошибка'}"
-            )
-            return
-
-        # ✅ ДАЛЬШЕ ТОЛЬКО ЕСЛИ OCTO OK
-
-        try:
-            profile_uuid = extract_octo_profile_uuid_from_result(octo_result)
-            cookies_payload = normalize_crypto_cookies_for_import(
-                parsed_king.get("cookies_json", "")
-            )
-
-            if cookies_payload and profile_uuid:
-                cookies_ok, cookies_msg = try_import_crypto_king_cookies(
-                    profile_uuid=profile_uuid,
-                    cookies_payload=cookies_payload
+        if state.get("mode") == KING_OCTO_MODE_SINGLE_PROXY:
+            try:
+                proxy_raw = text.strip()
+        
+                proxy_data = parse_proxy_input(proxy_raw)
+        
+                if not proxy_data:
+                    send_text_input_prompt(
+                        chat_id,
+                        "Неверный формат proxy.\n\nИспользуй:\nsocks5://login:password@host:port"
+                    )
+                    return
+        
+                king_row = state.get("king_row")
+                king_name = str(state.get("king_name", "")).strip()
+                king_for_whom = str(state.get("king_for_whom", "")).strip()
+                parsed_king = state.get("parsed_king", {}) or {}
+                geo_value = str(state.get("king_geo_value", "")).strip()
+                data_text = str(state.get("king_data_text", "")).strip()
+                sync_id = state.get("king_sync_id")
+                today = str(state.get("king_today", "")).strip()
+                who_took_text = str(state.get("king_who_took_text", "")).strip()
+        
+                if not king_row or not king_name or not king_for_whom:
+                    clear_state(user_id)
+                    send_kings_menu(chat_id, "Потеряны данные king. Начни заново.")
+                    return
+        
+                rows = get_sheet_rows_cached(SHEET_KINGS, force=True)
+        
+                if king_row - 1 >= len(rows):
+                    clear_state(user_id)
+                    send_kings_menu(chat_id, "King не найден в таблице. Начни заново.")
+                    return
+        
+                row = ensure_row_len(rows[king_row - 1], 13)
+                status = str(row[4]).strip().lower()
+        
+                if status == "taken":
+                    clear_state(user_id)
+                    send_kings_menu(chat_id, "Этот king уже занят.")
+                    return
+        
+                if status == "ban":
+                    clear_state(user_id)
+                    send_kings_menu(chat_id, "Этот king уже в ban.")
+                    return
+        
+                if status != "free":
+                    clear_state(user_id)
+                    send_kings_menu(chat_id, "Этот king недоступен.")
+                    return
+        
+                octo_ok = False
+                octo_msg = ""
+                octo_result = None
+                profile_uuid = ""
+        
+                cookies_ok = False
+                cookies_msg = ""
+                cookies_payload = None
+        
+                try:
+                    octo_ok, octo_result = ensure_octo_profile_for_crypto_king(
+                        profile_name=king_name,
+                        parsed=parsed_king,
+                        proxy_data=proxy_data
+                    )
+                    octo_msg = str(octo_result)
+                except Exception as octo_error:
+                    logging.exception("KING_PROXY_STEP: Octo create crashed")
+                    octo_msg = str(octo_error)
+        
+                # ❗ КРИТИЧЕСКИЙ ФИКС
+                if not octo_ok:
+                    tg_send_long_message(
+                        chat_id,
+                        f"❌ Не удалось создать Octo профиль\n{octo_msg or 'неизвестная ошибка'}"
+                    )
+                    return
+        
+                # ✅ ДАЛЬШЕ ТОЛЬКО ЕСЛИ OCTO OK
+        
+                try:
+                    profile_uuid = extract_octo_profile_uuid_from_result(octo_result)
+                    cookies_payload = normalize_crypto_cookies_for_import(
+                        parsed_king.get("cookies_json", "")
+                    )
+        
+                    if cookies_payload and profile_uuid:
+                        cookies_ok, cookies_msg = try_import_crypto_king_cookies(
+                            profile_uuid=profile_uuid,
+                            cookies_payload=cookies_payload
+                        )
+                    else:
+                        cookies_msg = "cookies не найдены или profile_uuid пустой"
+                except Exception as cookies_error:
+                    logging.exception("KING_PROXY_STEP: cookies import crashed")
+                    cookies_msg = str(cookies_error)
+        
+                sheet_update_and_refresh(
+                    SHEET_KINGS,
+                    f"A{king_row}:L{king_row}",
+                    [[
+                        king_name,
+                        row[1],
+                        row[2],
+                        row[3],
+                        "taken",
+                        king_for_whom,
+                        today,
+                        geo_value,
+                        who_took_text,
+                        row[9],
+                        row[10],
+                        row[11]
+                    ]]
                 )
-            else:
-                cookies_msg = "cookies не найдены или profile_uuid пустой"
-        except Exception as cookies_error:
-            logging.exception("KING_PROXY_STEP: cookies import crashed")
-            cookies_msg = str(cookies_error)
-
-        sheet_update_and_refresh(
-            SHEET_KINGS,
-            f"A{king_row}:L{king_row}",
-            [[
-                king_name,
-                row[1],
-                row[2],
-                row[3],
-                "taken",
-                king_for_whom,
-                today,
-                geo_value,
-                who_took_text,
-                row[9],
-                row[10],
-                row[11]
-            ]]
-        )
-
-        if sync_id:
-            sync_status_to_basebot(BASEBOT_SHEET_KINGS, sync_id, "taken")
-
-        append_king_to_issues_sheet(
-            king_name=king_name,
-            purchase_date=row[1],
-            price=row[2],
-            transfer_date=today,
-            supplier=row[3],
-            for_whom=king_for_whom
-        )
-
-        invalidate_stats_cache()
-
-        preview_message_id = state.get("king_preview_message_id")
-
-        set_state(user_id, {
-            "mode": "king_octo_issued",
-            "last_king_name": king_name,
-            "last_king_data_text": data_text,
-            "king_preview_message_id": preview_message_id,
-            "last_accounts_section": "kings",
-        })
-
-        if preview_message_id:
-            mark_king_octo_preview_as_issued(
-                chat_id=chat_id,
-                message_id=preview_message_id,
-                king_name=king_name,
-                king_for_whom=king_for_whom,
-                price=row[2],
-                geo_value=parsed_king.get("geo", geo_value)
-            )
-
-        tg_send_inline_message(
-            chat_id,
-            f"✅ Кинг заведен в Octo\n\n"
-            f"✏️Название: {king_name}\n"
-            f"👨‍💻Для кого: {king_for_whom}\n"
-            f"💵Цена: {row[2]}\n"
-            f"🌐Гео: {parsed_king.get('geo', geo_value)}",
-            [[{
-                "text": "📄 Скачать txt",
-                "callback_data": f"download_king_txt:{user_id}"
-            }]]
-        )
-
-        tg_send_message(
-            chat_id,
-            f"Вручную проверь и выставь:\n"
-            f"• User-Agent\n"
-            f"• расширения\n\n"
-            f"• куки\n\n"
-            f"User-Agent:\n{parsed_king.get('user_agent', '')}"
-        )
-
-        if parsed_king.get("bm_links") or parsed_king.get("bm_email_pairs"):
-            bm_parts = []
-
-            if parsed_king.get("bm_links"):
-                bm_parts.append("BM ссылки:")
-                bm_parts.extend(parsed_king["bm_links"])
-
-            if parsed_king.get("bm_email_pairs"):
-                if bm_parts:
-                    bm_parts.append("")
-                bm_parts.append("Почты/пароли от BM:")
-                bm_parts.extend(parsed_king["bm_email_pairs"])
-
-            tg_send_long_message(
-                chat_id,
-                "По этому king ещё есть BM данные:\n\n" + "\n".join(bm_parts)
-            )
-
-        if parsed_king.get("cookies_links"):
-            tg_send_long_message(
-                chat_id,
-                "Cookies даны ссылкой. Импорт в профиль нужно сделать вручную:\n\n" +
-                "\n".join(parsed_king["cookies_links"])
-            )
-
-        return
-
-    except Exception:
-        logging.exception("king issue crashed")
-        tg_send_message(chat_id, "Ошибка выдачи king")
+        
+                if sync_id:
+                    sync_status_to_basebot(BASEBOT_SHEET_KINGS, sync_id, "taken")
+        
+                append_king_to_issues_sheet(
+                    king_name=king_name,
+                    purchase_date=row[1],
+                    price=row[2],
+                    transfer_date=today,
+                    supplier=row[3],
+                    for_whom=king_for_whom
+                )
+        
+                invalidate_stats_cache()
+        
+                preview_message_id = state.get("king_preview_message_id")
+        
+                set_state(user_id, {
+                    "mode": "king_octo_issued",
+                    "last_king_name": king_name,
+                    "last_king_data_text": data_text,
+                    "king_preview_message_id": preview_message_id,
+                    "last_accounts_section": "kings",
+                })
+        
+                if preview_message_id:
+                    mark_king_octo_preview_as_issued(
+                        chat_id=chat_id,
+                        message_id=preview_message_id,
+                        king_name=king_name,
+                        king_for_whom=king_for_whom,
+                        price=row[2],
+                        geo_value=parsed_king.get("geo", geo_value)
+                    )
+        
+                tg_send_inline_message(
+                    chat_id,
+                    f"✅ Кинг заведен в Octo\n\n"
+                    f"✏️Название: {king_name}\n"
+                    f"👨‍💻Для кого: {king_for_whom}\n"
+                    f"💵Цена: {row[2]}\n"
+                    f"🌐Гео: {parsed_king.get('geo', geo_value)}",
+                    [[{
+                        "text": "📄 Скачать txt",
+                        "callback_data": f"download_king_txt:{user_id}"
+                    }]]
+                )
+        
+                tg_send_message(
+                    chat_id,
+                    f"Вручную проверь и выставь:\n"
+                    f"• User-Agent\n"
+                    f"• расширения\n\n"
+                    f"• куки\n\n"
+                    f"User-Agent:\n{parsed_king.get('user_agent', '')}"
+                )
+        
+                if parsed_king.get("bm_links") or parsed_king.get("bm_email_pairs"):
+                    bm_parts = []
+        
+                    if parsed_king.get("bm_links"):
+                        bm_parts.append("BM ссылки:")
+                        bm_parts.extend(parsed_king["bm_links"])
+        
+                    if parsed_king.get("bm_email_pairs"):
+                        if bm_parts:
+                            bm_parts.append("")
+                        bm_parts.append("Почты/пароли от BM:")
+                        bm_parts.extend(parsed_king["bm_email_pairs"])
+        
+                    tg_send_long_message(
+                        chat_id,
+                        "По этому king ещё есть BM данные:\n\n" + "\n".join(bm_parts)
+                    )
+        
+                if parsed_king.get("cookies_links"):
+                    tg_send_long_message(
+                        chat_id,
+                        "Cookies даны ссылкой. Импорт в профиль нужно сделать вручную:\n\n" +
+                        "\n".join(parsed_king["cookies_links"])
+                    )
+        
+                return
+        
+            except Exception:
+                logging.exception("king issue crashed")
+                tg_send_message(chat_id, "Ошибка выдачи king")
 
         if state.get("mode") == "awaiting_crypto_king_octo_proxy":
             try:
