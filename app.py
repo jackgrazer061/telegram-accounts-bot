@@ -1551,17 +1551,13 @@ def send_crypto_bulk_found_preview_once(chat_id, user_id):
     set_state_with_custom_ttl(user_id, state, CRYPTO_BULK_PROXY_TTL)
 
 def has_bm_in_king_data(data_text):
-    text = str(data_text or "").lower()
-
-    bm_keywords = [
-        "bm:",
-        "business manager",
-        "business_manager",
-        "bm link",
-        "bm_link"
-    ]
-
-    return any(k in text for k in bm_keywords)
+    try:
+        parsed = parse_crypto_king_data(data_text) or {}
+        bm_links = parsed.get("bm_links", []) or []
+        bm_email_pairs = parsed.get("bm_email_pairs", []) or []
+        return bool(bm_links or bm_email_pairs)
+    except Exception:
+        return False
 
 def show_found_crypto_king(chat_id, user_id, found):
     state = get_state(user_id)
@@ -1578,6 +1574,9 @@ def show_found_crypto_king(chat_id, user_id, found):
         f"👨‍💻Для кого: {state.get('king_for_whom', 'не указано')}\n"
         f"✏️Название: {state.get('king_name', 'не указано')}"
     )
+
+    if has_bm_in_king_data(found.get("data_text", "")):
+        text += "\n✅Есть BM"
 
     sent = tg_send_inline_message(
         chat_id,
@@ -1619,6 +1618,9 @@ def edit_found_crypto_king_preview(chat_id, message_id, user_id, found):
         f"👨‍💻Для кого: {state.get('king_for_whom', 'не указано')}\n"
         f"✏️Название: {state.get('king_name', 'не указано')}"
     )
+
+    if has_bm_in_king_data(found.get("data_text", "")):
+        text += "\n✅Есть BM"
 
     tg_edit_message_text(
         chat_id,
