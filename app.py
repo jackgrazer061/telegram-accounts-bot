@@ -13973,7 +13973,29 @@ def handle_callback_query(callback_query):
             else:
                 show_found_crypto_king(chat_id, user_id, found)
 
-            return jsonify({"ok": True})
+        return jsonify({"ok": True})
+
+    except Exception as e:
+        logging.exception("handle_callback_query crashed")
+        try:
+            tg_answer_callback_query(callback_query.get("id", ""), "Ошибка")
+        except Exception:
+            pass
+
+        try:
+            notify_admin_about_error(
+                "handle_callback_query",
+                str(e),
+                extra_text=(
+                    f"user_id={callback_query.get('from', {}).get('id')}, "
+                    f"chat_id={callback_query.get('message', {}).get('chat', {}).get('id')}, "
+                    f"data={callback_query.get('data', '')}"
+                )
+            )
+        except Exception:
+            pass
+
+        return jsonify({"ok": True})
 
 def process_incoming_message(msg):
     if msg.get("text"):
