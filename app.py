@@ -8342,18 +8342,6 @@ def confirm_farm_king_octo_issue(chat_id, user_id, username):
                 "farm_king_preview_message_id": preview_message_id,
             })
 
-        tg_send_message(
-            chat_id,
-            f"Farm king подготовлен к выдаче.\n\n"
-            f"Название: {king_name}\n"
-            f"Для кого: farm\n"
-            f"Цена: {row[2]}\n"
-            f"Гео: {parsed_farm_king.get('geo', geo_value)}\n"
-            f"FB Login: {parsed_farm_king.get('fb_login', '')}\n"
-            f"Email: {parsed_farm_king.get('email', '')}\n"
-            f"2FA: {parsed_farm_king.get('twofa', '')}"
-        )
-
         sent = tg_send_inline_message(
             chat_id,
             f"Теперь пришли proxy для Octo профиля:\n"
@@ -8472,18 +8460,6 @@ def confirm_king_octo_issue(chat_id, user_id, username):
                 "king_preview_message_id": preview_message_id,
                 "last_accounts_section": "kings",
             })
-
-        tg_send_message(
-            chat_id,
-            f"King подготовлен к выдаче.\n\n"
-            f"Название: {king_name}\n"
-            f"Для кого: {king_for_whom}\n"
-            f"Цена: {row[2]}\n"
-            f"Гео: {parsed_king.get('geo', geo_value)}\n"
-            f"FB Login: {parsed_king.get('fb_login', '')}\n"
-            f"Email: {parsed_king.get('email', '')}\n"
-            f"2FA: {parsed_king.get('twofa', '')}"
-        )
 
         sent = tg_send_inline_message(
             chat_id,
@@ -9812,18 +9788,6 @@ def confirm_crypto_king_issue(chat_id, user_id, username):
                 "crypto_today": today,
                 "crypto_who_took_text": who_took_text,
             })
-
-        tg_send_message(
-            chat_id,
-            f"Crypto king подготовлен к выдаче.\n\n"
-            f"Название: {king_name}\n"
-            f"Для кого: {king_for_whom}\n"
-            f"Цена: {row[2]}\n"
-            f"Гео: {parsed_crypto.get('geo', geo_value)}\n"
-            f"FB Login: {parsed_crypto.get('fb_login', '')}\n"
-            f"Email: {parsed_crypto.get('email', '')}\n"
-            f"2FA: {parsed_crypto.get('twofa', '')}"
-        )
 
         send_text_input_prompt(
             chat_id,
