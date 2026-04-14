@@ -15103,29 +15103,41 @@ def handle_message(msg):
 
         if state.get("mode") == FARM_KING_OCTO_MODE_NAME:
             king_name = str(text).strip()
-
+        
             if not king_name:
                 tg_send_message(chat_id, "Напиши название farm king.")
                 return
-
+        
             if farm_king_name_exists(king_name):
                 tg_send_message(chat_id, f"Название '{king_name}' уже существует в фарм базе.")
                 return
-
-            found = find_free_farm_kings(1, geo=state.get("farm_king_geo", ""))
-            found = found[0] if found else None
-
-            if not found:
+        
+            found_list = find_free_farm_kings(1, geo=state.get("farm_king_geo", ""))
+            found_item = found_list[0] if found_list else None
+        
+            if not found_item:
                 clear_state(user_id)
                 send_farm_kings_menu(
                     chat_id,
                     f"Свободный farm king не найден.\nГео: {state.get('farm_king_geo', '')}"
                 )
                 return
-
+        
+            row = ensure_row_len(found_item["row"], 13)
+        
+            found = {
+                "row_index": found_item["row_index"],
+                "purchase_date": row[1],
+                "price": row[2],
+                "supplier": row[3],
+                "geo": row[7],
+                "data_text": get_full_king_data_from_row(row),
+                "row": row
+            }
+        
             state["farm_king_name"] = king_name
             set_state(user_id, state)
-
+        
             show_found_farm_king_octo(chat_id, user_id, found)
             return
 
