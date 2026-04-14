@@ -8555,7 +8555,7 @@ def process_kings_bulk_proxy_step(chat_id, user_id, username, proxy_text):
                 octo_ok, octo_result = ensure_octo_profile_with_retry(
                     ensure_func=ensure_octo_profile_for_crypto_king,
                     profile_name=king_name,
-                    parsed=...,
+                    parsed=parsed,
                     proxy_data=proxy_data
                 )
 
@@ -9866,7 +9866,7 @@ def process_crypto_bulk_proxy_step(chat_id, user_id, username, proxy_text):
                 octo_ok, octo_result = ensure_octo_profile_with_retry(
                     ensure_func=ensure_octo_profile_for_crypto_king,
                     profile_name=king_name,
-                    parsed=...,
+                    parsed=parsed,
                     proxy_data=proxy_data
                 )
 
@@ -15603,7 +15603,7 @@ def handle_message(msg):
                     octo_ok, octo_result = ensure_octo_profile_with_retry(
                         ensure_func=ensure_octo_profile_for_crypto_king,
                         profile_name=king_name,
-                        parsed=...,
+                        parsed=parsed,
                         proxy_data=proxy_data
                     )
                     octo_msg = str(octo_result)
@@ -15814,7 +15814,7 @@ def handle_message(msg):
                     octo_ok, octo_result = ensure_octo_profile_with_retry(
                         ensure_func=ensure_octo_profile_for_crypto_king,
                         profile_name=king_name,
-                        parsed=...,
+                        parsed=parsed,
                         proxy_data=proxy_data
                     )
                     octo_msg = str(octo_result)
