@@ -406,6 +406,7 @@ def reset_google_cache():
             SHEET_FARM_BMS: {"rows": None, "updated_at": 0},
             SHEET_FARM_FPS: {"rows": None, "updated_at": 0},
             SHEET_PIXELS: {"rows": None, "updated_at": 0},
+            SHEET_STICKERS: {"rows": None, "updated_at": 0},
         }
 
 def reset_table_cache():
@@ -422,6 +423,7 @@ def reset_table_cache():
             SHEET_FARM_BMS: {"rows": None, "updated_at": 0},
             SHEET_FARM_FPS: {"rows": None, "updated_at": 0},
             SHEET_PIXELS: {"rows": None, "updated_at": 0},
+            SHEET_STICKERS: {"rows": None, "updated_at": 0},
         }
 
 def check_google_available():
@@ -453,6 +455,7 @@ table_cache = {
     SHEET_FARM_BMS: {"rows": None, "updated_at": 0},
     SHEET_FARM_FPS: {"rows": None, "updated_at": 0},
     SHEET_PIXELS: {"rows": None, "updated_at": 0},
+    SHEET_STICKERS: {"rows": None, "updated_at": 0},
 }
 
 table_cache_lock = threading.Lock()
