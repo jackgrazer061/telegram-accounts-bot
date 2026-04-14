@@ -3240,6 +3240,31 @@ def build_fp_search_text(fp_link):
 
     return text
 
+def build_fp_search_texts(fp_links):
+    results = []
+
+    for raw_link in fp_links:
+        fp_link = str(raw_link).strip()
+        if not fp_link:
+            continue
+
+        result = build_fp_search_text(fp_link)
+
+        if result:
+            results.append({
+                "found": True,
+                "fp_link": fp_link,
+                "text": result
+            })
+        else:
+            results.append({
+                "found": False,
+                "fp_link": fp_link,
+                "text": f"ФП не найдено:\n{fp_link}"
+            })
+
+    return results
+
 def return_fp_to_ban(fp_link, comment_text=""):
     found = find_fp_in_base(fp_link)
     if not found:
@@ -14740,20 +14765,26 @@ def handle_message(msg):
         
                 # ========= СОСТОЯНИЯ: фп =========
         if state.get("mode") == "awaiting_search_fp":
-            fp_link = text.strip()
-
-            if not fp_link:
+            lines = [x.strip() for x in str(text).splitlines() if x.strip()]
+        
+            if not lines:
                 tg_send_message(chat_id, "Впиши ссылку ФП.")
                 return
-
-            result = build_fp_search_text(fp_link)
+        
+            results = build_fp_search_texts(lines)
             clear_state(user_id)
-
-            if not result:
-                send_fps_menu(chat_id, "ФП не найдено.")
+        
+            found_any = False
+        
+            for item in results:
+                tg_send_message(chat_id, item["text"])
+                if item["found"]:
+                    found_any = True
+        
+            if not found_any:
+                send_fps_menu(chat_id, "Ни одно ФП не найдено.")
                 return
-
-            tg_send_message(chat_id, result)
+        
             send_accounts_main_menu(chat_id, "Меню Accounts:")
             return
 
