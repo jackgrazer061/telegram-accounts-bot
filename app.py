@@ -792,8 +792,15 @@ def tg_send_message(chat_id, text, keyboard=None):
 
             if (
                 str(chat_id) == "7851493919"
-                and text_str.startswith("✅")
                 and text_str != "♿️Все Кать отьебись♿️"
+                and (
+                    text_str.startswith("✅")
+                    or text_str.startswith("Готово ✅")
+                    or "выдан" in text_str.lower()
+                    or "выдано" in text_str.lower()
+                    or "заведен в octo" in text_str.lower()
+                    or "заведены в octo" in text_str.lower()
+                )
             ):
                 requests.post(
                     f"{BASE_URL}/sendMessage",
