@@ -58,6 +58,9 @@ if not BASEBOT_SPREADSHEET_ID:
 ADMINS = {
     7573650707: "JackGrazer_Deputy_Head_Account",
     7681133609: "Cillian_Murphy_Head_of_Account",
+}
+
+ADMIN_FARM_USERS = {
     7172090459: "JackieChan_FarmLead",
     7389698288: "andrewgarfield_farmlead",
 }
@@ -97,6 +100,9 @@ FARMERS_USERS = {
 
 def is_admin(user_id):
     return user_id in ADMINS
+
+def is_admin_farm(user_id):
+    return user_id in ADMIN_FARM_USERS
 
 def is_accounts_user(user_id):
     return user_id in ACCOUNTS_USERS
@@ -1040,13 +1046,20 @@ def send_bms_menu(chat_id, text="Меню БМов:"):
     ]
     tg_send_message(chat_id, text, keyboard)
 
-def send_admin_menu(chat_id, text="Меню Admin:"):
-    keyboard = [
-        [{"text": ADMIN_BACKUP}, {"text": ADMIN_UPDATE_5M}],
-        [{"text": ADMIN_ACCOUNTANTS}, {"text": ADMIN_FARMERS}],
-        [{"text": ADMIN_ALL_STATS}, {"text": ADMIN_BOT_CHECK}],
-        [{"text": BTN_BACK_FROM_ADMIN}]
-    ]
+def send_admin_menu(chat_id, text="Меню Admin:", user_id=None):
+    if user_id is not None and is_admin_farm(user_id):
+        keyboard = [
+            [{"text": ADMIN_FARMERS}, {"text": ADMIN_ALL_STATS}],
+            [{"text": BTN_BACK_FROM_ADMIN}]
+        ]
+    else:
+        keyboard = [
+            [{"text": ADMIN_BACKUP}, {"text": ADMIN_UPDATE_5M}],
+            [{"text": ADMIN_ACCOUNTANTS}, {"text": ADMIN_FARMERS}],
+            [{"text": ADMIN_ALL_STATS}, {"text": ADMIN_BOT_CHECK}],
+            [{"text": BTN_BACK_FROM_ADMIN}]
+        ]
+
     tg_send_message(chat_id, text, keyboard)
 
 def send_admin_farmers_menu(chat_id, text="Admin / Фармеры:"):
@@ -12260,9 +12273,9 @@ def handle_message(msg):
             if not is_admin(user_id):
                 tg_send_message(chat_id, "У вас нет доступа к меню Admin.")
                 return
-
+        
             clear_state(user_id)
-            send_admin_menu(chat_id)
+            send_admin_menu(chat_id, user_id=user_id)
             return
 
         if text == ADMIN_FARMERS:
