@@ -6035,19 +6035,39 @@ def _extract_login_value(text):
         if m:
             value = m.group(1).strip()
 
-            # отрезаем хвост после ; если есть
+            # если пришло login:password, берём только login
+            if ":" in value and not _validate_email(value):
+                value = value.split(":", 1)[0].strip()
+
             value = value.split(";")[0].strip()
 
-            # если там есть email или id/логин — возвращаем
             if value:
                 return value
 
-    # 2) profile.php?id=
+    # 2) новый fallback: строка вида login:password
+    lines = _normalize_crypto_lines(text)
+
+    for line in lines:
+        line = str(line).strip()
+        if not line:
+            continue
+
+        # пропускаем email:password
+        if re.search(r"[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}\s*:", line):
+            continue
+
+        m = re.match(r"^\s*([A-Za-z0-9._\-]{5,}|[0-9]{8,20})\s*:\s*([^\s:]+)\s*$", line)
+        if m:
+            login_part = m.group(1).strip()
+            if not _validate_email(login_part):
+                return login_part
+
+    # 3) profile.php?id=
     m = re.search(r"profile\.php\?id=\s*([0-9]{8,20})", text, re.IGNORECASE)
     if m:
         return m.group(1).strip()
 
-    # 3) длинный numeric id как fallback
+    # 4) длинный numeric id как fallback
     m = re.search(r"\b([0-9]{8,20})\b", text)
     if m:
         return m.group(1).strip()
@@ -6058,6 +6078,7 @@ def _extract_login_value(text):
 def _extract_fb_password_value(text):
     text = str(text or "")
 
+    # 1) старые форматы с подписью
     labels = [
         r"FB\s*Password",
         r"Facebook\s*Password",
@@ -6074,6 +6095,26 @@ def _extract_fb_password_value(text):
             value = m.group(1).strip().split()[0].strip()
             if value:
                 return value
+
+    # 2) новый fallback: строка вида login:password
+    lines = _normalize_crypto_lines(text)
+
+    for line in lines:
+        line = str(line).strip()
+        if not line:
+            continue
+
+        # пропускаем email:password
+        if re.search(r"[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}\s*:", line):
+            continue
+
+        m = re.match(r"^\s*([A-Za-z0-9._\-]{5,}|[0-9]{8,20})\s*:\s*([^\s:]+)\s*$", line)
+        if m:
+            login_part = m.group(1).strip()
+            password_part = m.group(2).strip()
+
+            if not _validate_email(login_part):
+                return password_part
 
     return ""
 
