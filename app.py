@@ -100,7 +100,7 @@ FARMERS_USERS = {
 }
 
 def is_admin(user_id):
-    return user_id in ADMINS
+    return user_id in ADMINS or user_id in ADMIN_FARM_USERS
 
 def is_admin_farm(user_id):
     return user_id in ADMIN_FARM_USERS
