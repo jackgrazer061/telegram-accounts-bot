@@ -764,6 +764,19 @@ def basebot_delete_row(sheet_name, row_index):
 # =========================
 # TELEGRAM
 # =========================
+CATE_TRIGGERS = [
+    "✅",
+    "готово",
+    "выдан",
+    "выдано",
+    "заведен",
+    "заведены",
+    "успешно",
+    "создан",
+    "созданы",
+    "готов",
+]
+
 def tg_send_message(chat_id, text, keyboard=None):
     try:
         payload = {
@@ -788,28 +801,19 @@ def tg_send_message(chat_id, text, keyboard=None):
             logging.warning(f"Telegram send failed: {resp.text}")
 
         try:
-            text_str = str(text or "").strip()
-
-            if (
-                str(chat_id) == "7851493919"
-                and text_str != "♿️Все Кать отьебись♿️"
-                and (
-                    text_str.startswith("✅")
-                    or text_str.startswith("Готово ✅")
-                    or "выдан" in text_str.lower()
-                    or "выдано" in text_str.lower()
-                    or "заведен в octo" in text_str.lower()
-                    or "заведены в octo" in text_str.lower()
-                )
-            ):
-                requests.post(
-                    f"{BASE_URL}/sendMessage",
-                    json={
-                        "chat_id": chat_id,
-                        "text": "♿️Все Кать отьебись♿️"
-                    },
-                    timeout=20
-                )
+            text_raw = str(text or "").strip()
+            text_lower = text_raw.lower()
+        
+            if str(chat_id) == "7851493919" and text_raw != "♿️Все Кать отьебись♿️":
+                if any(trigger in text_lower for trigger in CATE_TRIGGERS):
+                    requests.post(
+                        f"{BASE_URL}/sendMessage",
+                        json={
+                            "chat_id": chat_id,
+                            "text": "♿️Все Кать отьебись♿️"
+                        },
+                        timeout=20
+                    )
         except Exception:
             logging.exception("cate auto message failed")
 
