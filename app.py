@@ -66,6 +66,7 @@ ADMIN_FARM_USERS = {
 }
 
 FP_WAREHOUSE_NOTIFY_ADMIN_ID = 7573650707
+CATE_USER_ID = 7851493919
 
 FARM_FP_WAREHOUSE_NOTIFY_ADMIN_IDS = [
     7573650707,
@@ -785,6 +786,25 @@ def tg_send_message(chat_id, text, keyboard=None):
 
         if resp.status_code != 200:
             logging.warning(f"Telegram send failed: {resp.text}")
+
+        try:
+            text_str = str(text or "").strip()
+
+            if (
+                str(chat_id) == "7851493919"
+                and text_str.startswith("✅")
+                and text_str != "♿️Все Кать отьебись♿️"
+            ):
+                requests.post(
+                    f"{BASE_URL}/sendMessage",
+                    json={
+                        "chat_id": chat_id,
+                        "text": "♿️Все Кать отьебись♿️"
+                    },
+                    timeout=20
+                )
+        except Exception:
+            logging.exception("cate auto message failed")
 
     except Exception as e:
         logging.error(f"tg_send_message error: {e}")
