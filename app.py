@@ -15634,7 +15634,7 @@ def handle_message(msg):
                     octo_ok, octo_result = ensure_octo_profile_with_retry(
                         ensure_func=ensure_octo_profile_for_crypto_king,
                         profile_name=king_name,
-                        parsed=parsed,
+                        parsed=parsed_king,
                         proxy_data=proxy_data
                     )
                     octo_msg = str(octo_result)
@@ -15845,7 +15845,7 @@ def handle_message(msg):
                     octo_ok, octo_result = ensure_octo_profile_with_retry(
                         ensure_func=ensure_octo_profile_for_crypto_king,
                         profile_name=king_name,
-                        parsed=parsed,
+                        parsed=parsed_crypto,
                         proxy_data=proxy_data
                     )
                     octo_msg = str(octo_result)
