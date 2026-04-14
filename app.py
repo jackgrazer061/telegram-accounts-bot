@@ -16410,7 +16410,14 @@ def handle_callback_query(callback_query):
             state["king_skip_proxy"] = True
             set_state(user_id, state)
         
-            tg_send_message(chat_id, "__SKIP_PROXY_SINGLE__")
+            handle_message({
+                "chat": {"id": chat_id},
+                "from": {
+                    "id": user_id,
+                    "username": callback_query["from"].get("username", "")
+                },
+                "text": "__SKIP_PROXY_SINGLE__"
+            })
             return jsonify({"ok": True})
 
         if data == f"kings_bulk_skip_all_proxies:{user_id}":
