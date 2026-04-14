@@ -12082,39 +12082,6 @@ def handle_message(msg):
                 send_person_menu(chat_id, prev_state.get("issue_department"))
                 return
 
-            if mode == KING_OCTO_MODE_COUNT:
-                tg_send_message(chat_id, "Сколько king нужно?", [
-                    [{"text": BTN_BACK_STEP}, {"text": MENU_CANCEL}]
-                ])
-                return
-
-            if mode == KING_OCTO_MODE_GEO:
-                send_king_geo_options(chat_id)
-                return
-
-            if mode == KING_OCTO_MODE_PRICE:
-                send_king_price_options(chat_id, prev_state.get("king_geo", ""))
-                return
-
-            if mode == KING_OCTO_MODE_DEPARTMENT:
-                send_department_menu(chat_id, "Выбери для кого king:")
-                return
-
-            if mode == KING_OCTO_MODE_FOR_WHOM:
-                send_person_menu(chat_id, prev_state.get("king_department"))
-                return
-
-            if mode == KING_OCTO_MODE_NAME:
-                send_text_input_prompt(chat_id, "Какое название будет у king?")
-                return
-
-            if mode == KING_OCTO_MODE_BULK_NAMES:
-                tg_send_message(
-                    chat_id,
-                    f"Пришли {prev_state.get('kings_count_requested', 0)} названий для king.\nКаждое название с новой строки."
-                )
-                return
-
             if mode == "awaiting_king_geo":
                 send_king_geo_options(chat_id)
                 return
