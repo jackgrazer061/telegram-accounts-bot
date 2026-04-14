@@ -559,23 +559,6 @@ def sheet_append_row_and_refresh(sheet_name, row, value_input_option="USER_ENTER
     google_write_with_retry(_do)
     mark_sheet_cache_stale(sheet_name)
 
-def append_issue_row_fixed(row):
-    rows = get_sheet_rows_cached(SHEET_ISSUES, force=True)
-
-    next_row = len(rows) + 1
-    values = list(row or [])
-
-    if len(values) < 7:
-        values = values + [""] * (7 - len(values))
-    else:
-        values = values[:7]
-
-    sheet_update_and_refresh(
-        SHEET_ISSUES,
-        f"A{next_row}:G{next_row}",
-        [values]
-    )
-
 def sheet_delete_row_and_refresh(sheet_name, row_index):
     def _do():
         with google_lock:
