@@ -8355,13 +8355,29 @@ def confirm_farm_king_octo_issue(chat_id, user_id, username):
             f"2FA: {parsed_farm_king.get('twofa', '')}"
         )
 
-        send_text_input_prompt(
+        sent = tg_send_inline_message(
             chat_id,
             f"Теперь пришли proxy для Octo профиля:\n"
             f"{king_name}\n\n"
             f"Формат:\n"
-            f"socks5://login:password@host:port"
+            f"socks5://login:password@host:port",
+            [[
+                {
+                    "text": "⏭️ Пропустить прокси",
+                    "callback_data": f"farm_king_skip_proxy:{user_id}"
+                }
+            ]]
         )
+        
+        try:
+            if isinstance(sent, dict):
+                proxy_message_id = sent.get("result", {}).get("message_id")
+                if proxy_message_id:
+                    state = get_state(user_id)
+                    state["farm_king_proxy_message_id"] = proxy_message_id
+                    set_state(user_id, state)
+        except Exception:
+            logging.exception("confirm_farm_king_octo_issue failed to save proxy message_id")
         return
 
     except Exception:
@@ -14830,14 +14846,17 @@ def handle_message(msg):
             try:
                 proxy_raw = text.strip()
 
-                proxy_data = parse_proxy_input(proxy_raw)
-
-                if not proxy_data:
-                    send_text_input_prompt(
-                        chat_id,
-                        "Неверный формат proxy.\n\nИспользуй:\nsocks5://login:password@host:port"
-                    )
-                    return
+                if proxy_raw == "__SKIP_PROXY_FARM_SINGLE__":
+                    proxy_data = None
+                else:
+                    proxy_data = parse_proxy_input(proxy_raw)
+                
+                    if not proxy_data:
+                        send_text_input_prompt(
+                            chat_id,
+                            "Неверный формат proxy.\n\nИспользуй:\nsocks5://login:password@host:port"
+                        )
+                        return
 
                 king_row = state.get("farm_king_row")
                 king_name = str(state.get("farm_king_name", "")).strip()
@@ -16606,6 +16625,30 @@ def handle_callback_query(callback_query):
                 )
 
             send_farm_kings_menu(chat_id, "Меню Farm King:")
+            return jsonify({"ok": True})
+
+        if data.startswith("farm_king_skip_proxy:"):
+            target_user_id = data.split(":", 1)[1]
+
+            if str(user_id) != str(target_user_id):
+                tg_answer_callback_query(callback_id, "Это не ваша кнопка")
+                return
+
+            tg_answer_callback_query(callback_id, "Прокси пропущен")
+
+            if message_id:
+                tg_edit_message_text(
+                    chat_id,
+                    message_id,
+                    "✅ Прокси пропущен",
+                    inline_buttons=[]
+                )
+
+            handle_message({
+                "chat": {"id": chat_id},
+                "from": {"id": user_id, "username": callback_query["from"].get("username", "")},
+                "text": "__SKIP_PROXY_FARM_SINGLE__"
+            })
             return jsonify({"ok": True})
 
         if data.startswith("confirm_farm_king_octo:"):
