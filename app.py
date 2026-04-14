@@ -12775,8 +12775,7 @@ def handle_message(msg):
         if text == SUBMENU_GET_KINGS:
             clear_state(user_id)
             set_state(user_id, {
-                "mode": "awaiting_king_geo",
-                "last_accounts_section": "kings"
+                "mode": "awaiting_king_geo"
             })
             send_king_geo_options(chat_id)
             return
