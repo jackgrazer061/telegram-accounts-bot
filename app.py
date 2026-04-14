@@ -357,7 +357,6 @@ FARM_KING_BULK_PROXY_TTL = CRYPTO_BULK_PROXY_TTL
 
 FARM_KING_OCTO_MODE_COUNT = "awaiting_farm_kings_count_octo"
 FARM_KING_OCTO_MODE_GEO = "awaiting_farm_king_geo_octo"
-FARM_KING_OCTO_MODE_PRICE = "awaiting_farm_king_price_octo"
 FARM_KING_OCTO_MODE_NAME = "awaiting_farm_king_name_octo"
 FARM_KING_OCTO_MODE_FOUND = "farm_king_found_octo"
 FARM_KING_OCTO_MODE_SINGLE_PROXY = "awaiting_farm_king_octo_proxy"
@@ -15072,22 +15071,6 @@ def handle_message(msg):
                 return
 
             state["farm_king_geo"] = text
-            state["mode"] = FARM_KING_OCTO_MODE_PRICE
-            set_state(user_id, state)
-
-            send_farm_king_price_options(chat_id, text)
-            return
-
-        if state.get("mode") == FARM_KING_OCTO_MODE_PRICE:
-            geo = str(state.get("farm_king_geo", "")).strip()
-            prices = get_free_farm_king_prices_by_geo(geo)
-            selected_price = normalize_price_key(text)
-
-            if selected_price not in prices:
-                send_farm_king_price_options(chat_id, geo)
-                return
-
-            state["farm_king_price"] = selected_price
             count_needed = int(state.get("farm_kings_count_requested", 0) or 0)
 
             if count_needed <= 1:
@@ -15096,16 +15079,15 @@ def handle_message(msg):
                 send_text_input_prompt(chat_id, "Какое название будет у farm king?")
                 return
 
-            free_items = find_free_farm_kings_by_geo_and_price(
+            free_items = find_free_farm_kings(
                 count_needed,
-                geo,
-                selected_price
+                geo=text
             )
 
             if len(free_items) < count_needed:
                 tg_send_message(
                     chat_id,
-                    f"Недостаточно свободных farm king по GEO {geo} и цене {selected_price}.\n"
+                    f"Недостаточно свободных farm king по GEO {text}.\n"
                     f"Доступно: {len(free_items)}"
                 )
                 return
@@ -15130,16 +15112,14 @@ def handle_message(msg):
                 tg_send_message(chat_id, f"Название '{king_name}' уже существует в фарм базе.")
                 return
 
-            found = find_free_farm_king_by_geo_and_price(
-                state.get("farm_king_geo", ""),
-                state.get("farm_king_price", "")
-            )
+            found = find_free_farm_kings(1, geo=state.get("farm_king_geo", ""))
+            found = found[0] if found else None
 
             if not found:
                 clear_state(user_id)
                 send_farm_kings_menu(
                     chat_id,
-                    f"Свободный farm king не найден.\nГео: {state.get('farm_king_geo', '')}\nЦена: {state.get('farm_king_price', '')}"
+                    f"Свободный farm king не найден.\nГео: {state.get('farm_king_geo', '')}"
                 )
                 return
 
@@ -15177,16 +15157,15 @@ def handle_message(msg):
                 )
                 return
 
-            selected_rows = find_free_farm_kings_by_geo_and_price(
+            selected_rows = find_free_farm_kings(
                 count_needed,
-                state.get("farm_king_geo", ""),
-                state.get("farm_king_price", "")
+                geo=state.get("farm_king_geo", "")
             )
 
             if len(selected_rows) < count_needed:
                 tg_send_message(
                     chat_id,
-                    f"Недостаточно свободных farm king по GEO {state.get('farm_king_geo', '')} и цене {state.get('farm_king_price', '')}.\n"
+                    f"Недостаточно свободных farm king по GEO {state.get('farm_king_geo', '')}.\n"
                     f"Доступно: {len(selected_rows)}"
                 )
                 return
@@ -15195,12 +15174,12 @@ def handle_message(msg):
             for item, king_name in zip(selected_rows, names):
                 queue.append({
                     "row_index": item["row_index"],
-                    "purchase_date": item["purchase_date"],
-                    "price": item["price"],
-                    "supplier": item["supplier"],
-                    "geo": item["geo"],
+                    "purchase_date": item["row"][1],
+                    "price": item["row"][2],
+                    "supplier": item["row"][3],
+                    "geo": item["row"][7],
                     "king_name": king_name,
-                    "data_text": item.get("data_text", "")
+                    "data_text": get_full_king_data_from_row(item["row"])
                 })
 
             state["farm_kings_bulk_queue"] = queue
@@ -16682,18 +16661,29 @@ def handle_callback_query(callback_query):
 
             current_row = state.get("farm_king_row")
             geo_value = str(state.get("farm_king_geo", "")).strip()
-            price_value = str(state.get("farm_king_price", "")).strip()
 
-            if not current_row or not geo_value or not price_value:
+            if not current_row or not geo_value:
                 tg_answer_callback_query(callback_id, "Сначала начни выдачу заново")
                 send_farm_kings_menu(chat_id, "Меню Farm King:")
                 return
 
-            found = find_free_farm_king_by_geo_and_price(
-                geo=geo_value,
-                price=price_value,
-                exclude_row=current_row
-            )
+            found_list = find_free_farm_kings(50, geo=geo_value)
+            found = None
+
+            for item in found_list:
+                if item["row_index"] != current_row:
+                    row = ensure_row_len(item["row"], 13)
+
+                    found = {
+                        "row_index": item["row_index"],
+                        "purchase_date": row[1],
+                        "price": row[2],
+                        "supplier": row[3],
+                        "geo": row[7],
+                        "data_text": get_full_king_data_from_row(row),
+                        "row": row
+                    }
+                    break
 
             if not found:
                 tg_answer_callback_query(callback_id, "Другого farm king нет")
