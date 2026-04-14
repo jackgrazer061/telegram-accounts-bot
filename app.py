@@ -146,6 +146,26 @@ SHEET_FARM_BMS = "База фарм бм"
 SHEET_FARM_FPS = "База фарм фп"
 SHEET_CRYPTO_KINGS = "База_крипта_кинги"
 SHEET_PIXELS = "База_пикселей"
+SHEET_STICKERS = "Стикеры"
+
+ADMIN_ADD_STICKERS = 'Добавить стикер'
+
+STICKER_BROADCAST_USERS = [
+    7573650707,
+    7681133609,
+    7953116439,
+    8334712952,
+    7851493919,
+    8035275476,
+    8482380951,
+    8389730381,
+    8589105033,
+    8503147017,
+    7172090459,
+    7389698288,
+]
+
+STICKER_SEND_HOURS = {6, 8, 10, 12, 14, 16}
 
 SYNC_COL_KINGS = 12
 SYNC_COL_BMS = 9
@@ -544,13 +564,29 @@ def sheet_batch_update_raw(sheet_name, updates):
     mark_sheet_cache_stale(sheet_name)
 
 def sheet_append_row_and_refresh(sheet_name, row, value_input_option="USER_ENTERED"):
-    def _do():
-        with google_lock:
-            sheet = get_sheet(sheet_name)
-            sheet.append_row(row, value_input_option=value_input_option)
+    values = list(row or [])
 
-    google_write_with_retry(_do)
-    mark_sheet_cache_stale(sheet_name)
+    current_rows = get_sheet_rows_cached(sheet_name, force=True)
+    next_row = len(current_rows) + 1
+
+    end_col = len(values)
+    if end_col <= 0:
+        return
+
+    def col_to_letter(col_num):
+        result = ""
+        while col_num > 0:
+            col_num, rem = divmod(col_num - 1, 26)
+            result = chr(65 + rem) + result
+        return result
+
+    end_col_letter = col_to_letter(end_col)
+
+    sheet_update_and_refresh(
+        sheet_name,
+        f"A{next_row}:{end_col_letter}{next_row}",
+        [values]
+    )
 
 def sheet_delete_row_and_refresh(sheet_name, row_index):
     def _do():
@@ -562,13 +598,36 @@ def sheet_delete_row_and_refresh(sheet_name, row_index):
     mark_sheet_cache_stale(sheet_name)
 
 def sheet_append_rows_and_refresh(sheet_name, rows, value_input_option="USER_ENTERED"):
-    def _do():
-        with google_lock:
-            sheet = get_sheet(sheet_name)
-            sheet.append_rows(rows, value_input_option=value_input_option)
+    rows = [list(r or []) for r in (rows or []) if r]
+    if not rows:
+        return
 
-    google_write_with_retry(_do)
-    mark_sheet_cache_stale(sheet_name)
+    max_len = max(len(r) for r in rows)
+    normalized = []
+
+    for row in rows:
+        if len(row) < max_len:
+            row = row + [""] * (max_len - len(row))
+        normalized.append(row[:max_len])
+
+    current_rows = get_sheet_rows_cached(sheet_name, force=True)
+    start_row = len(current_rows) + 1
+    end_row = start_row + len(normalized) - 1
+
+    def col_to_letter(col_num):
+        result = ""
+        while col_num > 0:
+            col_num, rem = divmod(col_num - 1, 26)
+            result = chr(65 + rem) + result
+        return result
+
+    end_col_letter = col_to_letter(max_len)
+
+    sheet_update_and_refresh(
+        sheet_name,
+        f"A{start_row}:{end_col_letter}{end_row}",
+        normalized
+    )
 
 def is_google_quota_error(exc):
     text = str(exc).lower()
@@ -805,6 +864,180 @@ def tg_send_message(chat_id, text, keyboard=None):
 
     except Exception as e:
         logging.error(f"tg_send_message error: {e}")
+
+def tg_send_sticker(chat_id, sticker_file_id):
+    try:
+        payload = {
+            "chat_id": chat_id,
+            "sticker": sticker_file_id
+        }
+
+        resp = requests.post(
+            f"{BASE_URL}/sendSticker",
+            json=payload,
+            timeout=20
+        )
+
+        if resp.status_code != 200:
+            logging.warning(f"Telegram sendSticker failed: {resp.text}")
+
+    except Exception as e:
+        logging.error(f"tg_send_sticker error: {e}")
+
+
+def ensure_stickers_sheet_exists():
+    try:
+        with google_lock:
+            client = get_gspread_client()
+            spreadsheet = client.open_by_key(SPREADSHEET_ID)
+
+            try:
+                sheet = spreadsheet.worksheet(SHEET_STICKERS)
+            except gspread.exceptions.WorksheetNotFound:
+                sheet = spreadsheet.add_worksheet(title=SHEET_STICKERS, rows=1000, cols=10)
+
+            rows = sheet.get_all_values()
+
+            need_init = False
+            if not rows:
+                need_init = True
+            elif len(rows[0]) < 8:
+                need_init = True
+            elif str(rows[0][0]).strip() != "file_id":
+                need_init = True
+
+            if need_init:
+                sheet.update("A1:H2", [[
+                    "file_id", "type", "emoji", "set_name", "added_at", "", "next_index", "last_slot_key"
+                ], [
+                    "", "", "", "", "", "", "0", ""
+                ]])
+
+            mark_sheet_cache_stale(SHEET_STICKERS)
+            return sheet
+
+    except Exception:
+        logging.exception("ensure_stickers_sheet_exists crashed")
+        raise
+
+
+def get_stickers_list():
+    ensure_stickers_sheet_exists()
+    rows = get_sheet_rows_cached(SHEET_STICKERS, force=True)
+
+    result = []
+    for row in rows[1:]:
+        row = ensure_row_len(row, 8)
+
+        file_id = str(row[0]).strip()
+        if not file_id:
+            continue
+
+        result.append({
+            "file_id": file_id,
+            "type": str(row[1]).strip(),
+            "emoji": str(row[2]).strip(),
+            "set_name": str(row[3]).strip(),
+            "added_at": str(row[4]).strip(),
+        })
+
+    return result
+
+
+def get_sticker_broadcast_state():
+    ensure_stickers_sheet_exists()
+    rows = get_sheet_rows_cached(SHEET_STICKERS, force=True)
+
+    if len(rows) < 2:
+        return 0, ""
+
+    row2 = ensure_row_len(rows[1], 8)
+
+    try:
+        next_index = int(str(row2[6]).strip() or "0")
+    except Exception:
+        next_index = 0
+
+    last_slot_key = str(row2[7]).strip()
+    return next_index, last_slot_key
+
+
+def set_sticker_broadcast_state(next_index, last_slot_key):
+    ensure_stickers_sheet_exists()
+    sheet_update_and_refresh(
+        SHEET_STICKERS,
+        "G2:H2",
+        [[str(next_index), str(last_slot_key)]]
+    )
+
+
+def add_sticker_to_sheet(file_id, sticker_type="", emoji="", set_name=""):
+    ensure_stickers_sheet_exists()
+
+    stickers = get_stickers_list()
+    for item in stickers:
+        if str(item.get("file_id", "")).strip() == str(file_id).strip():
+            return False
+
+    rows = get_sheet_rows_cached(SHEET_STICKERS, force=True)
+    next_row = len(rows) + 1
+    if next_row < 3:
+        next_row = 3
+
+    added_at = datetime.now(MOSCOW_TZ).strftime("%d/%m/%Y %H:%M:%S")
+
+    sheet_update_and_refresh(
+        SHEET_STICKERS,
+        f"A{next_row}:E{next_row}",
+        [[
+            str(file_id).strip(),
+            str(sticker_type).strip(),
+            str(emoji).strip(),
+            str(set_name).strip(),
+            added_at
+        ]]
+    )
+
+    return True
+
+
+def maybe_send_scheduled_sticker_broadcast():
+    now = datetime.now(MOSCOW_TZ)
+
+    if now.hour not in STICKER_SEND_HOURS:
+        return
+
+    stickers = get_stickers_list()
+    if not stickers:
+        return
+
+    slot_key = now.strftime("%Y-%m-%d_%H")
+    next_index, last_slot_key = get_sticker_broadcast_state()
+
+    if last_slot_key == slot_key:
+        return
+
+    next_index = next_index % len(stickers)
+    sticker_file_id = stickers[next_index]["file_id"]
+
+    for uid in STICKER_BROADCAST_USERS:
+        try:
+            tg_send_sticker(uid, sticker_file_id)
+        except Exception:
+            logging.exception(f"scheduled sticker send failed for {uid}")
+
+    new_index = (next_index + 1) % len(stickers)
+    set_sticker_broadcast_state(new_index, slot_key)
+
+
+def sticker_broadcast_loop():
+    while True:
+        try:
+            maybe_send_scheduled_sticker_broadcast()
+        except Exception:
+            logging.exception("sticker_broadcast_loop crashed")
+
+        time.sleep(60)
 
 def tg_send_inline_message(chat_id, text, inline_buttons):
     try:
@@ -1074,6 +1307,7 @@ def send_admin_menu(chat_id, text="Меню Admin:", user_id=None):
             [{"text": ADMIN_BACKUP}, {"text": ADMIN_UPDATE_5M}],
             [{"text": ADMIN_ACCOUNTANTS}, {"text": ADMIN_FARMERS}],
             [{"text": ADMIN_ALL_STATS}, {"text": ADMIN_BOT_CHECK}],
+            [{"text": ADMIN_ADD_STICKERS}],
             [{"text": BTN_BACK_FROM_ADMIN}]
         ]
 
@@ -2863,6 +3097,68 @@ def handle_document_message(msg):
                 tg_send_message(msg["chat"]["id"], "Ошибка обработки файла. Попробуй ещё раз.")
         except Exception:
             pass
+
+def handle_sticker_message(msg):
+    try:
+        touch_request_heartbeat()
+
+        chat_id = msg["chat"]["id"]
+        user_id = msg["from"]["id"]
+
+        if not has_access(user_id):
+            tg_send_message(chat_id, f"⛔ У вас нет доступа.\n\nВаш Telegram ID:\n{user_id}")
+            return
+
+        state = get_state(user_id)
+        if state.get("mode") != "awaiting_sticker_add":
+            return
+
+        if not is_admin(user_id):
+            tg_send_message(chat_id, "Нет доступа.")
+            return
+
+        sticker = msg.get("sticker", {}) or {}
+        file_id = str(sticker.get("file_id", "")).strip()
+
+        if not file_id:
+            tg_send_message(chat_id, "Не удалось получить file_id стикера.")
+            return
+
+        sticker_type = "static"
+        if sticker.get("is_animated"):
+            sticker_type = "animated"
+        elif sticker.get("is_video"):
+            sticker_type = "video"
+
+        emoji = str(sticker.get("emoji", "")).strip()
+        set_name = str(sticker.get("set_name", "")).strip()
+
+        added = add_sticker_to_sheet(
+            file_id=file_id,
+            sticker_type=sticker_type,
+            emoji=emoji,
+            set_name=set_name
+        )
+
+        clear_state(user_id)
+
+        if added:
+            tg_send_message(
+                chat_id,
+                f"Готово ✅\n\n"
+                f"Стикер добавлен.\n"
+                f"Тип: {sticker_type}\n"
+                f"Emoji: {emoji or '-'}\n"
+                f"Набор: {set_name or '-'}"
+            )
+        else:
+            tg_send_message(chat_id, "Этот стикер уже есть в очереди.")
+
+        send_admin_menu(chat_id, "Меню Admin:", user_id=user_id)
+
+    except Exception as e:
+        logging.exception("handle_sticker_message crashed")
+        tg_send_message(msg["chat"]["id"], "Ошибка добавления стикера.")
 
 def send_simple_options(chat_id, title, options):
     rows = []
@@ -12293,6 +12589,16 @@ def handle_message(msg):
             send_admin_accountants_menu(chat_id)
             return
 
+        if text == ADMIN_ADD_STICKERS:
+            if not is_admin(user_id):
+                tg_send_message(chat_id, "Нет доступа.")
+                return
+
+            clear_state(user_id)
+            set_state(user_id, {"mode": "awaiting_sticker_add"})
+            tg_send_message(chat_id, "Отправь стикер.")
+            return
+
         if text == ADMIN_UPDATE_5M:
             if not is_admin(user_id):
                 tg_send_message(chat_id, "У вас нет доступа.")
@@ -16437,6 +16743,8 @@ def process_incoming_message(msg):
         handle_message(msg)
     elif msg.get("document"):
         handle_document_message(msg)
+    elif msg.get("sticker"):
+        handle_sticker_message(msg)
 
 # =========================
 # FLASK
@@ -16801,6 +17109,7 @@ def run_auto_healthcheck_once():
             ("База фарм кинги", rows_farm_kings, 12),
             ("База фарм бм", rows_farm_bms, 9),
             ("База фарм фп", rows_farm_fps, 9),
+            ("Стикеры", get_sheet_rows_cached(SHEET_STICKERS, force=True), 8),
         ]
 
         for title, rows, min_cols in all_checks:
@@ -16855,6 +17164,9 @@ if __name__ == "__main__":
 
     auto_health_thread = threading.Thread(target=auto_healthcheck_loop, daemon=True)
     auto_health_thread.start()
+
+    sticker_thread = threading.Thread(target=sticker_broadcast_loop, daemon=True)
+    sticker_thread.start()
 
     port = int(os.environ.get("PORT", 8080))
     app.run(host="0.0.0.0", port=port)
