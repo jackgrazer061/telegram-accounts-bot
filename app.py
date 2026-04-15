@@ -152,8 +152,8 @@ SHEET_STICKERS = "Стикеры"
 
 ADMIN_POLL = "Опрос"
 
-POLL_SCOPE_ACCOUNTS = "Акаунтеры"
-POLL_SCOPE_FARMERS = "Фармеры"
+POLL_SCOPE_ACCOUNTS = "👥Аккаунтерам"
+POLL_SCOPE_FARMERS = "🌾Фармерам"
 POLL_SCOPE_ALL = "Всем"
 
 POLL_MODE_SCOPE = "awaiting_poll_scope"
