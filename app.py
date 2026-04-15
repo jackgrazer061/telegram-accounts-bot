@@ -4775,19 +4775,48 @@ def send_free_farm_kings(chat_id):
         tg_send_message(chat_id, "Свободных фарм кингов сейчас нет.")
         return
 
-    geo_stats = {}
+    def format_geo_label(raw_geo):
+        return str(raw_geo or "").strip()
+
+    supplier_geo_stats = {}
+    total_count = len(free_rows)
+
     for row in free_rows:
+        supplier = str(row[3]).strip() or "Без поставщика"
         geo = str(row[7]).strip()
-        if geo:
-            geo_stats[geo] = geo_stats.get(geo, 0) + 1
 
-    lines = [f"{geo} — {count}" for geo, count in sorted(geo_stats.items())]
+        if not geo:
+            continue
 
-    text = (
-        f"Свободные фарм кинги: {len(free_rows)}\n\n"
-        + "\n".join(lines)
+        if supplier not in supplier_geo_stats:
+            supplier_geo_stats[supplier] = {}
+
+        supplier_geo_stats[supplier][geo] = supplier_geo_stats[supplier].get(geo, 0) + 1
+
+    if not supplier_geo_stats:
+        tg_send_message(chat_id, f"Свободные фарм кинги: {total_count}\n\nНет свободных GEO.")
+        return
+
+    supplier_order = sorted(
+        supplier_geo_stats.keys(),
+        key=lambda x: x.lower()
     )
 
+    lines = [f"Свободные фарм кинги: {total_count}", ""]
+
+    for supplier in supplier_order:
+        geo_stats = supplier_geo_stats[supplier]
+        if not geo_stats:
+            continue
+
+        lines.append(f"{supplier}:")
+
+        for geo in sorted(geo_stats.keys(), key=lambda x: str(x).lower()):
+            lines.append(f"{format_geo_label(geo)} — {geo_stats[geo]}")
+
+        lines.append("")
+
+    text = "\n".join(lines).strip()
     tg_send_message(chat_id, text)
 
 def find_free_farm_kings(count_needed, geo=None, supplier=None):
@@ -6950,14 +6979,20 @@ def _sanitize_login(value):
     if not value:
         return ""
 
-    # если это email — тоже ок, не режем
-    if _validate_email(value):
-        return value
+    # email оставляем как есть
+    email_value = _validate_email(value)
+    if email_value:
+        return email_value
 
-    # если это profile.php?id=...
-    m = re.search(r"profile\.php\?id=\s*([0-9]{8,20})", value, re.IGNORECASE)
-    if m:
-        return m.group(1).strip()
+    lower_value = value.lower()
+
+    # любые facebook profile-ссылки игнорируем полностью
+    if "facebook.com/profile.php?id=" in lower_value:
+        return ""
+
+    # любые http/https ссылки тоже не считаем логином
+    if lower_value.startswith("http://") or lower_value.startswith("https://"):
+        return ""
 
     # обычный id / login
     return value.split()[0].strip()
@@ -7114,6 +7149,14 @@ def parse_crypto_king_raw_data(raw_text):
                         if candidate and not _validate_email(candidate) and not _validate_2fa(candidate):
                             if not candidate.lower().startswith("http"):
                                 result["email_password"] = candidate
+
+        # если в fb_login попала facebook profile ссылка — очищаем
+    if result["fb_login"] and "facebook.com/profile.php?id=" in str(result["fb_login"]).lower():
+        result["fb_login"] = ""
+
+    # если прямого логина нет, используем email как FB Login
+    if not result["fb_login"] and result["email"]:
+        result["fb_login"] = result["email"]
 
     # ---------- FINAL SANITY ----------
     result["fb_login"] = _sanitize_login(result["fb_login"])
