@@ -1205,8 +1205,8 @@ def build_poll_admin_text(question, votes):
     return (
         f"Опрос:\n"
         f"{question}\n\n"
-        f"➕: {plus_count}\n"
-        f"➖: {minus_count}\n"
+        f"+: {plus_count}\n"
+        f"-: {minus_count}\n"
         f"Пропустили: {skip_count}"
     )
 
@@ -1226,9 +1226,9 @@ def build_poll_answers_text(question, votes, users_map):
         username = users_map.get(uid) or str(uid)
 
         if answer == "plus":
-            answer_text = "➕"
+            answer_text = "+"
         elif answer == "minus":
-            answer_text = "➖"
+            answer_text = "-"
         else:
             answer_text = "пропустил"
 
@@ -1286,8 +1286,8 @@ def send_poll_to_users(poll_id):
     users_map = get_poll_target_users(poll["scope"])
 
     inline_buttons = [[
-        {"text": "➕", "callback_data": f"poll_vote:{poll_id}:plus"},
-        {"text": "➖", "callback_data": f"poll_vote:{poll_id}:minus"},
+        {"text": "+", "callback_data": f"poll_vote:{poll_id}:plus"},
+        {"text": "-", "callback_data": f"poll_vote:{poll_id}:minus"},
         {"text": "Пропустить", "callback_data": f"poll_vote:{poll_id}:skip"},
     ]]
 
