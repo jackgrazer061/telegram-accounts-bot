@@ -5134,6 +5134,9 @@ def start_farm_kings_bulk_proxy_step(chat_id, user_id):
         return
 
     if state.get("farm_kings_bulk_skip_all_proxies"):
+        state["mode"] = FARM_KING_OCTO_MODE_BULK_PROXY
+        set_state_with_custom_ttl(user_id, state, FARM_KING_BULK_PROXY_TTL)
+
         process_farm_kings_bulk_proxy_step(
             chat_id=chat_id,
             user_id=user_id,
@@ -5146,11 +5149,13 @@ def start_farm_kings_bulk_proxy_step(chat_id, user_id):
     king_name = current_item.get("king_name", "")
     geo = current_item.get("geo", "")
     price = current_item.get("price", "")
+    supplier = current_item.get("supplier", "")
 
     text = (
         f"Скинь socks5 proxy для farm king {king_name}\n\n"
         f"Цена: {price}\n"
         f"Гео: {geo}\n"
+        f"Поставщик: {supplier}\n"
         f"Шаг {current_index + 1} из {len(queue)}\n\n"
         f"Формат:\n"
         f"socks5://login:password@host:port\n"
@@ -5173,11 +5178,11 @@ def start_farm_kings_bulk_proxy_step(chat_id, user_id):
 
     try:
         if isinstance(sent, dict):
-            message_id = sent.get("result", {}).get("message_id")
-            if message_id:
-                state["farm_kings_bulk_proxy_message_id"] = message_id
+            proxy_message_id = sent.get("result", {}).get("message_id")
+            if proxy_message_id:
+                state["farm_kings_bulk_proxy_message_id"] = proxy_message_id
     except Exception:
-        logging.exception("start_farm_kings_bulk_proxy_step failed to save message_id")
+        logging.exception("start_farm_kings_bulk_proxy_step failed to save proxy message_id")
 
     set_state_with_custom_ttl(user_id, state, FARM_KING_BULK_PROXY_TTL)
 
@@ -9082,7 +9087,7 @@ def process_kings_bulk_proxy_step(chat_id, user_id, username, proxy_text):
 def process_farm_kings_bulk_proxy_step(chat_id, user_id, username, proxy_text):
     state = get_state(user_id)
 
-    if state.get("mode") != FARM_KING_OCTO_MODE_BULK_PROXY:
+    if state.get("mode") not in [FARM_KING_OCTO_MODE_BULK_PROXY, FARM_KING_OCTO_MODE_BULK_CONFIRM]:
         send_farm_kings_menu(chat_id, "Сначала начни выдачу farm king заново.")
         return
 
@@ -16454,6 +16459,7 @@ def handle_callback_query(callback_query):
         if data == f"farm_kings_bulk_skip_all_proxies:{user_id}":
             state = get_state(user_id)
             state["farm_kings_bulk_skip_all_proxies"] = True
+            state["mode"] = FARM_KING_OCTO_MODE_BULK_PROXY
 
             if message_id:
                 state["farm_kings_bulk_proxy_message_id"] = message_id
