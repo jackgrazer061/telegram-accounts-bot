@@ -2654,6 +2654,10 @@ def send_crypto_bulk_followup_messages(chat_id, results):
 def finish_crypto_kings_bulk(chat_id, user_id):
     state = get_state(user_id)
 
+    pending_issue_rows = state.get("crypto_bulk_issue_rows", [])
+    if pending_issue_rows:
+        append_issue_rows_fixed(pending_issue_rows)
+
     results = state.get("crypto_bulk_results", [])
     for_whom = state.get("king_for_whom", "")
 
@@ -4319,17 +4323,12 @@ def confirm_fp_issue(chat_id, user_id, username):
                 send_fps_menu(chat_id, "Не найдено выбранное ФП. Начни заново.")
                 return
 
-            rows = get_sheet_rows_cached(SHEET_FPS, force=True)
+            row = get_sheet_row_live(SHEET_FPS, row_index, 9)
 
-            if row_index - 1 >= len(rows):
+            if not row or not any(str(x).strip() for x in row):
                 clear_state(user_id)
                 send_fps_menu(chat_id, "ФП не найдено в таблице. Начни заново.")
                 return
-
-            row = rows[row_index - 1]
-
-            if len(row) < 9:
-                row = row + [''] * (9 - len(row))
 
             status = str(row[5]).strip().lower()
 
@@ -4382,8 +4381,8 @@ def confirm_fp_issue(chat_id, user_id, username):
                 value_input_option="USER_ENTERED"
             )
 
-            refresh_sheet_cache(SHEET_FPS)
-            refresh_sheet_cache(SHEET_ISSUES)
+            mark_sheet_cache_stale(SHEET_FPS)
+            mark_sheet_cache_stale(SHEET_ISSUES)
             invalidate_stats_cache()
 
             remaining_in_warehouse = count_free_fp_in_warehouse(warehouse_name)
@@ -11094,133 +11093,267 @@ def confirm_crypto_king_issue(chat_id, user_id, username):
 def process_crypto_bulk_proxy_step(chat_id, user_id, username, proxy_text):
     state = get_state(user_id)
 
-    if state.get("mode") != CRYPTO_BULK_MODE_PROXY:
-        send_kings_menu(chat_id, "Сначала начни выдачу crypto king заново.")
-        return
-
     queue = state.get("crypto_bulk_queue", [])
+    results = state.get("crypto_bulk_results", [])
     current_index = int(state.get("crypto_bulk_current_index", 0))
+    pending_issue_rows = state.get("crypto_bulk_issue_rows", [])
 
     if current_index >= len(queue):
         finish_crypto_kings_bulk(chat_id, user_id)
         return
 
-    current_item = dict(queue[current_index])
-    king_name = current_item.get("king_name", "")
-    row_index = current_item.get("row_index")
+    current_item = queue[current_index]
 
-    proxy_raw = str(proxy_text or "").strip()
+    king_row = current_item.get("row_index")
+    king_name = str(current_item.get("king_name", "")).strip()
+    data_text = str(current_item.get("data_text", "")).strip()
+    price_value = str(current_item.get("price", "")).strip()
+    geo_value = str(current_item.get("geo", "")).strip()
+    supplier_value = str(current_item.get("supplier", "")).strip()
 
-    skip_all = (
-        proxy_raw == "__SKIP_ALL_PROXIES__"
-        or state.get("crypto_bulk_skip_all_proxies") is True
-    )
+    skip_all = bool(state.get("crypto_bulk_skip_all_proxies"))
 
     proxy_data = None
-
     if not skip_all:
-        proxy_data = parse_proxy_input(proxy_raw)
-        if not proxy_data:
-            tg_send_message(
-                chat_id,
-                f"Не удалось разобрать proxy для кинга {king_name}.\n"
-                f"Пришли proxy заново."
+        proxy_raw = str(proxy_text or "").strip()
+
+        if proxy_raw and proxy_raw != "__SKIP_ALL_PROXIES__":
+            proxy_data = parse_proxy_input(proxy_raw)
+
+            if not proxy_data:
+                results.append({
+                    "king_name": king_name,
+                    "price": price_value,
+                    "geo": geo_value,
+                    "supplier": supplier_value,
+                    "data_text": data_text,
+                    "octo_ok": False,
+                    "error_text": "неверный формат proxy"
+                })
+
+                state["crypto_bulk_results"] = results
+                state["crypto_bulk_current_index"] = current_index + 1
+                state["crypto_bulk_issue_rows"] = pending_issue_rows
+                set_state_with_custom_ttl(user_id, state, CRYPTO_BULK_PROXY_TTL)
+
+                start_crypto_kings_bulk_proxy_step(chat_id, user_id)
+                return
+
+    parsed_crypto = {}
+    try:
+        parsed_crypto = parse_crypto_king_raw_data(data_text) or {}
+    except Exception:
+        logging.exception("process_crypto_bulk_proxy_step parse failed")
+
+    if not king_row or not king_name:
+        results.append({
+            "king_name": king_name or "не указано",
+            "price": price_value,
+            "geo": geo_value,
+            "supplier": supplier_value,
+            "data_text": data_text,
+            "octo_ok": False,
+            "error_text": "потеряны данные crypto king"
+        })
+
+        state["crypto_bulk_results"] = results
+        state["crypto_bulk_current_index"] = current_index + 1
+        state["crypto_bulk_issue_rows"] = pending_issue_rows
+        set_state_with_custom_ttl(user_id, state, CRYPTO_BULK_PROXY_TTL)
+
+        start_crypto_kings_bulk_proxy_step(chat_id, user_id)
+        return
+
+    row = get_sheet_row_live(SHEET_CRYPTO_KINGS, king_row, 13)
+
+    if not row or not any(str(x).strip() for x in row):
+        results.append({
+            "king_name": king_name,
+            "price": price_value,
+            "geo": geo_value,
+            "supplier": supplier_value,
+            "data_text": data_text,
+            "octo_ok": False,
+            "error_text": "строка пропала из таблицы"
+        })
+
+        state["crypto_bulk_results"] = results
+        state["crypto_bulk_current_index"] = current_index + 1
+        state["crypto_bulk_issue_rows"] = pending_issue_rows
+        set_state_with_custom_ttl(user_id, state, CRYPTO_BULK_PROXY_TTL)
+
+        start_crypto_kings_bulk_proxy_step(chat_id, user_id)
+        return
+
+    status = str(row[4]).strip().lower()
+
+    if status == "taken":
+        results.append({
+            "king_name": king_name,
+            "price": price_value,
+            "geo": geo_value,
+            "supplier": supplier_value,
+            "data_text": data_text,
+            "octo_ok": False,
+            "error_text": "этот crypto king уже занят"
+        })
+
+        state["crypto_bulk_results"] = results
+        state["crypto_bulk_current_index"] = current_index + 1
+        state["crypto_bulk_issue_rows"] = pending_issue_rows
+        set_state_with_custom_ttl(user_id, state, CRYPTO_BULK_PROXY_TTL)
+
+        start_crypto_kings_bulk_proxy_step(chat_id, user_id)
+        return
+
+    if status == "ban":
+        results.append({
+            "king_name": king_name,
+            "price": price_value,
+            "geo": geo_value,
+            "supplier": supplier_value,
+            "data_text": data_text,
+            "octo_ok": False,
+            "error_text": "этот crypto king уже в ban"
+        })
+
+        state["crypto_bulk_results"] = results
+        state["crypto_bulk_current_index"] = current_index + 1
+        state["crypto_bulk_issue_rows"] = pending_issue_rows
+        set_state_with_custom_ttl(user_id, state, CRYPTO_BULK_PROXY_TTL)
+
+        start_crypto_kings_bulk_proxy_step(chat_id, user_id)
+        return
+
+    if status != "free":
+        results.append({
+            "king_name": king_name,
+            "price": price_value,
+            "geo": geo_value,
+            "supplier": supplier_value,
+            "data_text": data_text,
+            "octo_ok": False,
+            "error_text": "этот crypto king недоступен"
+        })
+
+        state["crypto_bulk_results"] = results
+        state["crypto_bulk_current_index"] = current_index + 1
+        state["crypto_bulk_issue_rows"] = pending_issue_rows
+        set_state_with_custom_ttl(user_id, state, CRYPTO_BULK_PROXY_TTL)
+
+        start_crypto_kings_bulk_proxy_step(chat_id, user_id)
+        return
+
+    king_for_whom = str(state.get("king_for_whom", "")).strip()
+    today = datetime.now(MOSCOW_TZ).strftime("%d/%m/%Y")
+    who_took_text = f"@{username}" if username else "без username"
+
+    octo_ok = False
+    octo_result = None
+    error_text = ""
+
+    try:
+        octo_ok, octo_result = ensure_octo_profile_with_retry(
+            ensure_func=ensure_octo_profile_for_crypto_king,
+            profile_name=king_name,
+            parsed=parsed_crypto,
+            proxy_data=proxy_data
+        )
+    except Exception as e:
+        logging.exception("process_crypto_bulk_proxy_step octo failed")
+        error_text = str(e)
+
+    if not octo_ok:
+        results.append({
+            "king_name": king_name,
+            "price": price_value,
+            "geo": geo_value,
+            "supplier": supplier_value,
+            "data_text": data_text,
+            "parsed_crypto": parsed_crypto,
+            "octo_ok": False,
+            "error_text": error_text or str(octo_result or "не удалось завести в Octo")
+        })
+
+        state["crypto_bulk_results"] = results
+        state["crypto_bulk_current_index"] = current_index + 1
+        state["crypto_bulk_issue_rows"] = pending_issue_rows
+        set_state_with_custom_ttl(user_id, state, CRYPTO_BULK_PROXY_TTL)
+
+        start_crypto_kings_bulk_proxy_step(chat_id, user_id)
+        return
+
+    cookies_msg = ""
+    try:
+        profile_uuid = extract_octo_profile_uuid_from_result(octo_result)
+        cookies_payload = normalize_crypto_cookies_for_import(
+            parsed_crypto.get("cookies_json", "")
+        )
+
+        if cookies_payload and profile_uuid:
+            _, cookies_msg = try_import_crypto_king_cookies(
+                profile_uuid=profile_uuid,
+                cookies_payload=cookies_payload
             )
-            set_state_with_custom_ttl(user_id, state, CRYPTO_BULK_PROXY_TTL)
-            return
-
-    rows = get_sheet_rows_cached(SHEET_CRYPTO_KINGS, force=True)
-
-    if row_index - 1 >= len(rows):
-        current_item["octo_ok"] = False
-        current_item["error_text"] = "строка пропала из таблицы"
-    else:
-        row = ensure_row_len(rows[row_index - 1], 13)
-
-        if str(row[4]).strip().lower() != "free":
-            current_item["octo_ok"] = False
-            current_item["error_text"] = "king уже не free"
         else:
-            data_text = get_full_king_data_from_row(row)
-            parsed = parse_crypto_king_raw_data(data_text)
+            cookies_msg = "cookies не найдены или profile_uuid пустой"
+    except Exception as e:
+        logging.exception("process_crypto_bulk_proxy_step cookies failed")
+        cookies_msg = str(e)
 
-            current_item["data_text"] = data_text
-            current_item["parsed_crypto"] = parsed
+    sheet_update_raw(
+        SHEET_CRYPTO_KINGS,
+        f"A{king_row}:L{king_row}",
+        [[
+            king_name,
+            row[1],
+            row[2],
+            row[3],
+            "taken",
+            king_for_whom,
+            today,
+            geo_value,
+            who_took_text,
+            row[9],
+            row[10],
+            row[11]
+        ]]
+    )
+    mark_sheet_cache_stale(SHEET_CRYPTO_KINGS)
 
-            ok = False
-            error_text = ""
+    sync_id = current_item.get("sync_id")
+    if sync_id:
+        try:
+            sync_status_to_basebot(BASEBOT_SHEET_CRYPTO_KINGS, sync_id, "taken")
+        except Exception:
+            logging.exception("process_crypto_bulk_proxy_step basebot sync failed")
 
-            try:
-                octo_ok, octo_result = ensure_octo_profile_with_retry(
-                    ensure_func=ensure_octo_profile_for_crypto_king,
-                    profile_name=king_name,
-                    parsed=parsed,
-                    proxy_data=proxy_data
-                )
+    pending_issue_rows.append([
+        king_name,
+        "KING",
+        row[1],
+        normalize_numeric_for_sheet(row[2]),
+        today,
+        row[3],
+        king_for_whom
+    ])
 
-                if octo_ok:
-                    ok = True
+    results.append({
+        "king_name": king_name,
+        "price": price_value,
+        "geo": geo_value,
+        "supplier": supplier_value,
+        "data_text": data_text,
+        "parsed_crypto": parsed_crypto,
+        "octo_ok": True,
+        "octo_result": octo_result,
+        "cookies_msg": cookies_msg
+    })
 
-                    today = datetime.now(MOSCOW_TZ).strftime("%d/%m/%Y")
-                    who_took_text = f"@{username}" if username else "без username"
-                    sync_id = row[12]
-
-                    sheet_update_raw(
-                        SHEET_CRYPTO_KINGS,
-                        f"A{row_index}:I{row_index}",
-                        [[
-                            king_name,
-                            row[1],
-                            row[2],
-                            row[3],
-                            "taken",
-                            state.get("king_for_whom", ""),
-                            today,
-                            row[7],
-                            who_took_text
-                        ]]
-                    )
-
-                    if sync_id:
-                        sync_status_to_basebot(
-                            BASEBOT_SHEET_CRYPTO_KINGS,
-                            sync_id,
-                            "taken"
-                        )
-
-                    append_issue_row_fixed([
-                        king_name,
-                        "KING",
-                        row[1],
-                        normalize_numeric_for_sheet(row[2]),
-                        today,
-                        row[3],
-                        state.get("king_for_whom", "")
-                    ])
-
-                    invalidate_stats_cache()
-                else:
-                    error_text = str(octo_result)
-
-            except Exception as e:
-                logging.exception("process_crypto_bulk_proxy_step crashed")
-                error_text = str(e)
-
-            current_item["octo_ok"] = ok
-            current_item["error_text"] = error_text
-            current_item["proxy_skipped"] = skip_all
-
-    results = state.get("crypto_bulk_results", [])
-    results.append(current_item)
     state["crypto_bulk_results"] = results
     state["crypto_bulk_current_index"] = current_index + 1
-    state["crypto_bulk_username"] = username
-
+    state["crypto_bulk_issue_rows"] = pending_issue_rows
     set_state_with_custom_ttl(user_id, state, CRYPTO_BULK_PROXY_TTL)
-
-    if state["crypto_bulk_current_index"] >= len(queue):
-        finish_crypto_kings_bulk(chat_id, user_id)
-        return
 
     start_crypto_kings_bulk_proxy_step(chat_id, user_id)
 
@@ -15321,6 +15454,7 @@ def handle_message(msg):
             state["crypto_bulk_results"] = []
             state["crypto_bulk_current_index"] = 0
             state["crypto_bulk_username"] = username
+            state["crypto_bulk_issue_rows"] = []
             set_state_with_custom_ttl(user_id, state, CRYPTO_BULK_PROXY_TTL)
             
             send_crypto_bulk_found_preview_once(chat_id, user_id)
@@ -16764,20 +16898,20 @@ def handle_message(msg):
         if state.get("mode") == "awaiting_crypto_king_octo_proxy":
             try:
                 logging.info("CRYPTO_PROXY_STEP: entered")
-        
+
                 proxy_raw = text.strip()
                 logging.info(f"CRYPTO_PROXY_STEP: proxy_raw={proxy_raw}")
-        
+
                 proxy_data = parse_proxy_input(proxy_raw)
                 logging.info(f"CRYPTO_PROXY_STEP: proxy_data={proxy_data}")
-        
+
                 if not proxy_data:
                     send_text_input_prompt(
                         chat_id,
                         "Неверный формат proxy.\n\nИспользуй:\nsocks5://login:password@host:port"
                     )
                     return
-        
+
                 king_row = state.get("king_row")
                 king_name = str(state.get("king_name", "")).strip()
                 king_for_whom = str(state.get("king_for_whom", "")).strip()
@@ -16787,46 +16921,45 @@ def handle_message(msg):
                 sync_id = state.get("crypto_sync_id")
                 today = str(state.get("crypto_today", "")).strip()
                 who_took_text = str(state.get("crypto_who_took_text", "")).strip()
-        
+
                 if not king_row or not king_name or not king_for_whom:
                     clear_state(user_id)
                     send_kings_menu(chat_id, "Потеряны данные crypto king. Начни заново.")
                     return
-        
-                rows = get_sheet_rows_cached(SHEET_CRYPTO_KINGS, force=True)
-        
-                if king_row - 1 >= len(rows):
+
+                row = get_sheet_row_live(SHEET_CRYPTO_KINGS, king_row, 13)
+
+                if not row or not any(str(x).strip() for x in row):
                     clear_state(user_id)
                     send_kings_menu(chat_id, "Crypto king не найден в таблице. Начни заново.")
                     return
-        
-                row = ensure_row_len(rows[king_row - 1], 13)
+
                 status = str(row[4]).strip().lower()
-        
+
                 if status == "taken":
                     clear_state(user_id)
                     send_kings_menu(chat_id, "Этот crypto king уже занят.")
                     return
-        
+
                 if status == "ban":
                     clear_state(user_id)
                     send_kings_menu(chat_id, "Этот crypto king уже в ban.")
                     return
-        
+
                 if status != "free":
                     clear_state(user_id)
                     send_kings_menu(chat_id, "Этот crypto king недоступен.")
                     return
-        
+
                 octo_ok = False
                 octo_msg = ""
                 octo_result = None
                 profile_uuid = ""
-        
+
                 cookies_ok = False
                 cookies_msg = ""
                 cookies_payload = None
-        
+
                 try:
                     octo_ok, octo_result = ensure_octo_profile_with_retry(
                         ensure_func=ensure_octo_profile_for_crypto_king,
@@ -16846,26 +16979,25 @@ def handle_message(msg):
                         f"❌ Не удалось создать Octo профиль\n{octo_msg or 'неизвестная ошибка'}"
                     )
                     return
-        
-                if octo_ok:
-                    try:
-                        profile_uuid = extract_octo_profile_uuid_from_result(octo_result)
-                        cookies_payload = normalize_crypto_cookies_for_import(
-                            parsed_crypto.get("cookies_json", "")
+
+                try:
+                    profile_uuid = extract_octo_profile_uuid_from_result(octo_result)
+                    cookies_payload = normalize_crypto_cookies_for_import(
+                        parsed_crypto.get("cookies_json", "")
+                    )
+
+                    if cookies_payload and profile_uuid:
+                        cookies_ok, cookies_msg = try_import_crypto_king_cookies(
+                            profile_uuid=profile_uuid,
+                            cookies_payload=cookies_payload
                         )
-        
-                        if cookies_payload and profile_uuid:
-                            cookies_ok, cookies_msg = try_import_crypto_king_cookies(
-                                profile_uuid=profile_uuid,
-                                cookies_payload=cookies_payload
-                            )
-                        else:
-                            cookies_msg = "cookies не найдены или profile_uuid пустой"
-                    except Exception as cookies_error:
-                        logging.exception("CRYPTO_PROXY_STEP: cookies import crashed")
-                        cookies_msg = str(cookies_error)
-        
-                sheet_update_and_refresh(
+                    else:
+                        cookies_msg = "cookies не найдены или profile_uuid пустой"
+                except Exception as cookies_error:
+                    logging.exception("CRYPTO_PROXY_STEP: cookies import crashed")
+                    cookies_msg = str(cookies_error)
+
+                sheet_update_raw(
                     SHEET_CRYPTO_KINGS,
                     f"A{king_row}:L{king_row}",
                     [[
@@ -16883,10 +17015,11 @@ def handle_message(msg):
                         row[11]
                     ]]
                 )
-        
+                mark_sheet_cache_stale(SHEET_CRYPTO_KINGS)
+
                 if sync_id:
                     sync_status_to_basebot(BASEBOT_SHEET_CRYPTO_KINGS, sync_id, "taken")
-        
+
                 append_king_to_issues_sheet(
                     king_name=king_name,
                     purchase_date=row[1],
@@ -16895,18 +17028,18 @@ def handle_message(msg):
                     supplier=row[3],
                     for_whom=king_for_whom
                 )
-        
+
                 invalidate_stats_cache()
-        
+
                 preview_message_id = state.get("crypto_preview_message_id")
-        
+
                 set_state(user_id, {
                     "mode": "crypto_king_issued",
                     "last_crypto_king_name": king_name,
                     "last_crypto_king_data_text": data_text,
                     "crypto_preview_message_id": preview_message_id,
                 })
-        
+
                 if preview_message_id:
                     mark_crypto_king_preview_as_issued(
                         chat_id=chat_id,
@@ -16916,7 +17049,7 @@ def handle_message(msg):
                         price=row[2],
                         geo_value=parsed_crypto.get("geo", geo_value)
                     )
-        
+
                 tg_send_inline_message(
                     chat_id,
                     f"✅ Кинг заведен в Octo\n\n"
@@ -16938,40 +17071,37 @@ def handle_message(msg):
                     f"• куки\n\n"
                     f"User-Agent:\n{parsed_crypto.get('user_agent', '')}"
                 )
-        
-                if not octo_ok and octo_msg:
-                    tg_send_long_message(chat_id, f"Ошибка Octo:\n{octo_msg}")
-        
+
                 if parsed_crypto.get("bm_links") or parsed_crypto.get("bm_email_pairs"):
                     bm_parts = []
-        
+
                     if parsed_crypto.get("bm_links"):
                         bm_parts.append("BM ссылки:")
                         bm_parts.extend(parsed_crypto["bm_links"])
-        
+
                     if parsed_crypto.get("bm_email_pairs"):
                         if bm_parts:
                             bm_parts.append("")
                         bm_parts.append("Почты/пароли от BM:")
                         bm_parts.extend(parsed_crypto["bm_email_pairs"])
-        
+
                     tg_send_long_message(
                         chat_id,
                         "По этому crypto king ещё есть BM данные:\n\n" + "\n".join(bm_parts)
                     )
-        
+
                 if parsed_crypto.get("cookies_links"):
                     tg_send_long_message(
                         chat_id,
                         "Cookies даны ссылкой. Импорт в профиль нужно сделать вручную:\n\n" +
                         "\n".join(parsed_crypto["cookies_links"])
                     )
-        
+
                 return
 
-            except Exception as e:
-                 logging.exception("crypto king issue crashed")
-                 tg_send_message(chat_id, "Ошибка выдачи crypto king")
+            except Exception:
+                logging.exception("crypto king issue crashed")
+                tg_send_message(chat_id, "Ошибка выдачи crypto king")
 
         if state.get("mode") == "awaiting_octo_proxy_for_warehouse":
             proxy_raw = text.strip()
