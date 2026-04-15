@@ -7080,6 +7080,41 @@ def parse_crypto_king_raw_data(raw_text):
                             result["fb_password"] = candidate
                             break
 
+        # ---------- TAB-SEPARATED SINGLE-LINE FALLBACK ----------
+    # Формат типа:
+    # name<TAB>person<TAB>birthdate<TAB>email<TAB>fb_password<TAB>email_password<TAB>2fa_link<TAB>fb_link<TAB>notes
+    if ("\t" in text_original or "    " in text_original):
+        raw_parts = [x.strip() for x in re.split(r"\t+|\s{4,}", str(text_original)) if x.strip()]
+
+        # если в строке есть хотя бы email и достаточно колонок — пробуем этот формат
+        if len(raw_parts) >= 6:
+            email_indexes = [i for i, part in enumerate(raw_parts) if _validate_email(part)]
+
+            if email_indexes:
+                email_idx = email_indexes[0]
+                email_value = _validate_email(raw_parts[email_idx])
+
+                # если явно не нашли логин/email — в этом формате email = и FB Login, и Email
+                if email_value:
+                    if not result["fb_login"]:
+                        result["fb_login"] = email_value
+                    if not result["email"]:
+                        result["email"] = email_value
+
+                    # следующий токен после email = FB Password
+                    if not result["fb_password"] and email_idx + 1 < len(raw_parts):
+                        candidate = str(raw_parts[email_idx + 1]).strip()
+                        if candidate and not _validate_email(candidate) and not _validate_2fa(candidate):
+                            if not candidate.lower().startswith("http"):
+                                result["fb_password"] = candidate
+
+                    # следующий после FB Password = Email's Password
+                    if not result["email_password"] and email_idx + 2 < len(raw_parts):
+                        candidate = str(raw_parts[email_idx + 2]).strip()
+                        if candidate and not _validate_email(candidate) and not _validate_2fa(candidate):
+                            if not candidate.lower().startswith("http"):
+                                result["email_password"] = candidate
+
     # ---------- FINAL SANITY ----------
     result["fb_login"] = _sanitize_login(result["fb_login"])
     result["email"] = _validate_email(result["email"])
