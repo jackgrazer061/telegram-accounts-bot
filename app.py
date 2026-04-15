@@ -1190,11 +1190,15 @@ def notify_admin_about_error(source, error_text, extra_text=""):
         logging.exception("notify_admin_about_error crashed")
 
 def get_poll_target_users(scope):
-    # ТЕСТОВЫЙ РЕЖИМ — отправляем только этим двум
-    return {
-        7573650707: "JackGrazer_Deputy_Head_Account",
-        7681133609: "Cillian_Murphy_Head_of_Account",
-    }
+    if scope == POLL_SCOPE_ACCOUNTS:
+        return dict(ACCOUNTS_USERS)
+    if scope == POLL_SCOPE_FARMERS:
+        return dict(FARMERS_USERS)
+
+    result = {}
+    result.update(ACCOUNTS_USERS)
+    result.update(FARMERS_USERS)
+    return result
 
 
 def build_poll_admin_text(question, votes):
