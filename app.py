@@ -1182,6 +1182,43 @@ def tg_edit_message_text(chat_id, message_id, text, inline_buttons=None):
         logging.error(f"tg_edit_message_text error: {e}")
         return False
 
+def tg_edit_message_reply_markup(chat_id, message_id, inline_buttons=None):
+    try:
+        payload = {
+            "chat_id": chat_id,
+            "message_id": message_id,
+        }
+
+        if inline_buttons is not None:
+            payload["reply_markup"] = {
+                "inline_keyboard": inline_buttons
+            }
+        else:
+            payload["reply_markup"] = {
+                "inline_keyboard": []
+            }
+
+        resp = requests.post(
+            f"{BASE_URL}/editMessageReplyMarkup",
+            json=payload,
+            timeout=20
+        )
+
+        if resp.status_code != 200:
+            logging.warning(f"Telegram editMessageReplyMarkup failed: {resp.text}")
+            return False
+
+        data = resp.json()
+        if not data.get("ok"):
+            logging.warning(f"Telegram editMessageReplyMarkup api error: {data}")
+            return False
+
+        return True
+
+    except Exception as e:
+        logging.error(f"tg_edit_message_reply_markup error: {e}")
+        return False
+
 def tg_answer_callback_query(callback_query_id, text=""):
     try:
         payload = {
@@ -3465,8 +3502,15 @@ def handle_sticker_message(msg):
 
             users = get_message_targets(msg_meta["scope"])
 
+            sender_name = (
+                f"@{msg.get('from', {}).get('username')}"
+                if msg.get("from", {}).get("username")
+                else str(user_id)
+            )
+
             for uid in users.keys():
                 try:
+                    tg_send_message(uid, f"{sender_name} отправил стикер:")
                     tg_send_sticker(uid, file_id)
                 except Exception:
                     logging.exception(f"reply sticker broadcast failed {uid}")
@@ -17285,13 +17329,23 @@ def handle_callback_query(callback_query):
 
             tg_answer_callback_query(callback_id)
 
+            msg_meta = messages_data.get(msg_id) or {}
+            content_type = str(msg_meta.get("content_type", "text")).strip().lower()
+
             try:
-                tg_edit_message_text(
-                    chat_id,
-                    message_id,
-                    "Ответ уже открыт. Отправь сообщение или стикер.",
-                    inline_buttons=[]
-                )
+                if content_type == "sticker":
+                    tg_edit_message_reply_markup(
+                        chat_id,
+                        message_id,
+                        inline_buttons=[]
+                    )
+                else:
+                    tg_edit_message_text(
+                        chat_id,
+                        message_id,
+                        "Ответ уже открыт. Отправь сообщение или стикер.",
+                        inline_buttons=[]
+                    )
             except Exception:
                 logging.exception("msg_reply edit failed")
 
