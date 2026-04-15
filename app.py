@@ -150,6 +150,15 @@ SHEET_CRYPTO_KINGS = "База_крипта_кинги"
 SHEET_PIXELS = "База_пикселей"
 SHEET_STICKERS = "Стикеры"
 
+ADMIN_POLL = "Опрос"
+
+POLL_SCOPE_ACCOUNTS = "Акаунтеры"
+POLL_SCOPE_FARMERS = "Фармеры"
+POLL_SCOPE_ALL = "Всем"
+
+POLL_MODE_SCOPE = "awaiting_poll_scope"
+POLL_MODE_TEXT = "awaiting_poll_text"
+
 ADMIN_ADD_STICKERS = 'Добавить стикер'
 ADMIN_SEND_STICKER = 'Отправить стикер'
 
@@ -356,6 +365,9 @@ last_backup_date = None
 MOSCOW_TZ = ZoneInfo("Europe/Moscow")
 farm_bulk_worker_lock = threading.Lock()
 farm_bulk_workers_running = set()
+polls_lock = threading.Lock()
+polls_data = {}
+next_poll_id = 1
 
 last_user_action = {}
 ACTION_COOLDOWN = 0.2
@@ -1177,6 +1189,141 @@ def notify_admin_about_error(source, error_text, extra_text=""):
     except Exception:
         logging.exception("notify_admin_about_error crashed")
 
+def get_poll_target_users(scope):
+    if scope == POLL_SCOPE_ACCOUNTS:
+        return dict(ACCOUNTS_USERS)
+    if scope == POLL_SCOPE_FARMERS:
+        return dict(FARMERS_USERS)
+
+    result = {}
+    result.update(ACCOUNTS_USERS)
+    result.update(FARMERS_USERS)
+    return result
+
+
+def build_poll_admin_text(question, votes):
+    plus_count = sum(1 for x in votes.values() if x == "plus")
+    minus_count = sum(1 for x in votes.values() if x == "minus")
+    skip_count = sum(1 for x in votes.values() if x == "skip")
+
+    return (
+        f"Опрос:\n"
+        f"{question}\n\n"
+        f"➕: {plus_count}\n"
+        f"➖: {minus_count}\n"
+        f"Пропустили: {skip_count}"
+    )
+
+
+def build_poll_answers_text(question, votes, users_map):
+    lines = [
+        "Ответы на опрос:",
+        question,
+        ""
+    ]
+
+    if not votes:
+        lines.append("Пока никто не ответил.")
+        return "\n".join(lines)
+
+    for uid, answer in votes.items():
+        username = users_map.get(uid) or str(uid)
+
+        if answer == "plus":
+            answer_text = "➕"
+        elif answer == "minus":
+            answer_text = "➖"
+        else:
+            answer_text = "пропустил"
+
+        lines.append(f"@{username} - {answer_text}")
+
+    return "\n".join(lines)
+
+
+def create_poll(question, scope, admin_chat_id):
+    global next_poll_id
+
+    with polls_lock:
+        poll_id = str(next_poll_id)
+        next_poll_id += 1
+
+        polls_data[poll_id] = {
+            "question": question,
+            "scope": scope,
+            "admin_chat_id": admin_chat_id,
+            "admin_message_id": None,
+            "votes": {},
+            "created_at": time.time(),
+        }
+
+    return poll_id
+
+
+def get_poll(poll_id):
+    with polls_lock:
+        return polls_data.get(str(poll_id))
+
+
+def set_poll_admin_message_id(poll_id, message_id):
+    with polls_lock:
+        poll = polls_data.get(str(poll_id))
+        if poll:
+            poll["admin_message_id"] = message_id
+
+
+def save_poll_vote(poll_id, user_id, answer_key):
+    with polls_lock:
+        poll = polls_data.get(str(poll_id))
+        if not poll:
+            return None
+
+        poll["votes"][int(user_id)] = answer_key
+        return dict(poll)
+
+
+def send_poll_to_users(poll_id):
+    poll = get_poll(poll_id)
+    if not poll:
+        return
+
+    users_map = get_poll_target_users(poll["scope"])
+
+    inline_buttons = [[
+        {"text": "➕", "callback_data": f"poll_vote:{poll_id}:plus"},
+        {"text": "➖", "callback_data": f"poll_vote:{poll_id}:minus"},
+        {"text": "Пропустить", "callback_data": f"poll_vote:{poll_id}:skip"},
+    ]]
+
+    for uid in users_map.keys():
+        try:
+            tg_send_inline_message(uid, poll["question"], inline_buttons)
+        except Exception:
+            logging.exception(f"send_poll_to_users failed for user_id={uid}")
+
+
+def update_poll_admin_message(poll_id):
+    poll = get_poll(poll_id)
+    if not poll:
+        return
+
+    admin_chat_id = poll["admin_chat_id"]
+    admin_message_id = poll.get("admin_message_id")
+    if not admin_message_id:
+        return
+
+    text = build_poll_admin_text(poll["question"], poll["votes"])
+
+    tg_edit_message_text(
+        admin_chat_id,
+        admin_message_id,
+        text,
+        inline_buttons=[[{
+            "text": "Показать ответы",
+            "callback_data": f"poll_answers:{poll_id}"
+        }]]
+    )
+
 def send_main_menu(chat_id, text="Главное меню:", user_id=None):
     if user_id is not None and is_admin(user_id):
         keyboard = [
@@ -1331,6 +1478,7 @@ def send_admin_menu(chat_id, text="Меню Admin:", user_id=None):
             [{"text": ADMIN_ACCOUNTANTS}, {"text": ADMIN_FARMERS}],
             [{"text": ADMIN_ALL_STATS}, {"text": ADMIN_BOT_CHECK}],
             [{"text": ADMIN_ADD_STICKERS}, {"text": ADMIN_SEND_STICKER}],
+            [{"text": ADMIN_POLL}],
             [{"text": BTN_BACK_FROM_ADMIN}]
         ]
 
@@ -3192,6 +3340,14 @@ def send_simple_options(chat_id, title, options):
         rows.append(row)
     rows.append([{"text": MENU_CANCEL}])
     tg_send_message(chat_id, title, rows)
+
+def send_poll_scope_menu(chat_id):
+    keyboard = [
+        [{"text": POLL_SCOPE_ACCOUNTS}, {"text": POLL_SCOPE_FARMERS}],
+        [{"text": POLL_SCOPE_ALL}],
+        [{"text": BTN_BACK_FROM_ADMIN}, {"text": MENU_CANCEL}]
+    ]
+    tg_send_message(chat_id, "Выберите отдел:", keyboard)
 
 def get_available_currencies(limit_val, threshold_val, gmt_val):
     rows = get_sheet_rows_cached(SHEET_ACCOUNTS)
@@ -13054,6 +13210,16 @@ def handle_message(msg):
             clear_state(user_id)
             send_admin_accountants_menu(chat_id)
             return
+
+        if text == ADMIN_POLL:
+            if not is_admin(user_id):
+                tg_send_message(chat_id, "Нет доступа.")
+                return
+
+            clear_state(user_id)
+            set_state(user_id, {"mode": POLL_MODE_SCOPE})
+            send_poll_scope_menu(chat_id)
+            return
             
         if text == ADMIN_SEND_STICKER:
             if not is_admin(user_id):
@@ -13711,6 +13877,57 @@ def handle_message(msg):
             ok, message = return_farm_bm_to_free(bm_id)
             clear_state(user_id)
             send_farm_bms_menu(chat_id, message)
+            return
+
+        if state.get("mode") == POLL_MODE_SCOPE:
+            if text not in [POLL_SCOPE_ACCOUNTS, POLL_SCOPE_FARMERS, POLL_SCOPE_ALL]:
+                send_poll_scope_menu(chat_id)
+                return
+
+            state["poll_scope"] = text
+            state["mode"] = POLL_MODE_TEXT
+            set_state(user_id, state)
+
+            send_text_input_prompt(chat_id, "Введите текст опроса:")
+            return
+
+        if state.get("mode") == POLL_MODE_TEXT:
+            question = str(text).strip()
+
+            if not question:
+                send_text_input_prompt(chat_id, "Введите текст опроса:")
+                return
+
+            scope = state.get("poll_scope")
+            poll_id = create_poll(
+                question=question,
+                scope=scope,
+                admin_chat_id=chat_id
+            )
+
+            admin_text = build_poll_admin_text(question, {})
+
+            sent = tg_send_inline_message(
+                chat_id,
+                admin_text,
+                [[{
+                    "text": "Показать ответы",
+                    "callback_data": f"poll_answers:{poll_id}"
+                }]]
+            )
+
+            try:
+                if isinstance(sent, dict):
+                    admin_message_id = sent.get("result", {}).get("message_id")
+                    if admin_message_id:
+                        set_poll_admin_message_id(poll_id, admin_message_id)
+            except Exception:
+                logging.exception("poll admin message id save failed")
+
+            send_poll_to_users(poll_id)
+
+            clear_state(user_id)
+            send_admin_menu(chat_id, "Меню Admin:", user_id=user_id)
             return
 
         # ========= БМы =========
@@ -16710,6 +16927,68 @@ def handle_callback_query(callback_query):
                 back_callback_data=f"backstats_accounts:{username}"
             )
             return
+
+        if data.startswith("poll_vote:"):
+            _, poll_id, answer_key = data.split(":", 2)
+
+            if answer_key not in ["plus", "minus", "skip"]:
+                tg_answer_callback_query(callback_id, "Ошибка ответа")
+                return jsonify({"ok": True})
+
+            poll = get_poll(poll_id)
+            if not poll:
+                tg_answer_callback_query(callback_id, "Опрос не найден")
+                return jsonify({"ok": True})
+
+            save_poll_vote(poll_id, user_id, answer_key)
+
+            tg_answer_callback_query(callback_id, "Ответ принят")
+
+            try:
+                tg_edit_message_text(
+                    chat_id,
+                    message_id,
+                    "Ответ принят",
+                    inline_buttons=[]
+                )
+            except Exception:
+                logging.exception("poll user message edit failed")
+
+            try:
+                update_poll_admin_message(poll_id)
+            except Exception:
+                logging.exception("update_poll_admin_message failed")
+
+            return jsonify({"ok": True})
+
+        if data.startswith("poll_answers:"):
+            poll_id = data.split(":", 1)[1]
+
+            poll = get_poll(poll_id)
+            if not poll:
+                tg_answer_callback_query(callback_id, "Опрос не найден")
+                return jsonify({"ok": True})
+
+            if int(user_id) != int(poll["admin_chat_id"]):
+                tg_answer_callback_query(callback_id, "Это не ваш опрос")
+                return jsonify({"ok": True})
+
+            tg_answer_callback_query(callback_id)
+
+            users_map = {}
+            users_map.update(ACCOUNTS_USERS)
+            users_map.update(FARMERS_USERS)
+            users_map.update(ADMINS)
+            users_map.update(ADMIN_FARM_USERS)
+
+            answers_text = build_poll_answers_text(
+                poll["question"],
+                poll["votes"],
+                users_map
+            )
+
+            tg_send_long_message(chat_id, answers_text)
+            return jsonify({"ok": True})
 
         if data.startswith("fullstats_farmers:"):
             username = data.split(":", 1)[1]
