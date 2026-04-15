@@ -369,6 +369,8 @@ CRYPTO_BULK_MODE_CONFIRM = "awaiting_crypto_kings_confirm_bulk"
 
 FARM_KING_BULK_PROXY_TTL = CRYPTO_BULK_PROXY_TTL
 
+FARM_KING_OCTO_MODE_SUPPLIER = "awaiting_farm_king_supplier_octo"
+
 FARM_KING_OCTO_MODE_COUNT = "awaiting_farm_kings_count_octo"
 FARM_KING_OCTO_MODE_GEO = "awaiting_farm_king_geo_octo"
 FARM_KING_OCTO_MODE_NAME = "awaiting_farm_king_name_octo"
@@ -4701,6 +4703,59 @@ def send_farm_king_geo_options(chat_id):
 
     tg_send_message(chat_id, "Какое GEO нужно?", keyboard)
 
+def get_free_farm_king_suppliers_by_geo(geo):
+    rows = get_sheet_rows_cached(SHEET_FARM_KINGS)
+
+    geo = str(geo or "").strip()
+    suppliers = []
+    seen = set()
+
+    for row in rows[1:]:
+        if len(row) < 12:
+            row = row + [''] * (12 - len(row))
+
+        status = str(row[4]).strip().lower()
+        row_geo = str(row[7]).strip()
+        supplier = str(row[3]).strip()
+
+        if status != "free":
+            continue
+        if row_geo != geo:
+            continue
+        if not supplier:
+            continue
+
+        if supplier not in seen:
+            seen.add(supplier)
+            suppliers.append(supplier)
+
+    suppliers.sort()
+    return suppliers
+
+
+def send_farm_king_supplier_options(chat_id, geo):
+    suppliers = get_free_farm_king_suppliers_by_geo(geo)
+
+    if not suppliers:
+        send_farm_kings_menu(chat_id, f"Нет свободных farm king по GEO {geo}.")
+        return
+
+    keyboard = []
+    row = []
+
+    for supplier in suppliers:
+        row.append({"text": supplier})
+        if len(row) == 2:
+            keyboard.append(row)
+            row = []
+
+    if row:
+        keyboard.append(row)
+
+    keyboard.append([{"text": BTN_BACK_STEP}, {"text": MENU_CANCEL}])
+
+    tg_send_message(chat_id, f"У кого купили farm king для GEO {geo}?", keyboard)
+
 def send_free_farm_kings(chat_id):
     rows = get_sheet_rows_cached(SHEET_FARM_KINGS)
 
@@ -4731,10 +4786,13 @@ def send_free_farm_kings(chat_id):
 
     tg_send_message(chat_id, text)
 
-def find_free_farm_kings(count_needed, geo=None):
+def find_free_farm_kings(count_needed, geo=None, supplier=None):
     rows = get_sheet_rows_cached(SHEET_FARM_KINGS)
 
     candidates = []
+    geo = str(geo or "").strip()
+    supplier = str(supplier or "").strip()
+
     for idx, row in enumerate(rows[1:], start=2):
         if len(row) < 12:
             row = row + [''] * (12 - len(row))
@@ -4743,7 +4801,12 @@ def find_free_farm_kings(count_needed, geo=None):
             continue
 
         row_geo = str(row[7]).strip()
-        if geo is not None and row_geo != geo:
+        row_supplier = str(row[3]).strip()
+
+        if geo and row_geo != geo:
+            continue
+
+        if supplier and row_supplier != supplier:
             continue
 
         purchase_date = parse_date(row[1]) or datetime.max
@@ -12491,6 +12554,18 @@ def handle_message(msg):
                 send_text_input_prompt(chat_id, "Сколько farm king нужно?")
                 return
 
+            if mode == FARM_KING_OCTO_MODE_SUPPLIER:
+                send_farm_king_geo_options(chat_id)
+                return
+
+            if mode == FARM_KING_OCTO_MODE_NAME:
+                send_farm_king_supplier_options(chat_id, prev_state.get("farm_king_geo", ""))
+                return
+
+            if mode == FARM_KING_OCTO_MODE_BULK_NAMES:
+                send_farm_king_supplier_options(chat_id, prev_state.get("farm_king_geo", ""))
+                return
+
             if mode == FARM_KING_OCTO_MODE_GEO:
                 send_farm_king_geo_options(chat_id)
                 return
@@ -15209,6 +15284,21 @@ def handle_message(msg):
                 return
 
             state["farm_king_geo"] = text
+            state["mode"] = FARM_KING_OCTO_MODE_SUPPLIER
+            set_state(user_id, state)
+
+            send_farm_king_supplier_options(chat_id, text)
+            return
+
+        if state.get("mode") == FARM_KING_OCTO_MODE_SUPPLIER:
+            geo_value = str(state.get("farm_king_geo", "")).strip()
+            suppliers = get_free_farm_king_suppliers_by_geo(geo_value)
+
+            if text not in suppliers:
+                send_farm_king_supplier_options(chat_id, geo_value)
+                return
+
+            state["farm_king_supplier"] = text
             count_needed = int(state.get("farm_kings_count_requested", 0) or 0)
 
             if count_needed <= 1:
@@ -15219,13 +15309,16 @@ def handle_message(msg):
 
             free_items = find_free_farm_kings(
                 count_needed,
-                geo=text
+                geo=geo_value,
+                supplier=text
             )
 
             if len(free_items) < count_needed:
                 tg_send_message(
                     chat_id,
-                    f"Недостаточно свободных farm king по GEO {text}.\n"
+                    f"Недостаточно свободных farm king.\n"
+                    f"GEO: {geo_value}\n"
+                    f"Поставщик: {text}\n"
                     f"Доступно: {len(free_items)}"
                 )
                 return
@@ -15241,28 +15334,34 @@ def handle_message(msg):
 
         if state.get("mode") == FARM_KING_OCTO_MODE_NAME:
             king_name = str(text).strip()
-        
+
             if not king_name:
                 tg_send_message(chat_id, "Напиши название farm king.")
                 return
-        
+
             if farm_king_name_exists(king_name):
                 tg_send_message(chat_id, f"Название '{king_name}' уже существует в фарм базе.")
                 return
-        
-            found_list = find_free_farm_kings(1, geo=state.get("farm_king_geo", ""))
+
+            found_list = find_free_farm_kings(
+                1,
+                geo=state.get("farm_king_geo", ""),
+                supplier=state.get("farm_king_supplier", "")
+            )
             found_item = found_list[0] if found_list else None
-        
+
             if not found_item:
                 clear_state(user_id)
                 send_farm_kings_menu(
                     chat_id,
-                    f"Свободный farm king не найден.\nГео: {state.get('farm_king_geo', '')}"
+                    f"Свободный farm king не найден.\n"
+                    f"Гео: {state.get('farm_king_geo', '')}\n"
+                    f"Поставщик: {state.get('farm_king_supplier', '')}"
                 )
                 return
-        
+
             row = ensure_row_len(found_item["row"], 13)
-        
+
             found = {
                 "row_index": found_item["row_index"],
                 "purchase_date": row[1],
@@ -15272,10 +15371,10 @@ def handle_message(msg):
                 "data_text": get_full_king_data_from_row(row),
                 "row": row
             }
-        
+
             state["farm_king_name"] = king_name
             set_state(user_id, state)
-        
+
             show_found_farm_king_octo(chat_id, user_id, found)
             return
 
@@ -15309,13 +15408,16 @@ def handle_message(msg):
 
             selected_rows = find_free_farm_kings(
                 count_needed,
-                geo=state.get("farm_king_geo", "")
+                geo=state.get("farm_king_geo", ""),
+                supplier=state.get("farm_king_supplier", "")
             )
 
             if len(selected_rows) < count_needed:
                 tg_send_message(
                     chat_id,
-                    f"Недостаточно свободных farm king по GEO {state.get('farm_king_geo', '')}.\n"
+                    f"Недостаточно свободных farm king.\n"
+                    f"GEO: {state.get('farm_king_geo', '')}\n"
+                    f"Поставщик: {state.get('farm_king_supplier', '')}\n"
                     f"Доступно: {len(selected_rows)}"
                 )
                 return
