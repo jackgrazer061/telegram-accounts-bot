@@ -77,6 +77,8 @@ FARM_FP_WAREHOUSE_NOTIFY_ADMIN_IDS = [
 BOT_ERROR_NOTIFY_ADMIN_ID = 7573650707
 BOT_ERROR_NOTIFY_ADMIN_NAME = "JackGrazer_Deputy_Head_Account"
 
+background_threads_started = False
+background_threads_lock = threading.Lock()
 bot_diagnostics_lock = threading.Lock()
 bot_diagnostics_running = False
 last_error_notifications = {}
@@ -1065,6 +1067,8 @@ def send_next_sticker_in_queue(manual=False):
     return True, f"Стикер отправлен. Следующий индекс: {new_index}"
 
 def sticker_broadcast_loop():
+    logging.info("sticker_broadcast_loop started")
+
     while True:
         try:
             maybe_send_scheduled_sticker_broadcast()
@@ -17920,22 +17924,32 @@ def auto_healthcheck_loop():
             notify_admin_about_error("auto_healthcheck_loop", str(e))
             logging.exception("auto_healthcheck_loop crashed")
             time.sleep(60)
-        
+
+def start_background_threads_once():
+    global background_threads_started
+
+    with background_threads_lock:
+        if background_threads_started:
+            return
+
+        backup_thread = threading.Thread(target=backup_scheduler_loop, daemon=True)
+        backup_thread.start()
+
+        watchdog_thread = threading.Thread(target=watchdog_loop, daemon=True)
+        watchdog_thread.start()
+
+        auto_health_thread = threading.Thread(target=auto_healthcheck_loop, daemon=True)
+        auto_health_thread.start()
+
+        sticker_thread = threading.Thread(target=sticker_broadcast_loop, daemon=True)
+        sticker_thread.start()
+
+        background_threads_started = True
+
+
+start_background_threads_once()
+
+
 if __name__ == "__main__":
-    # cache_thread = threading.Thread(target=cache_warmer_loop, daemon=True)
-    # cache_thread.start()
-
-    backup_thread = threading.Thread(target=backup_scheduler_loop, daemon=True)
-    backup_thread.start()
-
-    watchdog_thread = threading.Thread(target=watchdog_loop, daemon=True)
-    watchdog_thread.start()
-
-    auto_health_thread = threading.Thread(target=auto_healthcheck_loop, daemon=True)
-    auto_health_thread.start()
-
-    sticker_thread = threading.Thread(target=sticker_broadcast_loop, daemon=True)
-    sticker_thread.start()
-
     port = int(os.environ.get("PORT", 8080))
     app.run(host="0.0.0.0", port=port)
