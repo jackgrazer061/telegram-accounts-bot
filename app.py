@@ -17145,13 +17145,31 @@ def handle_callback_query(callback_query):
 
         if data.startswith("msg_reply:"):
             msg_id = data.split(":", 1)[1]
-        
+
+            state = get_state(user_id)
+
+            # если уже отвечал на это сообщение — второй раз не даем
+            if state.get("mode") == MSG_MODE_REPLY and str(state.get("msg_reply_id", "")) == str(msg_id):
+                tg_answer_callback_query(callback_id, "Ты уже отвечаешь на это сообщение")
+                return jsonify({"ok": True})
+
             set_state(user_id, {
                 "mode": MSG_MODE_REPLY,
                 "msg_reply_id": msg_id
             })
-        
+
             tg_answer_callback_query(callback_id)
+
+            try:
+                tg_edit_message_text(
+                    chat_id,
+                    message_id,
+                    "Ответ уже открыт. Отправь сообщение одним текстом.",
+                    inline_buttons=[]
+                )
+            except Exception:
+                logging.exception("msg_reply edit failed")
+
             tg_send_message(chat_id, "Отправь сообщение")
             return jsonify({"ok": True})
 
