@@ -149,6 +149,7 @@ SHEET_PIXELS = "База_пикселей"
 SHEET_STICKERS = "Стикеры"
 
 ADMIN_ADD_STICKERS = 'Добавить стикер'
+ADMIN_SEND_STICKER = 'Отправить стикер'
 
 STICKER_BROADCAST_USERS = [
     7573650707,
@@ -1010,15 +1011,22 @@ def maybe_send_scheduled_sticker_broadcast():
     if now.hour not in STICKER_SEND_HOURS:
         return
 
-    stickers = get_stickers_list()
-    if not stickers:
-        return
-
     slot_key = now.strftime("%Y-%m-%d_%H")
-    next_index, last_slot_key = get_sticker_broadcast_state()
+    _, last_slot_key = get_sticker_broadcast_state()
 
     if last_slot_key == slot_key:
         return
+
+    ok, msg = send_next_sticker_in_queue(manual=False)
+    if not ok:
+        logging.warning(f"maybe_send_scheduled_sticker_broadcast skipped: {msg}")
+
+def send_next_sticker_in_queue(manual=False):
+    stickers = get_stickers_list()
+    if not stickers:
+        return False, "Список стикеров пуст."
+
+    next_index, last_slot_key = get_sticker_broadcast_state()
 
     next_index = next_index % len(stickers)
     sticker_file_id = stickers[next_index]["file_id"]
@@ -1027,11 +1035,17 @@ def maybe_send_scheduled_sticker_broadcast():
         try:
             tg_send_sticker(uid, sticker_file_id)
         except Exception:
-            logging.exception(f"scheduled sticker send failed for {uid}")
+            logging.exception(f"send_next_sticker_in_queue failed for {uid}")
 
     new_index = (next_index + 1) % len(stickers)
-    set_sticker_broadcast_state(new_index, slot_key)
 
+    if manual:
+        set_sticker_broadcast_state(new_index, last_slot_key)
+    else:
+        slot_key = datetime.now(MOSCOW_TZ).strftime("%Y-%m-%d_%H")
+        set_sticker_broadcast_state(new_index, slot_key)
+
+    return True, f"Стикер отправлен. Следующий индекс: {new_index}"
 
 def sticker_broadcast_loop():
     while True:
@@ -1310,7 +1324,7 @@ def send_admin_menu(chat_id, text="Меню Admin:", user_id=None):
             [{"text": ADMIN_BACKUP}, {"text": ADMIN_UPDATE_5M}],
             [{"text": ADMIN_ACCOUNTANTS}, {"text": ADMIN_FARMERS}],
             [{"text": ADMIN_ALL_STATS}, {"text": ADMIN_BOT_CHECK}],
-            [{"text": ADMIN_ADD_STICKERS}],
+            [{"text": ADMIN_ADD_STICKERS}, {"text": ADMIN_SEND_STICKER}],
             [{"text": BTN_BACK_FROM_ADMIN}]
         ]
 
@@ -12591,15 +12605,18 @@ def handle_message(msg):
             clear_state(user_id)
             send_admin_accountants_menu(chat_id)
             return
-
-        if text == ADMIN_ADD_STICKERS:
+            
+        if text == ADMIN_SEND_STICKER:
             if not is_admin(user_id):
                 tg_send_message(chat_id, "Нет доступа.")
                 return
 
-            clear_state(user_id)
-            set_state(user_id, {"mode": "awaiting_sticker_add"})
-            tg_send_message(chat_id, "Отправь стикер.")
+            ok, msg = send_next_sticker_in_queue(manual=True)
+
+            if ok:
+                tg_send_message(chat_id, "Готово ✅\n\nСтикер отправлен по очереди.")
+            else:
+                tg_send_message(chat_id, f"Не удалось отправить стикер.\n\n{msg}")
             return
 
         if text == ADMIN_UPDATE_5M:
