@@ -1532,7 +1532,8 @@ def send_admin_menu(chat_id, text="Меню Admin:", user_id=None):
             [{"text": ADMIN_ACCOUNTANTS}, {"text": ADMIN_FARMERS}],
             [{"text": ADMIN_ALL_STATS}, {"text": ADMIN_BOT_CHECK}],
             [{"text": ADMIN_ADD_STICKERS}, {"text": ADMIN_SEND_STICKER}],
-            [{"text": ADMIN_POLL}], {"text": ADMIN_MESSAGE}],
+            [{"text": ADMIN_POLL}],
+            [{"text": ADMIN_MESSAGE}],
             [{"text": BTN_BACK_FROM_ADMIN}]
         ]
 
