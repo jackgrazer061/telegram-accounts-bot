@@ -1353,11 +1353,26 @@ def create_message_broadcast(text, scope):
 
 
 def get_message_targets(scope):
-    # ТЕСТ — отправляем только этим двум
-    return {
-        7573650707: "JackGrazer_Deputy_Head_Account",
-        7681133609: "Cillian_Murphy_Head_of_Account",
-    }
+    users = {}
+
+    if scope == POLL_SCOPE_ACCOUNTS:
+        users.update(ACCOUNTS_USERS)
+        users.update(ADMINS)
+
+    elif scope == POLL_SCOPE_FARMERS:
+        users.update(FARMERS_USERS)
+        users.update(ADMIN_FARM_USERS)
+        users.update(ADMINS)
+
+    else:
+        users.update(ACCOUNTS_USERS)
+        users.update(FARMERS_USERS)
+        users.update(ADMINS)
+        users.update(ADMIN_FARM_USERS)
+
+    users.pop(8797795819, None)
+
+    return users
 
 
 def send_broadcast_message(msg_id):
