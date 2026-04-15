@@ -5655,43 +5655,71 @@ def process_farm_kings_bulk_proxy_step_background(chat_id, user_id, username):
     queue = state.get("farm_kings_bulk_queue", [])
     results = state.get("farm_kings_bulk_results", [])
     current_index = int(state.get("farm_kings_bulk_current_index", 0))
+    pending_issue_rows = state.get("farm_kings_bulk_issue_rows", [])
 
     if current_index >= len(queue):
         return
 
     current_item = queue[current_index]
+
     king_row = current_item.get("row_index")
     king_name = str(current_item.get("king_name", "")).strip()
-    geo_value = str(current_item.get("geo", "")).strip()
     data_text = str(current_item.get("data_text", "")).strip()
     price_value = str(current_item.get("price", "")).strip()
+    geo_value = str(current_item.get("geo", "")).strip()
     supplier_value = str(current_item.get("supplier", "")).strip()
 
-    skip_proxy = bool(state.get("farm_kings_bulk_skip_all_proxies"))
+    proxy_text = state.get("farm_kings_bulk_current_proxy_text", "")
+    skip_all = bool(state.get("farm_kings_bulk_skip_all_proxies"))
+
     proxy_data = None
+    if not skip_all:
+        proxy_raw = str(proxy_text or "").strip()
 
-    if not skip_proxy:
-        proxy_text = str(current_item.get("proxy_text", "")).strip()
-        proxy_data = parse_proxy_input(proxy_text)
-        if not proxy_data:
-            results.append({
-                "king_name": king_name,
-                "price": price_value,
-                "geo": geo_value,
-                "supplier": supplier_value,
-                "data_text": data_text,
-                "octo_ok": False,
-                "error_text": "proxy не указан или неверный"
-            })
+        if proxy_raw and proxy_raw != "__SKIP_ALL_PROXIES__":
+            proxy_data = parse_proxy_input(proxy_raw)
 
-            state["farm_kings_bulk_results"] = results
-            state["farm_kings_bulk_current_index"] = current_index + 1
-            set_state_with_custom_ttl(user_id, state, FARM_KING_BULK_PROXY_TTL)
-            return
+            if not proxy_data:
+                results.append({
+                    "king_name": king_name,
+                    "price": price_value,
+                    "geo": geo_value,
+                    "supplier": supplier_value,
+                    "data_text": data_text,
+                    "octo_ok": False,
+                    "error_text": "неверный формат proxy"
+                })
 
-    rows = get_sheet_rows_cached(SHEET_FARM_KINGS, force=True)
+                state["farm_kings_bulk_results"] = results
+                state["farm_kings_bulk_current_index"] = current_index + 1
+                set_state_with_custom_ttl(user_id, state, FARM_KING_BULK_PROXY_TTL)
+                return
 
-    if king_row - 1 >= len(rows):
+    parsed_farm_king = {}
+    try:
+        parsed_farm_king = parse_farm_king_raw_data(data_text) or {}
+    except Exception:
+        logging.exception("process_farm_kings_bulk_proxy_step_background parse failed")
+
+    if not king_row or not king_name:
+        results.append({
+            "king_name": king_name or "не указано",
+            "price": price_value,
+            "geo": geo_value,
+            "supplier": supplier_value,
+            "data_text": data_text,
+            "octo_ok": False,
+            "error_text": "потеряны данные farm king"
+        })
+
+        state["farm_kings_bulk_results"] = results
+        state["farm_kings_bulk_current_index"] = current_index + 1
+        set_state_with_custom_ttl(user_id, state, FARM_KING_BULK_PROXY_TTL)
+        return
+
+    row = get_sheet_row_live(SHEET_FARM_KINGS, king_row, 13)
+
+    if not row or not any(str(x).strip() for x in row):
         results.append({
             "king_name": king_name,
             "price": price_value,
@@ -5707,8 +5735,39 @@ def process_farm_kings_bulk_proxy_step_background(chat_id, user_id, username):
         set_state_with_custom_ttl(user_id, state, FARM_KING_BULK_PROXY_TTL)
         return
 
-    row = ensure_row_len(rows[king_row - 1], 13)
     status = str(row[4]).strip().lower()
+
+    if status == "taken":
+        results.append({
+            "king_name": king_name,
+            "price": price_value,
+            "geo": geo_value,
+            "supplier": supplier_value,
+            "data_text": data_text,
+            "octo_ok": False,
+            "error_text": "этот farm king уже занят"
+        })
+
+        state["farm_kings_bulk_results"] = results
+        state["farm_kings_bulk_current_index"] = current_index + 1
+        set_state_with_custom_ttl(user_id, state, FARM_KING_BULK_PROXY_TTL)
+        return
+
+    if status == "ban":
+        results.append({
+            "king_name": king_name,
+            "price": price_value,
+            "geo": geo_value,
+            "supplier": supplier_value,
+            "data_text": data_text,
+            "octo_ok": False,
+            "error_text": "этот farm king уже в ban"
+        })
+
+        state["farm_kings_bulk_results"] = results
+        state["farm_kings_bulk_current_index"] = current_index + 1
+        set_state_with_custom_ttl(user_id, state, FARM_KING_BULK_PROXY_TTL)
+        return
 
     if status != "free":
         results.append({
@@ -5718,7 +5777,7 @@ def process_farm_kings_bulk_proxy_step_background(chat_id, user_id, username):
             "supplier": supplier_value,
             "data_text": data_text,
             "octo_ok": False,
-            "error_text": "farm king уже не free"
+            "error_text": "этот farm king недоступен"
         })
 
         state["farm_kings_bulk_results"] = results
@@ -5726,79 +5785,25 @@ def process_farm_kings_bulk_proxy_step_background(chat_id, user_id, username):
         set_state_with_custom_ttl(user_id, state, FARM_KING_BULK_PROXY_TTL)
         return
 
-    parsed_farm_king = parse_crypto_king_raw_data(data_text) or {}
+    today = datetime.now(MOSCOW_TZ).strftime("%d/%m/%Y")
+    who_took_text = f"@{username}" if username else "без username"
 
     octo_ok = False
     octo_result = None
-    octo_msg = ""
-    cookies_ok = False
-    cookies_msg = ""
+    error_text = ""
 
     try:
         octo_ok, octo_result = ensure_octo_profile_with_retry(
             ensure_func=ensure_octo_profile_for_farm_king,
             profile_name=king_name,
             parsed=parsed_farm_king,
-            proxy_data=None if skip_proxy else proxy_data
+            proxy_data=proxy_data
         )
-        octo_msg = str(octo_result)
     except Exception as e:
-        logging.exception("process_farm_kings_bulk_proxy_step_background octo crashed")
-        octo_msg = str(e)
+        logging.exception("process_farm_kings_bulk_proxy_step_background octo failed")
+        error_text = str(e)
 
-    if octo_ok:
-        try:
-            profile_uuid = extract_octo_profile_uuid_from_result(octo_result)
-            cookies_payload = normalize_crypto_cookies_for_import(
-                parsed_farm_king.get("cookies_json", "")
-            )
-
-            if cookies_payload and profile_uuid:
-                cookies_ok, cookies_msg = try_import_crypto_king_cookies(
-                    profile_uuid=profile_uuid,
-                    cookies_payload=cookies_payload
-                )
-            else:
-                cookies_msg = "cookies не найдены или profile_uuid пустой"
-        except Exception as cookies_error:
-            logging.exception("process_farm_kings_bulk_proxy_step_background cookies crashed")
-            cookies_msg = str(cookies_error)
-
-        today = datetime.now(MOSCOW_TZ).strftime("%d/%m/%Y")
-        who_took_text = f"@{username}" if username else "без username"
-        sync_id = row[12] if len(row) > 12 else ""
-
-        sheet_update_and_refresh(
-            SHEET_FARM_KINGS,
-            f"A{king_row}:L{king_row}",
-            [[
-                king_name,
-                row[1],
-                row[2],
-                row[3],
-                "taken",
-                "farm",
-                today,
-                geo_value,
-                who_took_text,
-                row[9],
-                row[10],
-                row[11]
-            ]]
-        )
-
-        if sync_id:
-            sync_status_to_basebot(BASEBOT_SHEET_FARM_KINGS, sync_id, "taken")
-
-        append_king_to_issues_sheet(
-            king_name=king_name,
-            purchase_date=row[1],
-            price=row[2],
-            transfer_date=today,
-            supplier=row[3],
-            for_whom="farm"
-        )
-
+    if not octo_ok:
         results.append({
             "king_name": king_name,
             "price": price_value,
@@ -5806,27 +5811,87 @@ def process_farm_kings_bulk_proxy_step_background(chat_id, user_id, username):
             "supplier": supplier_value,
             "data_text": data_text,
             "parsed_farm_king": parsed_farm_king,
-            "octo_ok": True,
-            "octo_result": octo_result,
-            "cookies_ok": cookies_ok,
-            "cookies_msg": cookies_msg
-        })
-    else:
-        results.append({
-            "king_name": king_name,
-            "price": price_value,
-            "geo": geo_value,
-            "supplier": supplier_value,
-            "data_text": data_text,
             "octo_ok": False,
-            "error_text": octo_msg or "не удалось создать Octo профиль"
+            "error_text": error_text or str(octo_result or "не удалось завести в Octo")
         })
+
+        state["farm_kings_bulk_results"] = results
+        state["farm_kings_bulk_current_index"] = current_index + 1
+        set_state_with_custom_ttl(user_id, state, FARM_KING_BULK_PROXY_TTL)
+        return
+
+    cookies_msg = ""
+    try:
+        profile_uuid = extract_octo_profile_uuid_from_result(octo_result)
+        cookies_payload = normalize_crypto_cookies_for_import(
+            parsed_farm_king.get("cookies_json", "")
+        )
+
+        if cookies_payload and profile_uuid:
+            _, cookies_msg = try_import_crypto_king_cookies(
+                profile_uuid=profile_uuid,
+                cookies_payload=cookies_payload
+            )
+        else:
+            cookies_msg = "cookies не найдены или profile_uuid пустой"
+    except Exception as e:
+        logging.exception("process_farm_kings_bulk_proxy_step_background cookies failed")
+        cookies_msg = str(e)
+
+    sheet_update_raw(
+        SHEET_FARM_KINGS,
+        f"A{king_row}:L{king_row}",
+        [[
+            king_name,
+            row[1],
+            row[2],
+            row[3],
+            "taken",
+            "farm",
+            today,
+            geo_value,
+            who_took_text,
+            row[9],
+            row[10],
+            row[11]
+        ]]
+    )
+    mark_sheet_cache_stale(SHEET_FARM_KINGS)
+
+    sync_id = current_item.get("sync_id")
+    if sync_id:
+        try:
+            sync_status_to_basebot(BASEBOT_SHEET_FARM_KINGS, sync_id, "taken")
+        except Exception:
+            logging.exception("process_farm_kings_bulk_proxy_step_background basebot sync failed")
+
+    pending_issue_rows.append([
+        king_name,
+        "KING",
+        row[1],
+        normalize_numeric_for_sheet(row[2]),
+        today,
+        row[3],
+        "farm"
+    ])
+
+    results.append({
+        "king_name": king_name,
+        "price": price_value,
+        "geo": geo_value,
+        "supplier": supplier_value,
+        "data_text": data_text,
+        "parsed_farm_king": parsed_farm_king,
+        "octo_ok": True,
+        "octo_result": octo_result,
+        "cookies_msg": cookies_msg
+    })
 
     state["farm_kings_bulk_results"] = results
     state["farm_kings_bulk_current_index"] = current_index + 1
-    set_state_with_custom_ttl(user_id, state, FARM_KING_BULK_PROXY_TTL)
+    state["farm_kings_bulk_issue_rows"] = pending_issue_rows
 
-    invalidate_stats_cache()
+    set_state_with_custom_ttl(user_id, state, FARM_KING_BULK_PROXY_TTL)
 
 def build_farm_kings_bulk_result_messages(results, max_len=3500):
     success_items = [x for x in results if x.get("octo_ok")]
@@ -15946,7 +16011,7 @@ def handle_message(msg):
                     proxy_data = None
                 else:
                     proxy_data = parse_proxy_input(proxy_raw)
-                
+
                     if not proxy_data:
                         send_text_input_prompt(
                             chat_id,
@@ -15968,14 +16033,13 @@ def handle_message(msg):
                     send_farm_kings_menu(chat_id, "Потеряны данные farm king. Начни заново.")
                     return
 
-                rows = get_sheet_rows_cached(SHEET_FARM_KINGS, force=True)
+                row = get_sheet_row_live(SHEET_FARM_KINGS, king_row, 13)
 
-                if king_row - 1 >= len(rows):
+                if not row or not any(str(x).strip() for x in row):
                     clear_state(user_id)
                     send_farm_kings_menu(chat_id, "Farm king не найден в таблице. Начни заново.")
                     return
 
-                row = ensure_row_len(rows[king_row - 1], 13)
                 status = str(row[4]).strip().lower()
 
                 if status == "taken":
@@ -16038,7 +16102,7 @@ def handle_message(msg):
                     logging.exception("FARM_KING_PROXY_STEP: cookies import crashed")
                     cookies_msg = str(cookies_error)
 
-                sheet_update_and_refresh(
+                sheet_update_raw(
                     SHEET_FARM_KINGS,
                     f"A{king_row}:L{king_row}",
                     [[
@@ -16056,6 +16120,7 @@ def handle_message(msg):
                         row[11]
                     ]]
                 )
+                mark_sheet_cache_stale(SHEET_FARM_KINGS)
 
                 if sync_id:
                     sync_status_to_basebot(BASEBOT_SHEET_FARM_KINGS, sync_id, "taken")
@@ -16322,6 +16387,7 @@ def handle_message(msg):
             state["farm_kings_bulk_results"] = []
             state["farm_kings_bulk_current_index"] = 0
             state["farm_kings_bulk_username"] = username
+            state["farm_kings_bulk_issue_rows"] = []
 
             set_state_with_custom_ttl(user_id, state, FARM_KING_BULK_PROXY_TTL)
 
