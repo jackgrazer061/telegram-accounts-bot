@@ -160,6 +160,12 @@ POLL_SCOPE_ALL = "Всем"
 POLL_MODE_SCOPE = "awaiting_poll_scope"
 POLL_MODE_TEXT = "awaiting_poll_text"
 
+ADMIN_MESSAGE = "Сообщение"
+
+MSG_MODE_SCOPE = "awaiting_msg_scope"
+MSG_MODE_TEXT = "awaiting_msg_text"
+MSG_MODE_REPLY = "awaiting_msg_reply"
+
 ADMIN_ADD_STICKERS = 'Добавить стикер'
 ADMIN_SEND_STICKER = 'Отправить стикер'
 
@@ -369,6 +375,9 @@ farm_bulk_workers_running = set()
 polls_lock = threading.Lock()
 polls_data = {}
 next_poll_id = 1
+messages_lock = threading.Lock()
+messages_data = {}
+next_message_id = 1
 
 last_user_action = {}
 ACTION_COOLDOWN = 0.2
@@ -1327,6 +1336,48 @@ def update_poll_admin_message(poll_id):
         }]]
     )
 
+def create_message_broadcast(text, scope):
+    global next_message_id
+
+    with messages_lock:
+        msg_id = str(next_message_id)
+        next_message_id += 1
+
+        messages_data[msg_id] = {
+            "text": text,
+            "scope": scope,
+            "created_at": time.time(),
+        }
+
+    return msg_id
+
+
+def get_message_targets(scope):
+    # ТЕСТ — отправляем только этим двум
+    return {
+        7573650707: "JackGrazer_Deputy_Head_Account",
+        7681133609: "Cillian_Murphy_Head_of_Account",
+    }
+
+
+def send_broadcast_message(msg_id):
+    msg = messages_data.get(msg_id)
+    if not msg:
+        return
+
+    users = get_message_targets(msg["scope"])
+
+    inline = [[{
+        "text": "Ответить",
+        "callback_data": f"msg_reply:{msg_id}"
+    }]]
+
+    for uid in users.keys():
+        try:
+            tg_send_inline_message(uid, msg["text"], inline)
+        except Exception:
+            logging.exception(f"broadcast send failed {uid}")
+
 def send_main_menu(chat_id, text="Главное меню:", user_id=None):
     if user_id is not None and is_admin(user_id):
         keyboard = [
@@ -1481,7 +1532,7 @@ def send_admin_menu(chat_id, text="Меню Admin:", user_id=None):
             [{"text": ADMIN_ACCOUNTANTS}, {"text": ADMIN_FARMERS}],
             [{"text": ADMIN_ALL_STATS}, {"text": ADMIN_BOT_CHECK}],
             [{"text": ADMIN_ADD_STICKERS}, {"text": ADMIN_SEND_STICKER}],
-            [{"text": ADMIN_POLL}],
+            [{"text": ADMIN_POLL}], {"text": ADMIN_MESSAGE}],
             [{"text": BTN_BACK_FROM_ADMIN}]
         ]
 
@@ -12873,6 +12924,36 @@ def handle_message(msg):
             send_main_menu(chat_id, user_id=user_id)
             return
 
+        if state.get("mode") == MSG_MODE_REPLY:
+            reply_text = str(text).strip()
+        
+            if not reply_text:
+                tg_send_message(chat_id, "Отправь сообщение")
+                return
+        
+            msg_id = state.get("msg_reply_id")
+            msg = messages_data.get(msg_id)
+        
+            if not msg:
+                tg_send_message(chat_id, "Сообщение не найдено")
+                return
+        
+            users = get_message_targets(msg["scope"])
+        
+            username = f"@{username}" if username else str(user_id)
+        
+            full_text = f"{username}:\n{reply_text}"
+        
+            for uid in users.keys():
+                try:
+                    tg_send_message(uid, full_text)
+                except Exception:
+                    logging.exception(f"reply broadcast failed {uid}")
+        
+            clear_state(user_id)
+            tg_send_message(chat_id, "Сообщение отправлено")
+            return
+
         if text == "/id":
             tg_send_message(chat_id, f"Ваш Telegram ID: {user_id}")
             return
@@ -13194,6 +13275,16 @@ def handle_message(msg):
 
             clear_state(user_id)
             send_admin_farmers_menu(chat_id)
+            return
+
+        if text == ADMIN_MESSAGE:
+            if not is_admin(user_id):
+                tg_send_message(chat_id, "Нет доступа")
+                return
+        
+            clear_state(user_id)
+            set_state(user_id, {"mode": MSG_MODE_SCOPE})
+            send_poll_scope_menu(chat_id)
             return
 
         if text == BTN_BACK_FROM_ADMIN_FARMERS:
@@ -13894,6 +13985,18 @@ def handle_message(msg):
             send_text_input_prompt(chat_id, "Введите текст опроса:")
             return
 
+        if state.get("mode") == MSG_MODE_SCOPE:
+            if text not in [POLL_SCOPE_ACCOUNTS, POLL_SCOPE_FARMERS, POLL_SCOPE_ALL]:
+                send_poll_scope_menu(chat_id)
+                return
+        
+            state["msg_scope"] = text
+            state["mode"] = MSG_MODE_TEXT
+            set_state(user_id, state)
+        
+            send_text_input_prompt(chat_id, "Напиши сообщение:")
+            return
+
         if state.get("mode") == POLL_MODE_TEXT:
             question = str(text).strip()
 
@@ -13929,6 +14032,23 @@ def handle_message(msg):
 
             send_poll_to_users(poll_id)
 
+            clear_state(user_id)
+            send_admin_menu(chat_id, "Меню Admin:", user_id=user_id)
+            return
+
+        if state.get("mode") == MSG_MODE_TEXT:
+            message_text = str(text).strip()
+        
+            if not message_text:
+                send_text_input_prompt(chat_id, "Напиши сообщение:")
+                return
+        
+            scope = state.get("msg_scope")
+        
+            msg_id = create_message_broadcast(message_text, scope)
+        
+            send_broadcast_message(msg_id)
+        
             clear_state(user_id)
             send_admin_menu(chat_id, "Меню Admin:", user_id=user_id)
             return
@@ -17021,6 +17141,18 @@ def handle_callback_query(callback_query):
                 }]]
             )
             return
+
+        if data.startswith("msg_reply:"):
+            msg_id = data.split(":", 1)[1]
+        
+            set_state(user_id, {
+                "mode": MSG_MODE_REPLY,
+                "msg_reply_id": msg_id
+            })
+        
+            tg_answer_callback_query(callback_id)
+            tg_send_message(chat_id, "Отправь сообщение")
+            return jsonify({"ok": True})
 
         if data.startswith("backstats_farmers:"):
             username = data.split(":", 1)[1]
