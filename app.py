@@ -916,6 +916,37 @@ def tg_send_sticker(chat_id, sticker_file_id):
     except Exception as e:
         logging.error(f"tg_send_sticker error: {e}")
 
+def tg_send_sticker_inline(chat_id, sticker_file_id, inline_buttons):
+    try:
+        payload = {
+            "chat_id": chat_id,
+            "sticker": sticker_file_id,
+            "reply_markup": {
+                "inline_keyboard": inline_buttons
+            }
+        }
+
+        resp = requests.post(
+            f"{BASE_URL}/sendSticker",
+            json=payload,
+            timeout=20
+        )
+
+        if resp.status_code != 200:
+            logging.warning(f"Telegram sendSticker inline failed: {resp.text}")
+            return None
+
+        data = resp.json()
+        if not data.get("ok"):
+            logging.warning(f"Telegram sendSticker inline api error: {data}")
+            return None
+
+        return data
+
+    except Exception as e:
+        logging.error(f"tg_send_sticker_inline error: {e}")
+        return None
+
 
 def ensure_stickers_sheet_exists():
     try:
@@ -1212,6 +1243,13 @@ def get_poll_target_users(scope):
     result.update(FARMERS_USERS)
     return result
 
+def get_poll_admin_viewers():
+    return {
+        7573650707: "JackGrazer_Deputy_Head_Account",
+        7681133609: "Cillian_Murphy_Head_of_Account",
+        7172090459: "JackieChan_FarmLead",
+        7389698288: "andrewgarfield_farmlead",
+    }
 
 def build_poll_admin_text(question, votes):
     plus_count = sum(1 for x in votes.values() if x == "plus")
@@ -1263,8 +1301,8 @@ def create_poll(question, scope, admin_chat_id):
         polls_data[poll_id] = {
             "question": question,
             "scope": scope,
-            "admin_chat_id": admin_chat_id,
-            "admin_message_id": None,
+            "creator_admin_chat_id": admin_chat_id,
+            "admin_message_ids": {},
             "votes": {},
             "created_at": time.time(),
         }
@@ -1277,12 +1315,38 @@ def get_poll(poll_id):
         return polls_data.get(str(poll_id))
 
 
-def set_poll_admin_message_id(poll_id, message_id):
+def set_poll_admin_message_id(poll_id, admin_chat_id, message_id):
     with polls_lock:
         poll = polls_data.get(str(poll_id))
         if poll:
-            poll["admin_message_id"] = message_id
+            poll["admin_message_ids"][int(admin_chat_id)] = int(message_id)
 
+def send_poll_to_admin_viewers(poll_id):
+    poll = get_poll(poll_id)
+    if not poll:
+        return
+
+    text = build_poll_admin_text(poll["question"], poll["votes"])
+    admins = get_poll_admin_viewers()
+
+    for admin_chat_id in admins.keys():
+        try:
+            sent = tg_send_inline_message(
+                admin_chat_id,
+                text,
+                [[{
+                    "text": "Показать ответы",
+                    "callback_data": f"poll_answers:{poll_id}"
+                }]]
+            )
+
+            if isinstance(sent, dict):
+                admin_message_id = sent.get("result", {}).get("message_id")
+                if admin_message_id:
+                    set_poll_admin_message_id(poll_id, admin_chat_id, admin_message_id)
+
+        except Exception:
+            logging.exception(f"send_poll_to_admin_viewers failed for admin_chat_id={admin_chat_id}")
 
 def save_poll_vote(poll_id, user_id, answer_key):
     with polls_lock:
@@ -1319,24 +1383,27 @@ def update_poll_admin_message(poll_id):
     if not poll:
         return
 
-    admin_chat_id = poll["admin_chat_id"]
-    admin_message_id = poll.get("admin_message_id")
-    if not admin_message_id:
-        return
-
     text = build_poll_admin_text(poll["question"], poll["votes"])
+    admin_message_ids = dict(poll.get("admin_message_ids", {}))
 
-    tg_edit_message_text(
-        admin_chat_id,
-        admin_message_id,
-        text,
-        inline_buttons=[[{
-            "text": "Показать ответы",
-            "callback_data": f"poll_answers:{poll_id}"
-        }]]
-    )
+    for admin_chat_id, admin_message_id in admin_message_ids.items():
+        try:
+            tg_edit_message_text(
+                admin_chat_id,
+                admin_message_id,
+                text,
+                inline_buttons=[[{
+                    "text": "Показать ответы",
+                    "callback_data": f"poll_answers:{poll_id}"
+                }]]
+            )
+        except Exception:
+            logging.exception(
+                f"update_poll_admin_message failed for admin_chat_id={admin_chat_id}, "
+                f"message_id={admin_message_id}"
+            )
 
-def create_message_broadcast(text, scope):
+def create_message_broadcast(content, scope, content_type="text"):
     global next_message_id
 
     with messages_lock:
@@ -1344,7 +1411,8 @@ def create_message_broadcast(text, scope):
         next_message_id += 1
 
         messages_data[msg_id] = {
-            "text": text,
+            "content": content,
+            "content_type": content_type,
             "scope": scope,
             "created_at": time.time(),
         }
@@ -1389,7 +1457,10 @@ def send_broadcast_message(msg_id):
 
     for uid in users.keys():
         try:
-            tg_send_inline_message(uid, msg["text"], inline)
+            if msg.get("content_type") == "sticker":
+                tg_send_sticker_inline(uid, msg["content"], inline)
+            else:
+                tg_send_inline_message(uid, msg["content"], inline)
         except Exception:
             logging.exception(f"broadcast send failed {uid}")
 
@@ -3351,6 +3422,59 @@ def handle_sticker_message(msg):
             return
 
         state = get_state(user_id)
+        if state.get("mode") == MSG_MODE_TEXT:
+            if not is_admin(user_id):
+                tg_send_message(chat_id, "Нет доступа.")
+                return
+
+            sticker = msg.get("sticker", {}) or {}
+            file_id = str(sticker.get("file_id", "")).strip()
+
+            if not file_id:
+                tg_send_message(chat_id, "Не удалось получить file_id стикера.")
+                return
+
+            scope = state.get("msg_scope")
+
+            msg_id = create_message_broadcast(
+                content=file_id,
+                scope=scope,
+                content_type="sticker"
+            )
+
+            send_broadcast_message(msg_id)
+
+            clear_state(user_id)
+            send_admin_menu(chat_id, "Меню Admin:", user_id=user_id)
+            return
+
+        if state.get("mode") == MSG_MODE_REPLY:
+            sticker = msg.get("sticker", {}) or {}
+            file_id = str(sticker.get("file_id", "")).strip()
+
+            if not file_id:
+                tg_send_message(chat_id, "Не удалось получить file_id стикера.")
+                return
+
+            msg_id = state.get("msg_reply_id")
+            msg_meta = messages_data.get(msg_id)
+
+            if not msg_meta:
+                tg_send_message(chat_id, "Сообщение не найдено")
+                return
+
+            users = get_message_targets(msg_meta["scope"])
+
+            for uid in users.keys():
+                try:
+                    tg_send_sticker(uid, file_id)
+                except Exception:
+                    logging.exception(f"reply sticker broadcast failed {uid}")
+
+            clear_state(user_id)
+            tg_send_message(chat_id, "Стикер отправлен")
+            return
+        
         if state.get("mode") != "awaiting_sticker_add":
             return
 
@@ -14009,8 +14133,8 @@ def handle_message(msg):
             state["msg_scope"] = text
             state["mode"] = MSG_MODE_TEXT
             set_state(user_id, state)
-        
-            send_text_input_prompt(chat_id, "Напиши сообщение:")
+
+            tg_send_message(chat_id, "Отправь сообщение или стикер")
             return
 
         if state.get("mode") == POLL_MODE_TEXT:
@@ -14027,25 +14151,7 @@ def handle_message(msg):
                 admin_chat_id=chat_id
             )
 
-            admin_text = build_poll_admin_text(question, {})
-
-            sent = tg_send_inline_message(
-                chat_id,
-                admin_text,
-                [[{
-                    "text": "Показать ответы",
-                    "callback_data": f"poll_answers:{poll_id}"
-                }]]
-            )
-
-            try:
-                if isinstance(sent, dict):
-                    admin_message_id = sent.get("result", {}).get("message_id")
-                    if admin_message_id:
-                        set_poll_admin_message_id(poll_id, admin_message_id)
-            except Exception:
-                logging.exception("poll admin message id save failed")
-
+            send_poll_to_admin_viewers(poll_id)
             send_poll_to_users(poll_id)
 
             clear_state(user_id)
@@ -14054,17 +14160,21 @@ def handle_message(msg):
 
         if state.get("mode") == MSG_MODE_TEXT:
             message_text = str(text).strip()
-        
+
             if not message_text:
-                send_text_input_prompt(chat_id, "Напиши сообщение:")
+                tg_send_message(chat_id, "Отправь сообщение или стикер")
                 return
-        
+
             scope = state.get("msg_scope")
-        
-            msg_id = create_message_broadcast(message_text, scope)
-        
+
+            msg_id = create_message_broadcast(
+                content=message_text,
+                scope=scope,
+                content_type="text"
+            )
+
             send_broadcast_message(msg_id)
-        
+
             clear_state(user_id)
             send_admin_menu(chat_id, "Меню Admin:", user_id=user_id)
             return
@@ -17108,8 +17218,9 @@ def handle_callback_query(callback_query):
                 tg_answer_callback_query(callback_id, "Опрос не найден")
                 return jsonify({"ok": True})
 
-            if int(user_id) != int(poll["admin_chat_id"]):
-                tg_answer_callback_query(callback_id, "Это не ваш опрос")
+            allowed_admins = get_poll_admin_viewers()
+            if int(user_id) not in allowed_admins:
+                tg_answer_callback_query(callback_id, "Нет доступа")
                 return jsonify({"ok": True})
 
             tg_answer_callback_query(callback_id)
@@ -17163,7 +17274,6 @@ def handle_callback_query(callback_query):
 
             state = get_state(user_id)
 
-            # если уже отвечал на это сообщение — второй раз не даем
             if state.get("mode") == MSG_MODE_REPLY and str(state.get("msg_reply_id", "")) == str(msg_id):
                 tg_answer_callback_query(callback_id, "Ты уже отвечаешь на это сообщение")
                 return jsonify({"ok": True})
@@ -17179,13 +17289,13 @@ def handle_callback_query(callback_query):
                 tg_edit_message_text(
                     chat_id,
                     message_id,
-                    "Ответ уже открыт. Отправь сообщение одним текстом.",
+                    "Ответ уже открыт. Отправь сообщение или стикер.",
                     inline_buttons=[]
                 )
             except Exception:
                 logging.exception("msg_reply edit failed")
 
-            tg_send_message(chat_id, "Отправь сообщение")
+            tg_send_message(chat_id, "Отправь сообщение или стикер")
             return jsonify({"ok": True})
 
         if data.startswith("backstats_farmers:"):
