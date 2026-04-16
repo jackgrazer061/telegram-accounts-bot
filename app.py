@@ -532,6 +532,36 @@ def get_sheet_rows_cached(sheet_name, force=False):
 
     return refresh_sheet_cache(sheet_name)
 
+def get_sheet_row_live(sheet_name, row_index, min_len=0):
+    def _do():
+        with google_lock:
+            sheet = get_sheet(sheet_name)
+            end_col = max(min_len, 1)
+
+            def col_to_letter(col_num):
+                result = ""
+                while col_num > 0:
+                    col_num, rem = divmod(col_num - 1, 26)
+                    result = chr(65 + rem) + result
+                return result
+
+            end_col_letter = col_to_letter(end_col)
+            values = sheet.get(f"A{row_index}:{end_col_letter}{row_index}")
+
+            if values and isinstance(values, list):
+                row = values[0]
+            else:
+                row = []
+
+            return row
+
+    row = google_read_with_retry(_do)
+
+    if min_len > 0:
+        row = ensure_row_len(row, min_len)
+
+    return row
+
 
 def mark_sheet_cache_stale(sheet_name):
     with table_cache_lock:
@@ -6036,6 +6066,10 @@ def send_farm_kings_bulk_followup_messages(chat_id, results):
 
 def finish_farm_kings_bulk(chat_id, user_id):
     state = get_state(user_id)
+
+    pending_issue_rows = state.get("farm_kings_bulk_issue_rows", [])
+    if pending_issue_rows:
+        append_issue_rows_fixed(pending_issue_rows)
 
     results = state.get("farm_kings_bulk_results", [])
 
