@@ -5826,21 +5826,40 @@ def start_farm_bulk_worker_if_needed(chat_id, user_id):
     thread.start()
 
 def run_farm_bulk_worker(chat_id, user_id):
+    progress_message_id = None
+
     try:
-        ensure_farm_bulk_progress_message(chat_id, user_id)
+        state = get_state(user_id)
+        queue = state.get("farm_kings_bulk_queue", [])
+        total_count = len(queue)
+
+        if total_count > 0:
+            sent = tg_send_message_with_result(
+                chat_id,
+                f"⏳ Завожу кинги: 1 из {total_count}"
+            )
+
+            try:
+                if isinstance(sent, dict):
+                    progress_message_id = sent.get("result", {}).get("message_id")
+            except Exception:
+                logging.exception("run_farm_bulk_worker failed to read progress message_id")
 
         while True:
             state = get_state(user_id)
 
             queue = state.get("farm_kings_bulk_queue", [])
             current_index = int(state.get("farm_kings_bulk_current_index", 0))
+            total_count = len(queue)
 
-            if current_index >= len(queue):
-                delete_farm_bulk_progress_message(chat_id, user_id)
+            if current_index >= total_count:
+                if progress_message_id:
+                    try:
+                        tg_delete_message(chat_id, progress_message_id)
+                    except Exception:
+                        logging.exception("run_farm_bulk_worker failed to delete progress message")
                 finish_farm_kings_bulk(chat_id, user_id)
                 break
-
-            ensure_farm_bulk_progress_message(chat_id, user_id)
 
             process_farm_kings_bulk_proxy_step_background(
                 chat_id=chat_id,
@@ -5848,14 +5867,32 @@ def run_farm_bulk_worker(chat_id, user_id):
                 username=state.get("farm_kings_bulk_username", ""),
             )
 
-            update_farm_bulk_progress_message(chat_id, user_id)
+            try:
+                new_state = get_state(user_id)
+                done_count = int(new_state.get("farm_kings_bulk_current_index", 0))
+                total_count = len(new_state.get("farm_kings_bulk_queue", []))
+
+                if progress_message_id and total_count > 0:
+                    tg_edit_message_text(
+                        chat_id,
+                        progress_message_id,
+                        f"⏳ Завожу кинги: {min(done_count + 1, total_count) if done_count < total_count else total_count} из {total_count}",
+                        inline_buttons=[]
+                    )
+            except Exception:
+                logging.exception("run_farm_bulk_worker failed to update progress message")
 
             time.sleep(0.3)
 
     except Exception:
         logging.exception("run_farm_bulk_worker crashed")
         try:
-            delete_farm_bulk_progress_message(chat_id, user_id)
+            if progress_message_id:
+                tg_delete_message(chat_id, progress_message_id)
+        except Exception:
+            pass
+
+        try:
             tg_send_message(chat_id, "Ошибка фоновой массовой выдачи farm king.")
         except Exception:
             pass
