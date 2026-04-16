@@ -939,6 +939,41 @@ def tg_send_message(chat_id, text, keyboard=None):
     except Exception as e:
         logging.error(f"tg_send_message error: {e}")
 
+def tg_send_message_with_result(chat_id, text, keyboard=None):
+    try:
+        payload = {
+            "chat_id": chat_id,
+            "text": text
+        }
+
+        if keyboard:
+            payload["reply_markup"] = {
+                "keyboard": keyboard,
+                "resize_keyboard": True,
+                "one_time_keyboard": False
+            }
+
+        resp = requests.post(
+            f"{BASE_URL}/sendMessage",
+            json=payload,
+            timeout=20
+        )
+
+        if resp.status_code != 200:
+            logging.warning(f"Telegram sendMessageWithResult failed: {resp.text}")
+            return None
+
+        data = resp.json()
+        if not data.get("ok"):
+            logging.warning(f"Telegram sendMessageWithResult api error: {data}")
+            return None
+
+        return data
+
+    except Exception as e:
+        logging.error(f"tg_send_message_with_result error: {e}")
+        return None
+
 def tg_send_sticker(chat_id, sticker_file_id):
     try:
         payload = {
@@ -1273,6 +1308,105 @@ def tg_edit_message_reply_markup(chat_id, message_id, inline_buttons=None):
     except Exception as e:
         logging.error(f"tg_edit_message_reply_markup error: {e}")
         return False
+
+def tg_delete_message(chat_id, message_id):
+    try:
+        payload = {
+            "chat_id": chat_id,
+            "message_id": message_id
+        }
+
+        resp = requests.post(
+            f"{BASE_URL}/deleteMessage",
+            json=payload,
+            timeout=20
+        )
+
+        if resp.status_code != 200:
+            logging.warning(f"Telegram deleteMessage failed: {resp.text}")
+            return False
+
+        data = resp.json()
+        if not data.get("ok"):
+            logging.warning(f"Telegram deleteMessage api error: {data}")
+            return False
+
+        return True
+
+    except Exception as e:
+        logging.error(f"tg_delete_message error: {e}")
+        return False
+
+def ensure_farm_bulk_progress_message(chat_id, user_id):
+    state = get_state(user_id)
+
+    progress_message_id = state.get("farm_kings_bulk_progress_message_id")
+    queue = state.get("farm_kings_bulk_queue", [])
+    current_index = int(state.get("farm_kings_bulk_current_index", 0))
+
+    total_count = len(queue)
+    done_count = min(current_index + 1, total_count) if total_count > 0 else 0
+
+    progress_text = f"⏳Завожу кинги: {done_count} из {total_count}"
+
+    if progress_message_id:
+        ok = tg_edit_message_text(
+            chat_id,
+            progress_message_id,
+            progress_text,
+            inline_buttons=[]
+        )
+        if ok:
+            return progress_message_id
+
+    sent = tg_send_message_with_result(chat_id, progress_text)
+    try:
+        if isinstance(sent, dict):
+            message_id = sent.get("result", {}).get("message_id")
+            if message_id:
+                state["farm_kings_bulk_progress_message_id"] = message_id
+                set_state_with_custom_ttl(user_id, state, FARM_KING_BULK_PROXY_TTL)
+                return message_id
+    except Exception:
+        logging.exception("ensure_farm_bulk_progress_message failed to save message_id")
+
+    return None
+
+
+def update_farm_bulk_progress_message(chat_id, user_id):
+    state = get_state(user_id)
+
+    progress_message_id = state.get("farm_kings_bulk_progress_message_id")
+    if not progress_message_id:
+        return ensure_farm_bulk_progress_message(chat_id, user_id)
+
+    queue = state.get("farm_kings_bulk_queue", [])
+    current_index = int(state.get("farm_kings_bulk_current_index", 0))
+
+    total_count = len(queue)
+    done_count = min(current_index, total_count)
+
+    progress_text = f"⏳Завожу кинги: {done_count} из {total_count}"
+
+    tg_edit_message_text(
+        chat_id,
+        progress_message_id,
+        progress_text,
+        inline_buttons=[]
+    )
+
+    return progress_message_id
+
+
+def delete_farm_bulk_progress_message(chat_id, user_id):
+    state = get_state(user_id)
+    progress_message_id = state.get("farm_kings_bulk_progress_message_id")
+
+    if progress_message_id:
+        tg_delete_message(chat_id, progress_message_id)
+
+    state.pop("farm_kings_bulk_progress_message_id", None)
+    set_state_with_custom_ttl(user_id, state, FARM_KING_BULK_PROXY_TTL)
 
 def tg_answer_callback_query(callback_query_id, text=""):
     try:
@@ -5693,6 +5827,8 @@ def start_farm_bulk_worker_if_needed(chat_id, user_id):
 
 def run_farm_bulk_worker(chat_id, user_id):
     try:
+        ensure_farm_bulk_progress_message(chat_id, user_id)
+
         while True:
             state = get_state(user_id)
 
@@ -5700,8 +5836,11 @@ def run_farm_bulk_worker(chat_id, user_id):
             current_index = int(state.get("farm_kings_bulk_current_index", 0))
 
             if current_index >= len(queue):
+                delete_farm_bulk_progress_message(chat_id, user_id)
                 finish_farm_kings_bulk(chat_id, user_id)
                 break
+
+            ensure_farm_bulk_progress_message(chat_id, user_id)
 
             process_farm_kings_bulk_proxy_step_background(
                 chat_id=chat_id,
@@ -5709,11 +5848,14 @@ def run_farm_bulk_worker(chat_id, user_id):
                 username=state.get("farm_kings_bulk_username", ""),
             )
 
+            update_farm_bulk_progress_message(chat_id, user_id)
+
             time.sleep(0.3)
 
     except Exception:
         logging.exception("run_farm_bulk_worker crashed")
         try:
+            delete_farm_bulk_progress_message(chat_id, user_id)
             tg_send_message(chat_id, "Ошибка фоновой массовой выдачи farm king.")
         except Exception:
             pass
@@ -6066,6 +6208,10 @@ def send_farm_kings_bulk_followup_messages(chat_id, results):
 
 def finish_farm_kings_bulk(chat_id, user_id):
     state = get_state(user_id)
+
+    progress_message_id = state.get("farm_kings_bulk_progress_message_id")
+    if progress_message_id:
+        tg_delete_message(chat_id, progress_message_id)
 
     pending_issue_rows = state.get("farm_kings_bulk_issue_rows", [])
     if pending_issue_rows:
