@@ -7774,6 +7774,14 @@ def octo_get_profile_by_uuid(profile_uuid):
 
     return resp.json()
 
+def is_octo_rate_limit_error(exc_or_text):
+    text = str(exc_or_text or "").lower()
+    return (
+        "429" in text
+        or "too many requests" in text
+        or "rate limit" in text
+    )
+
 def octo_update_profile_description(profile_uuid, description_text):
     if not profile_uuid:
         raise RuntimeError("Не передан profile_uuid для Octo")
@@ -13047,13 +13055,18 @@ def build_farm_king_octo_payload(profile_name, parsed, proxy_data=None):
 
 
 def ensure_octo_profile_for_farm_king(profile_name, parsed, proxy_data=None):
-    existing = octo_find_profile_by_title(profile_name)
-    if existing:
-        try:
-            octo_update_profile_tags_by_title(profile_name, [OCTO_TAG_FARMERS])
-        except Exception:
-            logging.exception("ensure_octo_profile_for_farm_king tag update failed for existing profile")
-        return True, existing
+    try:
+        existing = octo_find_profile_by_title(profile_name)
+        if existing:
+            profile_uuid = str(existing.get("uuid") or existing.get("id") or "").strip()
+            if profile_uuid:
+                try:
+                    octo_update_profile_tags_by_uuid(profile_uuid, [OCTO_TAG_FARMERS])
+                except Exception:
+                    logging.exception("ensure_octo_profile_for_farm_king tag update by uuid failed for existing profile")
+            return True, existing
+    except Exception:
+        logging.exception("ensure_octo_profile_for_farm_king pre-check failed")
 
     payload = build_farm_king_octo_payload(
         profile_name=profile_name,
@@ -13064,14 +13077,16 @@ def ensure_octo_profile_for_farm_king(profile_name, parsed, proxy_data=None):
     result = octo_create_profile(payload)
 
     try:
-        octo_update_profile_tags_by_title(profile_name, [OCTO_TAG_FARMERS])
+        profile_uuid = extract_octo_profile_uuid_from_result(result)
+        if profile_uuid:
+            octo_update_profile_tags_by_uuid(profile_uuid, [OCTO_TAG_FARMERS])
     except Exception:
-        logging.exception("ensure_octo_profile_for_farm_king tag update failed after create")
+        logging.exception("ensure_octo_profile_for_farm_king tag update by uuid failed after create")
 
     return True, result
 
 
-def ensure_octo_profile_with_retry(ensure_func, profile_name, parsed, proxy_data=None, retries=3, delay=2):
+def ensure_octo_profile_with_retry(ensure_func, profile_name, parsed, proxy_data=None, retries=6, delay=2):
     last_error = ""
 
     for attempt in range(1, retries + 1):
@@ -13091,7 +13106,12 @@ def ensure_octo_profile_with_retry(ensure_func, profile_name, parsed, proxy_data
             last_error = str(e)
 
         if attempt < retries:
-            time.sleep(delay)
+            sleep_time = delay
+
+            if is_octo_rate_limit_error(last_error):
+                sleep_time = min(delay * (2 ** (attempt - 1)), 25)
+
+            time.sleep(sleep_time)
 
     return False, last_error or "Не удалось создать Octo профиль"
 
@@ -13145,6 +13165,50 @@ def extract_octo_profile_uuid_from_result(result):
         return str(data.get("uuid") or data.get("id") or "").strip()
 
     return str(result.get("uuid") or result.get("id") or "").strip()
+
+def octo_update_profile_tags_by_uuid(profile_uuid, tags_to_add):
+    profile_uuid = str(profile_uuid or "").strip()
+    if not profile_uuid:
+        return False, "Пустой profile_uuid"
+
+    if not isinstance(tags_to_add, list):
+        tags_to_add = [str(tags_to_add).strip()] if str(tags_to_add).strip() else []
+
+    tags_to_add = [str(x).strip() for x in tags_to_add if str(x).strip()]
+    if not tags_to_add:
+        return False, "Пустой список тегов"
+
+    headers = {
+        "X-Octo-Api-Token": OCTO_API_TOKEN,
+        "Content-Type": "application/json",
+    }
+
+    base_tags = ["Sido", "corby"]
+    final_tags = []
+    seen = set()
+
+    for tag in base_tags + tags_to_add:
+        t = str(tag or "").strip()
+        if t and t not in seen:
+            seen.add(t)
+            final_tags.append(t)
+
+    url = f"{OCTO_API_BASE}/profiles/{profile_uuid}"
+
+    payload = {
+        "tags": final_tags
+    }
+
+    resp = requests.patch(url, json=payload, headers=headers, timeout=60)
+
+    if resp.status_code >= 400:
+        try:
+            err = resp.json()
+        except Exception:
+            err = resp.text
+        return False, f"Octo tag update error {resp.status_code}: {err}"
+
+    return True, "tags updated"
 
 
 def try_import_crypto_king_cookies(profile_uuid, cookies_payload):
