@@ -5710,7 +5710,7 @@ def process_farm_kings_bulk_proxy_step_background(chat_id, user_id, username):
     price_value = str(current_item.get("price", "")).strip()
     geo_value = str(current_item.get("geo", "")).strip()
     supplier_value = str(current_item.get("supplier", "")).strip()
-
+    
     proxy_text = str(current_item.get("proxy_text", "")).strip()
     skip_all = bool(state.get("farm_kings_bulk_skip_all_proxies"))
 
