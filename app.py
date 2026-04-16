@@ -16867,27 +16867,43 @@ def handle_message(msg):
             return
 
         if state.get("mode") == FARM_KING_OCTO_MODE_BULK_PROXY:
-            proxy_text = str(text).strip()
-            proxy_data = parse_proxy_input(proxy_text)
-
-            if not proxy_data:
-                tg_send_message(
-                    chat_id,
-                    "Неверный формат proxy.\n\nИспользуй:\nsocks5://login:password@host:port\nили\nsocks5://host:port"
-                )
-                return
-
-            queue = state.get("farm_kings_bulk_queue", [])
+            state = get_state(user_id)
+        
+            queue = list(state.get("farm_kings_bulk_queue", []))
             current_index = int(state.get("farm_kings_bulk_current_index", 0))
-
+        
             if current_index >= len(queue):
-                finish_farm_kings_bulk(chat_id, user_id)
+                tg_send_message(chat_id, "Очередь пуста")
                 return
-
+        
+            proxy_text = text.strip()
+        
+            # сохраняем прокси в текущий элемент
             queue[current_index]["proxy_text"] = proxy_text
             state["farm_kings_bulk_queue"] = queue
+        
+            # двигаемся к следующему king
+            current_index += 1
+            state["farm_kings_bulk_current_index"] = current_index
+        
             set_state_with_custom_ttl(user_id, state, FARM_KING_BULK_PROXY_TTL)
-
+        
+            # если есть ещё king — просим следующий прокси
+            if current_index < len(queue):
+                next_item = queue[current_index]
+        
+                tg_send_message(
+                    chat_id,
+                    f"Скинь socks5 прокси для farm king {next_item.get('king_name')}\n\n"
+                    f"Шаг {current_index + 1} из {len(queue)}\n\n"
+                    f"Формат:\n"
+                    f"socks5://login:password@host:port\n"
+                    f"или\n"
+                    f"socks5://host:port"
+                )
+                return
+        
+            # если все прокси собраны — запускаем worker
             start_farm_bulk_worker_if_needed(chat_id, user_id)
             return
 
