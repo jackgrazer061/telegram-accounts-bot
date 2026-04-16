@@ -1160,6 +1160,19 @@ def tg_send_inline_message(chat_id, text, inline_buttons):
         logging.error(f"tg_send_inline_message error: {e}")
         return None
 
+def tg_send_inline_message_parts(chat_id, message_parts, inline_buttons=None):
+    parts = [str(x).strip() for x in (message_parts or []) if str(x).strip()]
+    if not parts:
+        return
+
+    for i, part in enumerate(parts):
+        buttons = inline_buttons if (i == len(parts) - 1 and inline_buttons) else None
+
+        if buttons:
+            tg_send_inline_message(chat_id, part, buttons)
+        else:
+            tg_send_message(chat_id, part)
+
 def tg_edit_message_text(chat_id, message_id, text, inline_buttons=None):
     try:
         payload = {
@@ -5698,7 +5711,7 @@ def process_farm_kings_bulk_proxy_step_background(chat_id, user_id, username):
     geo_value = str(current_item.get("geo", "")).strip()
     supplier_value = str(current_item.get("supplier", "")).strip()
 
-    proxy_text = state.get("farm_kings_bulk_current_proxy_text", "")
+    proxy_text = str(current_item.get("proxy_text", "")).strip()
     skip_all = bool(state.get("farm_kings_bulk_skip_all_proxies"))
 
     proxy_data = None
