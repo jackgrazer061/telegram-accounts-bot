@@ -102,6 +102,13 @@ FARMERS_USERS = {
     8797795819: "markzuckerberg_farm",
 }
 
+MISC_HIDDEN_USERS = {
+    7851493919,  # CateBlanchettAccountManager
+    8797795819,  # markzuckerberg_farm
+    8435159019,  # Robert_Pattinson_Account_Manager
+    7426931469,  # JimCarrey_AccountManager
+}
+
 def is_admin(user_id):
     return user_id in ADMINS or user_id in ADMIN_FARM_USERS
 
@@ -116,6 +123,9 @@ def is_farmers_user(user_id):
 
 def has_access(user_id):
     return is_admin(user_id) or is_accounts_user(user_id) or is_farmers_user(user_id)
+
+def can_see_misc(user_id):
+    return user_id not in MISC_HIDDEN_USERS
 
 def touch_request_heartbeat():
     global last_request_time
@@ -174,7 +184,6 @@ STICKER_BROADCAST_USERS = [
     7681133609,
     7953116439,
     8334712952,
-    7851493919,
     8035275476,
     8482380951,
     8389730381,
@@ -241,6 +250,9 @@ MENU_MANAGER_STATS = 'Статистика менеджера'
 MENU_FARMER_STATS = 'Статистика фармера'
 MENU_ADMIN = 'Admin'
 MENU_CANCEL = 'Отмена'
+
+MENU_MISC = 'Прочее'
+BTN_BACK_FROM_MISC = 'Назад из Прочее'
 
 SUBMENU_GET_PIXELS = '➡️Получить Пиксели'
 SUBMENU_SEARCH_PIXEL = '🔎Найти Пиксель'
@@ -1502,25 +1514,36 @@ def send_broadcast_message(msg_id):
             logging.exception(f"broadcast send failed {uid}")
 
 def send_main_menu(chat_id, text="Главное меню:", user_id=None):
+    keyboard = []
+
     if user_id is not None and is_admin(user_id):
-        keyboard = [
-            [{"text": MENU_ACCOUNTS}, {"text": MENU_FARMERS}],
-            [{"text": MENU_STATS}],
-            [{"text": MENU_ADMIN}],
-            [{"text": MENU_CANCEL}]
-        ]
+        keyboard.append([{"text": MENU_ACCOUNTS}, {"text": MENU_FARMERS}])
+        keyboard.append([{"text": MENU_STATS}])
+
+        if can_see_misc(user_id):
+            keyboard.append([{"text": MENU_MISC}])
+
+        keyboard.append([{"text": MENU_ADMIN}])
+        keyboard.append([{"text": MENU_CANCEL}])
+
     elif user_id is not None and is_accounts_user(user_id):
-        keyboard = [
-            [{"text": MENU_ACCOUNTS}],
-            [{"text": MENU_STATS}],
-            [{"text": MENU_CANCEL}]
-        ]
+        keyboard.append([{"text": MENU_ACCOUNTS}])
+        keyboard.append([{"text": MENU_STATS}])
+
+        if can_see_misc(user_id):
+            keyboard.append([{"text": MENU_MISC}])
+
+        keyboard.append([{"text": MENU_CANCEL}])
+
     elif user_id is not None and is_farmers_user(user_id):
-        keyboard = [
-            [{"text": MENU_FARMERS}],
-            [{"text": MENU_STATS}],
-            [{"text": MENU_CANCEL}]
-        ]
+        keyboard.append([{"text": MENU_FARMERS}])
+        keyboard.append([{"text": MENU_STATS}])
+
+        if can_see_misc(user_id):
+            keyboard.append([{"text": MENU_MISC}])
+
+        keyboard.append([{"text": MENU_CANCEL}])
+
     else:
         keyboard = [
             [{"text": MENU_CANCEL}]
@@ -1654,12 +1677,19 @@ def send_admin_menu(chat_id, text="Меню Admin:", user_id=None):
             [{"text": ADMIN_BACKUP}, {"text": ADMIN_UPDATE_5M}],
             [{"text": ADMIN_ACCOUNTANTS}, {"text": ADMIN_FARMERS}],
             [{"text": ADMIN_ALL_STATS}, {"text": ADMIN_BOT_CHECK}],
-            [{"text": ADMIN_ADD_STICKERS}, {"text": ADMIN_SEND_STICKER}],
+            [{"text": ADMIN_SEND_STICKER}],
             [{"text": ADMIN_POLL}],
             [{"text": ADMIN_MESSAGE}],
             [{"text": BTN_BACK_FROM_ADMIN}]
         ]
 
+    tg_send_message(chat_id, text, keyboard)
+
+def send_misc_menu(chat_id, text="Меню Прочее:"):
+    keyboard = [
+        [{"text": ADMIN_ADD_STICKERS}],
+        [{"text": BTN_BACK_FROM_MISC}]
+    ]
     tg_send_message(chat_id, text, keyboard)
 
 def send_admin_farmers_menu(chat_id, text="Admin / Фармеры:"):
@@ -5696,7 +5726,7 @@ def process_farm_kings_bulk_proxy_step_background(chat_id, user_id, username):
 
     parsed_farm_king = {}
     try:
-        parsed_farm_king = parse_farm_king_raw_data(data_text) or {}
+        parsed_farm_king = parse_crypto_king_raw_data(data_text) or {}
     except Exception:
         logging.exception("process_farm_kings_bulk_proxy_step_background parse failed")
 
@@ -13604,6 +13634,20 @@ def handle_message(msg):
         if text == MENU_STATS:
             stats_text = build_stats_text()
             tg_send_message(chat_id, stats_text)
+            send_main_menu(chat_id, "Главное меню:", user_id=user_id)
+            return
+
+        if text == MENU_MISC:
+            if not can_see_misc(user_id):
+                send_main_menu(chat_id, "Главное меню:", user_id=user_id)
+                return
+
+            clear_state(user_id)
+            send_misc_menu(chat_id, "Меню Прочее:")
+            return
+
+        if text == BTN_BACK_FROM_MISC:
+            clear_state(user_id)
             send_main_menu(chat_id, "Главное меню:", user_id=user_id)
             return
 
