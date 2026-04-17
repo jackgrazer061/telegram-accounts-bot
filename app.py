@@ -14200,10 +14200,6 @@ def handle_message(msg):
                 send_farm_king_geo_options(chat_id)
                 return
 
-            if mode == FARM_KING_OCTO_MODE_PRICE:
-                send_farm_king_price_options(chat_id, prev_state.get("farm_king_geo", ""))
-                return
-
             if mode == FARM_KING_OCTO_MODE_NAME:
                 send_text_input_prompt(chat_id, "Какое название будет у farm king?")
                 return
