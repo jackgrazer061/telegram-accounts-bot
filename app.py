@@ -2855,12 +2855,12 @@ def send_crypto_bulk_followup_messages(chat_id, results):
 
         cookies_json = str(parsed.get("cookies_json", "")).strip()
         cookies_links = parsed.get("cookies_links", []) or []
-        cookies_msg = str(item.get("cookies_msg", "")).strip()
-
         has_cookie_data = bool(cookies_json or cookies_links)
 
+        cookies_ok = bool(item.get("cookies_ok", False))
+
         if has_cookie_data:
-            if item.get("octo_ok") and has_cookie_data and "не найдены" not in cookies_msg.lower() and "пустой" not in cookies_msg.lower() and "error" not in cookies_msg.lower():
+            if cookies_ok:
                 tg_send_message(
                     chat_id,
                     f"Куки вставлены✅\n\n"
@@ -11660,6 +11660,7 @@ def process_crypto_bulk_proxy_step(chat_id, user_id, username, proxy_text):
         start_crypto_kings_bulk_proxy_step(chat_id, user_id)
         return
 
+    cookies_ok = False
     cookies_msg = ""
     try:
         profile_uuid = extract_octo_profile_uuid_from_result(octo_result)
@@ -11668,7 +11669,7 @@ def process_crypto_bulk_proxy_step(chat_id, user_id, username, proxy_text):
         )
 
         if cookies_payload and profile_uuid:
-            _, cookies_msg = try_import_crypto_king_cookies(
+            cookies_ok, cookies_msg = try_import_crypto_king_cookies(
                 profile_uuid=profile_uuid,
                 cookies_payload=cookies_payload
             )
@@ -11724,6 +11725,7 @@ def process_crypto_bulk_proxy_step(chat_id, user_id, username, proxy_text):
         "parsed_crypto": parsed_crypto,
         "octo_ok": True,
         "octo_result": octo_result,
+        "cookies_ok": cookies_ok,
         "cookies_msg": cookies_msg
     })
 
