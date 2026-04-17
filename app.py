@@ -36,7 +36,7 @@ OCTO_TAG_ACCOUNT_MANAGERS = "AccountManagers"
 OCTO_TAG_FARMERS = "Farmers"
 
 OCTO_CRYPTO_EXTENSIONS = [
-    "bgjajdaampfpfbogklkbnelhmgngdohd@1.6",       # Access Token Extractor by FBTOOL.PRO
+    "bgjajdaampfpfbogklkbnelhmgngdohd",       # Access Token Extractor by FBTOOL.PRO
     "lanhjpladilgmdkepgeggnllpiofkefi@0.6",       # Ads Trust
     "hlkenndednhfkekhgcdicdfddnkalmdm@1.13.0",    # Cookie-Editor
     "igafpbafmdnfippffaclpmblflhjkbje@1.23.1",    # FBHelper
@@ -46,7 +46,7 @@ OCTO_CRYPTO_EXTENSIONS = [
 ]
 
 OCTO_FARM_EXTENSIONS = [
-    "bgjajdaampfpfbogklkbnelhmgngdohd@1.6",       # Access Token Extractor by FBTOOL.PRO
+    "bgjajdaampfpfbogklkbnelhmgngdohd",       # Access Token Extractor by FBTOOL.PRO
     "lanhjpladilgmdkepgeggnllpiofkefi@0.6",       # Ads Trust
     "hlkenndednhfkekhgcdicdfddnkalmdm@1.13.0",    # Cookie-Editor
     "igafpbafmdnfippffaclpmblflhjkbje@1.23.1",    # FBHelper
