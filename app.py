@@ -2855,11 +2855,11 @@ def send_crypto_bulk_followup_messages(chat_id, results):
 
         cookies_json = str(parsed.get("cookies_json", "")).strip()
         cookies_links = parsed.get("cookies_links", []) or []
-        has_cookie_data = bool(cookies_json or cookies_links)
-
         cookies_ok = bool(item.get("cookies_ok", False))
 
-        if has_cookie_data:
+        # сообщение про вставку показываем ТОЛЬКО если был именно cookies_json,
+        # потому что только его бот реально пытается импортировать
+        if cookies_json:
             if cookies_ok:
                 tg_send_message(
                     chat_id,
@@ -2873,6 +2873,9 @@ def send_crypto_bulk_followup_messages(chat_id, results):
                     f"Куки не вставлены❌\n\n"
                     f"Кинг: {king_name}"
                 )
+
+        # если куки даны только ссылкой — не пишем 'не вставлены'
+        # потому что бот их и не пытался импортировать автоматически
 
         bm_links = parsed.get("bm_links", []) or []
         bm_email_pairs = parsed.get("bm_email_pairs", []) or []
@@ -17607,13 +17610,10 @@ def handle_message(msg):
                         "callback_data": f"download_crypto_txt:{user_id}"
                     }]]
                 )
+                
+                cookies_json = str(parsed_crypto.get("cookies_json", "")).strip()
 
-                has_cookie_data = bool(
-                    str(parsed_crypto.get("cookies_json", "")).strip()
-                    or (parsed_crypto.get("cookies_links") or [])
-                )
-
-                if has_cookie_data:
+                if cookies_json:
                     if cookies_ok:
                         tg_send_message(
                             chat_id,
