@@ -2846,6 +2846,9 @@ def build_crypto_bulk_result_messages(results, for_whom, max_len=3500):
 def send_crypto_bulk_followup_messages(chat_id, results):
     bm_lines = []
 
+    success_count = 0
+    error_lines = []
+
     for item in results:
         if not item.get("octo_ok"):
             continue
@@ -2857,18 +2860,13 @@ def send_crypto_bulk_followup_messages(chat_id, results):
         cookies_ok = bool(item.get("cookies_ok", False))
         cookies_msg = str(item.get("cookies_msg", "")).strip()
 
+        # считаем только те, где реально были куки
         if cookies_json:
             if cookies_ok:
-                tg_send_message(
-                    chat_id,
-                    f"Куки вставлены✅\n\n"
-                    f"После сохранения Куки открыв профиль на редактирование — куки не отображаются. И это нормально"
-                )
+                success_count += 1
             else:
-                tg_send_long_message(
-                    chat_id,
-                    f"Куки не вставлены❌\n\n"
-                    f"Ошибка Octo:\n{cookies_msg or 'пустая ошибка'}"
+                error_lines.append(
+                    f"❌ {king_name}\n{cookies_msg or 'неизвестная ошибка'}"
                 )
 
         bm_links = parsed.get("bm_links", []) or []
@@ -2876,6 +2874,21 @@ def send_crypto_bulk_followup_messages(chat_id, results):
 
         if bm_links or bm_email_pairs:
             bm_lines.append(f"у кинга {king_name} есть BM✅")
+
+    # одно сообщение об успехе
+    if success_count > 0:
+        tg_send_message(
+            chat_id,
+            "Куки вставлены✅\n\n"
+            "После сохранения Куки открыв профиль на редактирование — куки не отображаются. И это нормально"
+        )
+
+    # ошибки отдельным сообщением
+    if error_lines:
+        tg_send_long_message(
+            chat_id,
+            "❌ Не удалось вставить куки:\n\n" + "\n\n".join(error_lines)
+        )
 
     if bm_lines:
         tg_send_message(chat_id, "\n".join(bm_lines))
@@ -6234,37 +6247,51 @@ def build_farm_kings_bulk_result_messages(results, max_len=3500):
 def send_farm_kings_bulk_followup_messages(chat_id, results):
     bm_lines = []
 
+    success_count = 0
+    error_lines = []
+
     for item in results:
         if not item.get("octo_ok"):
             continue
 
+        king_name = item.get("king_name", "")
         parsed = item.get("parsed_farm_king", {}) or {}
 
         cookies_json = str(parsed.get("cookies_json", "")).strip()
         cookies_ok = bool(item.get("cookies_ok", False))
         cookies_msg = str(item.get("cookies_msg", "")).strip()
 
+        # считаем только те, где реально были куки
         if cookies_json:
             if cookies_ok:
-                tg_send_message(
-                    chat_id,
-                    "Куки вставлены✅\n\n"
-                    "После сохранения Куки открыв профиль на редактирование — куки не отображаются. И это нормально"
-                )
+                success_count += 1
             else:
-                tg_send_long_message(
-                    chat_id,
-                    f"Куки не вставлены❌\n\n"
-                    f"Ошибка Octo:\n{cookies_msg or 'пустая ошибка'}"
+                error_lines.append(
+                    f"❌ {king_name}\n{cookies_msg or 'неизвестная ошибка'}"
                 )
 
         bm_links = parsed.get("bm_links", []) or []
         bm_email_pairs = parsed.get("bm_email_pairs", []) or []
 
         if bm_links or bm_email_pairs:
-            king_name = item.get("king_name", "")
             bm_lines.append(f"у farm king {king_name} есть BM✅")
 
+    # --- одно сообщение об успехе ---
+    if success_count > 0:
+        tg_send_message(
+            chat_id,
+            "Куки вставлены✅\n\n"
+            "После сохранения Куки открыв профиль на редактирование — куки не отображаются. И это нормально"
+        )
+
+    # --- ошибки отдельным сообщением ---
+    if error_lines:
+        tg_send_long_message(
+            chat_id,
+            "❌ Не удалось вставить куки:\n\n" + "\n\n".join(error_lines)
+        )
+
+    # --- BM ---
     if bm_lines:
         tg_send_message(chat_id, "\n".join(bm_lines))
 
