@@ -107,6 +107,7 @@ MISC_HIDDEN_USERS = {
     8797795819,  # markzuckerberg_farm
     8435159019,  # Robert_Pattinson_Account_Manager
     7426931469,  # JimCarrey_AccountManager
+    8589105033,  # owenwilson_farmer
 }
 
 def is_admin(user_id):
@@ -187,7 +188,6 @@ STICKER_BROADCAST_USERS = [
     8035275476,
     8482380951,
     8389730381,
-    8589105033,
     8503147017,
     7172090459,
     7389698288,
