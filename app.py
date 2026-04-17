@@ -6093,6 +6093,7 @@ def process_farm_kings_bulk_proxy_step_background(chat_id, user_id, username):
         set_state_with_custom_ttl(user_id, state, FARM_KING_BULK_PROXY_TTL)
         return
 
+    cookies_ok = False
     cookies_msg = ""
     try:
         profile_uuid = extract_octo_profile_uuid_from_result(octo_result)
@@ -6101,7 +6102,7 @@ def process_farm_kings_bulk_proxy_step_background(chat_id, user_id, username):
         )
 
         if cookies_payload and profile_uuid:
-            _, cookies_msg = try_import_crypto_king_cookies(
+            cookies_ok, cookies_msg = try_import_crypto_king_cookies(
                 profile_uuid=profile_uuid,
                 cookies_payload=cookies_payload
             )
@@ -6157,6 +6158,7 @@ def process_farm_kings_bulk_proxy_step_background(chat_id, user_id, username):
         "parsed_farm_king": parsed_farm_king,
         "octo_ok": True,
         "octo_result": octo_result,
+        "cookies_ok": cookies_ok,
         "cookies_msg": cookies_msg
     })
 
@@ -6230,36 +6232,38 @@ def build_farm_kings_bulk_result_messages(results, max_len=3500):
 
 
 def send_farm_kings_bulk_followup_messages(chat_id, results):
-    tg_send_message(
-        chat_id,
-        "Вручную проверь и выставь:\n"
-        "• User-Agent\n"
-        "• расширения\n"
-        "• куки"
-    )
-
-    ua_lines = []
     bm_lines = []
 
     for item in results:
         if not item.get("octo_ok"):
             continue
 
-        king_name = item.get("king_name", "")
         parsed = item.get("parsed_farm_king", {}) or {}
 
-        user_agent = str(parsed.get("user_agent", "")).strip()
+        cookies_json = str(parsed.get("cookies_json", "")).strip()
+        cookies_ok = bool(item.get("cookies_ok", False))
+        cookies_msg = str(item.get("cookies_msg", "")).strip()
+
+        if cookies_json:
+            if cookies_ok:
+                tg_send_message(
+                    chat_id,
+                    "Куки вставлены✅\n\n"
+                    "После сохранения Куки открыв профиль на редактирование — куки не отображаются. И это нормально"
+                )
+            else:
+                tg_send_long_message(
+                    chat_id,
+                    f"Куки не вставлены❌\n\n"
+                    f"Ошибка Octo:\n{cookies_msg or 'пустая ошибка'}"
+                )
+
         bm_links = parsed.get("bm_links", []) or []
         bm_email_pairs = parsed.get("bm_email_pairs", []) or []
 
-        if user_agent:
-            ua_lines.append(f"у farm king {king_name} есть User-Agent✅")
-
         if bm_links or bm_email_pairs:
+            king_name = item.get("king_name", "")
             bm_lines.append(f"у farm king {king_name} есть BM✅")
-
-    if ua_lines:
-        tg_send_message(chat_id, "\n".join(ua_lines))
 
     if bm_lines:
         tg_send_message(chat_id, "\n".join(bm_lines))
@@ -13360,8 +13364,24 @@ def ensure_octo_profile_for_farm_king(profile_name, parsed, proxy_data=None):
                         profile_uuid,
                         OCTO_FARM_EXTENSIONS
                     )
+
+                    user_agent = str(parsed.get("user_agent", "")).strip()
+                    if user_agent and "Mozilla" in user_agent:
+                        requests.patch(
+                            f"{OCTO_API_BASE}/profiles/{profile_uuid}",
+                            headers={
+                                "X-Octo-Api-Token": OCTO_API_TOKEN,
+                                "Content-Type": "application/json"
+                            },
+                            json={
+                                "fingerprint": {
+                                    "user_agent": user_agent
+                                }
+                            },
+                            timeout=30
+                        )
             except Exception:
-                logging.exception("farm king extensions setup failed for existing profile")
+                logging.exception("farm king setup failed for existing profile")
 
             return True, existing
 
@@ -13385,8 +13405,24 @@ def ensure_octo_profile_for_farm_king(profile_name, parsed, proxy_data=None):
                     profile_uuid,
                     OCTO_FARM_EXTENSIONS
                 )
+
+                user_agent = str(parsed.get("user_agent", "")).strip()
+                if user_agent and "Mozilla" in user_agent:
+                    requests.patch(
+                        f"{OCTO_API_BASE}/profiles/{profile_uuid}",
+                        headers={
+                            "X-Octo-Api-Token": OCTO_API_TOKEN,
+                            "Content-Type": "application/json"
+                        },
+                        json={
+                            "fingerprint": {
+                                "user_agent": user_agent
+                            }
+                        },
+                        timeout=30
+                    )
         except Exception:
-            logging.exception("farm king extensions setup failed after create")
+            logging.exception("farm king setup failed after create")
 
         return True, result
 
@@ -16906,14 +16942,21 @@ def handle_message(msg):
                     }]]
                 )
 
-                tg_send_message(
-                    chat_id,
-                    f"Вручную проверь и выставь:\n"
-                    f"• User-Agent\n"
-                    f"• расширения\n\n"
-                    f"• куки\n\n"
-                    f"User-Agent:\n{parsed_farm_king.get('user_agent', '')}"
-                )
+                cookies_json = str(parsed_farm_king.get("cookies_json", "")).strip()
+
+                if cookies_json:
+                    if cookies_ok:
+                        tg_send_message(
+                            chat_id,
+                            "Куки вставлены✅\n\n"
+                            "После сохранения Куки открыв профиль на редактирование — куки не отображаются. И это нормально"
+                        )
+                    else:
+                        tg_send_long_message(
+                            chat_id,
+                            f"Куки не вставлены❌\n\n"
+                            f"Ошибка Octo:\n{cookies_msg or 'пустая ошибка'}"
+                        )
 
                 if parsed_farm_king.get("bm_links") or parsed_farm_king.get("bm_email_pairs"):
                     bm_parts = []
