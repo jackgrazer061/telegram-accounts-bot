@@ -7986,19 +7986,19 @@ def parse_crypto_king_raw_data(raw_text):
                     if not result["email"]:
                         result["email"] = email_value
 
-                    # следующий токен после email = FB Password
-                    if not result["fb_password"] and email_idx + 1 < len(raw_parts):
+                    # следующий токен после email = Email Password
+                    if not result["email_password"] and email_idx + 1 < len(raw_parts):
                         candidate = str(raw_parts[email_idx + 1]).strip()
                         if candidate and not _validate_email(candidate) and not _validate_2fa(candidate):
                             if not candidate.lower().startswith("http"):
-                                result["fb_password"] = candidate
+                                result["email_password"] = candidate
 
-                    # следующий после FB Password = Email's Password
-                    if not result["email_password"] and email_idx + 2 < len(raw_parts):
+                    # следующий после Email Password = FB Password
+                    if not result["fb_password"] and email_idx + 2 < len(raw_parts):
                         candidate = str(raw_parts[email_idx + 2]).strip()
                         if candidate and not _validate_email(candidate) and not _validate_2fa(candidate):
                             if not candidate.lower().startswith("http"):
-                                result["email_password"] = candidate
+                                result["fb_password"] = candidate
 
         # если в fb_login попала facebook profile ссылка — очищаем
     if result["fb_login"] and "facebook.com/profile.php?id=" in str(result["fb_login"]).lower():
