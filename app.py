@@ -2862,14 +2862,12 @@ def send_crypto_bulk_followup_messages(chat_id, results):
                 tg_send_message(
                     chat_id,
                     f"Куки вставлены✅\n\n"
-                    f"После сохранения Куки открыв профиль на редактирование — куки не отображаются. И это нормально\n\n"
-                    f"Кинг: {king_name}"
+                    f"После сохранения Куки открыв профиль на редактирование — куки не отображаются. И это нормально"
                 )
             else:
                 tg_send_long_message(
                     chat_id,
                     f"Куки не вставлены❌\n\n"
-                    f"Кинг: {king_name}\n\n"
                     f"Ошибка Octo:\n{cookies_msg or 'пустая ошибка'}"
                 )
 
@@ -13633,8 +13631,24 @@ def ensure_octo_profile_for_crypto_king(profile_name, parsed, proxy_data=None):
                         profile_uuid,
                         OCTO_CRYPTO_EXTENSIONS
                     )
+
+                    user_agent = str(parsed.get("user_agent", "")).strip()
+                    if user_agent and "Mozilla" in user_agent:
+                        requests.patch(
+                            f"{OCTO_API_BASE}/profiles/{profile_uuid}",
+                            headers={
+                                "X-Octo-Api-Token": OCTO_API_TOKEN,
+                                "Content-Type": "application/json"
+                            },
+                            json={
+                                "fingerprint": {
+                                    "user_agent": user_agent
+                                }
+                            },
+                            timeout=30
+                        )
             except Exception:
-                logging.exception("crypto king extensions setup failed for existing profile")
+                logging.exception("crypto king setup failed for existing profile")
 
             return True, existing
 
@@ -13653,8 +13667,24 @@ def ensure_octo_profile_for_crypto_king(profile_name, parsed, proxy_data=None):
                     profile_uuid,
                     OCTO_CRYPTO_EXTENSIONS
                 )
+
+                user_agent = str(parsed.get("user_agent", "")).strip()
+                if user_agent and "Mozilla" in user_agent:
+                    requests.patch(
+                        f"{OCTO_API_BASE}/profiles/{profile_uuid}",
+                        headers={
+                            "X-Octo-Api-Token": OCTO_API_TOKEN,
+                            "Content-Type": "application/json"
+                        },
+                        json={
+                            "fingerprint": {
+                                "user_agent": user_agent
+                            }
+                        },
+                        timeout=30
+                    )
         except Exception:
-            logging.exception("crypto king extensions setup failed after create")
+            logging.exception("crypto king setup failed after create")
 
         return True, result
 
