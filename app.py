@@ -35,6 +35,11 @@ OCTO_TAG_CORBY = "corby"
 OCTO_TAG_ACCOUNT_MANAGERS = "AccountManagers"
 OCTO_TAG_FARMERS = "Farmers"
 
+OCTO_CRYPTO_EXTENSIONS = [
+    "hlkenndednhfkekhgcdicdfddnkalmdm@1.13.0",  # Cookie Editor
+    "fdgfkebogiimcoedlicjlajpkdmockpc@4.0.5",  # Meta Pixel Helper
+]
+
 if not BOT_TOKEN:
     raise RuntimeError("BOT_TOKEN не задан")
 
@@ -13393,6 +13398,42 @@ def octo_update_profile_tags_by_uuid(profile_uuid, tags_to_add):
 
     return True, "tags updated"
 
+def octo_update_profile_extensions_by_uuid(profile_uuid, extensions):
+    profile_uuid = str(profile_uuid or "").strip()
+    if not profile_uuid:
+        return False, "Пустой profile_uuid"
+
+    extensions = [str(x).strip() for x in (extensions or []) if str(x).strip()]
+    if not extensions:
+        return False, "Пустой список extensions"
+
+    headers = {
+        "X-Octo-Api-Token": OCTO_API_TOKEN,
+        "Content-Type": "application/json",
+    }
+
+    url = f"{OCTO_API_BASE}/profiles/{profile_uuid}"
+
+    payload = {
+        "extensions": extensions
+    }
+
+    try:
+        resp = requests.patch(url, json=payload, headers=headers, timeout=60)
+
+        if resp.status_code >= 400:
+            try:
+                err = resp.json()
+            except Exception:
+                err = resp.text
+            return False, f"Octo extensions error {resp.status_code}: {err}"
+
+        return True, "extensions updated"
+
+    except Exception as e:
+        logging.exception("octo_update_profile_extensions_by_uuid failed")
+        return False, str(e)
+
 
 def try_import_crypto_king_cookies(profile_uuid, cookies_payload):
     profile_uuid = str(profile_uuid or "").strip()
@@ -13433,18 +13474,44 @@ def try_import_crypto_king_cookies(profile_uuid, cookies_payload):
     return True, "cookies imported"
 
 def ensure_octo_profile_for_crypto_king(profile_name, parsed, proxy_data=None):
-    existing = octo_find_profile_by_title(profile_name)
-    if existing:
-        return True, existing
+    try:
+        existing = octo_find_profile_by_title(profile_name)
+        if existing:
+            try:
+                profile_uuid = extract_octo_profile_uuid_from_result(existing)
+                if profile_uuid:
+                    octo_update_profile_extensions_by_uuid(
+                        profile_uuid,
+                        OCTO_CRYPTO_EXTENSIONS
+                    )
+            except Exception:
+                logging.exception("crypto king extensions setup failed for existing profile")
 
-    payload = build_crypto_king_octo_payload(
-        profile_name=profile_name,
-        parsed=parsed,
-        proxy_data=proxy_data
-    )
+            return True, existing
 
-    result = octo_create_profile(payload)
-    return True, result
+        payload = build_crypto_king_octo_payload(
+            profile_name=profile_name,
+            parsed=parsed,
+            proxy_data=proxy_data
+        )
+
+        result = octo_create_profile(payload)
+
+        try:
+            profile_uuid = extract_octo_profile_uuid_from_result(result)
+            if profile_uuid:
+                octo_update_profile_extensions_by_uuid(
+                    profile_uuid,
+                    OCTO_CRYPTO_EXTENSIONS
+                )
+        except Exception:
+            logging.exception("crypto king extensions setup failed after create")
+
+        return True, result
+
+    except Exception as e:
+        logging.exception("ensure_octo_profile_for_crypto_king failed")
+        return False, str(e)
 
 def octo_create_profile(payload):
     headers = {
