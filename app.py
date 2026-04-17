@@ -2854,11 +2854,9 @@ def send_crypto_bulk_followup_messages(chat_id, results):
         parsed = item.get("parsed_crypto", {}) or {}
 
         cookies_json = str(parsed.get("cookies_json", "")).strip()
-        cookies_links = parsed.get("cookies_links", []) or []
         cookies_ok = bool(item.get("cookies_ok", False))
+        cookies_msg = str(item.get("cookies_msg", "")).strip()
 
-        # сообщение про вставку показываем ТОЛЬКО если был именно cookies_json,
-        # потому что только его бот реально пытается импортировать
         if cookies_json:
             if cookies_ok:
                 tg_send_message(
@@ -2868,14 +2866,12 @@ def send_crypto_bulk_followup_messages(chat_id, results):
                     f"Кинг: {king_name}"
                 )
             else:
-                tg_send_message(
+                tg_send_long_message(
                     chat_id,
                     f"Куки не вставлены❌\n\n"
-                    f"Кинг: {king_name}"
+                    f"Кинг: {king_name}\n\n"
+                    f"Ошибка Octo:\n{cookies_msg or 'пустая ошибка'}"
                 )
-
-        # если куки даны только ссылкой — не пишем 'не вставлены'
-        # потому что бот их и не пытался импортировать автоматически
 
         bm_links = parsed.get("bm_links", []) or []
         bm_email_pairs = parsed.get("bm_email_pairs", []) or []
@@ -17621,9 +17617,10 @@ def handle_message(msg):
                             "После сохранения Куки открыв профиль на редактирование — куки не отображаются. И это нормально"
                         )
                     else:
-                        tg_send_message(
+                        tg_send_long_message(
                             chat_id,
-                            "Куки не вставлены❌"
+                            f"Куки не вставлены❌\n\n"
+                            f"Ошибка Octo:\n{cookies_msg or 'пустая ошибка'}"
                         )
 
                 if parsed_crypto.get("bm_links") or parsed_crypto.get("bm_email_pairs"):
