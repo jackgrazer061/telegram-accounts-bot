@@ -2844,15 +2844,6 @@ def build_crypto_bulk_result_messages(results, for_whom, max_len=3500):
     return messages
 
 def send_crypto_bulk_followup_messages(chat_id, results):
-    tg_send_message(
-        chat_id,
-        "Вручную проверь и выставь:\n"
-        "• User-Agent\n"
-        "• расширения\n"
-        "• куки"
-    )
-
-    ua_lines = []
     bm_lines = []
 
     for item in results:
@@ -2862,18 +2853,32 @@ def send_crypto_bulk_followup_messages(chat_id, results):
         king_name = item.get("king_name", "")
         parsed = item.get("parsed_crypto", {}) or {}
 
-        user_agent = str(parsed.get("user_agent", "")).strip()
+        cookies_json = str(parsed.get("cookies_json", "")).strip()
+        cookies_links = parsed.get("cookies_links", []) or []
+        cookies_msg = str(item.get("cookies_msg", "")).strip()
+
+        has_cookie_data = bool(cookies_json or cookies_links)
+
+        if has_cookie_data:
+            if item.get("octo_ok") and has_cookie_data and "не найдены" not in cookies_msg.lower() and "пустой" not in cookies_msg.lower() and "error" not in cookies_msg.lower():
+                tg_send_message(
+                    chat_id,
+                    f"Куки вставлены✅\n\n"
+                    f"После сохранения Куки открыв профиль на редактирование — куки не отображаются. И это нормально\n\n"
+                    f"Кинг: {king_name}"
+                )
+            else:
+                tg_send_message(
+                    chat_id,
+                    f"Куки не вставлены❌\n\n"
+                    f"Кинг: {king_name}"
+                )
+
         bm_links = parsed.get("bm_links", []) or []
         bm_email_pairs = parsed.get("bm_email_pairs", []) or []
 
-        if user_agent:
-            ua_lines.append(f"у кинга {king_name} есть User-Agent✅")
-
         if bm_links or bm_email_pairs:
             bm_lines.append(f"у кинга {king_name} есть BM✅")
-
-    if ua_lines:
-        tg_send_message(chat_id, "\n".join(ua_lines))
 
     if bm_lines:
         tg_send_message(chat_id, "\n".join(bm_lines))
@@ -17601,14 +17606,23 @@ def handle_message(msg):
                     }]]
                 )
 
-                tg_send_message(
-                    chat_id,
-                    f"Вручную проверь и выставь:\n"
-                    f"• User-Agent\n"
-                    f"• расширения\n\n"
-                    f"• куки\n\n"
-                    f"User-Agent:\n{parsed_crypto.get('user_agent', '')}"
+                has_cookie_data = bool(
+                    str(parsed_crypto.get("cookies_json", "")).strip()
+                    or (parsed_crypto.get("cookies_links") or [])
                 )
+
+                if has_cookie_data:
+                    if cookies_ok:
+                        tg_send_message(
+                            chat_id,
+                            "Куки вставлены✅\n\n"
+                            "После сохранения Куки открыв профиль на редактирование — куки не отображаются. И это нормально"
+                        )
+                    else:
+                        tg_send_message(
+                            chat_id,
+                            "Куки не вставлены❌"
+                        )
 
                 if parsed_crypto.get("bm_links") or parsed_crypto.get("bm_email_pairs"):
                     bm_parts = []
