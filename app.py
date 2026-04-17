@@ -36,8 +36,23 @@ OCTO_TAG_ACCOUNT_MANAGERS = "AccountManagers"
 OCTO_TAG_FARMERS = "Farmers"
 
 OCTO_CRYPTO_EXTENSIONS = [
-    "hlkenndednhfkekhgcdicdfddnkalmdm@1.13.0",  # Cookie Editor
-    "fdgfkebogiimcoedlicjlajpkdmockpc@4.0.5",  # Meta Pixel Helper
+    "bgjajdaampfpfbogklkbnelhmgngdohd@1.6",       # Access Token Extractor by FBTOOL.PRO
+    "lanhjpladilgmdkepgeggnllpiofkefi@0.6",       # Ads Trust
+    "hlkenndednhfkekhgcdicdfddnkalmdm@1.13.0",    # Cookie-Editor
+    "igafpbafmdnfippffaclpmblflhjkbje@1.23.1",    # FBHelper
+    "fdgfkebogiimcoedlicjlajpkdmockpc@4.0.5",     # Meta Pixel Helper
+    "nmnnilimjhkbdmnpojpbihmnphkneckf@1.0.9",     # SMIT Connect
+    "naciaagbkifhpnoodlkhbejjldaiffcm@1.6.9",     # Get Token Cookie
+]
+
+OCTO_FARM_EXTENSIONS = [
+    "bgjajdaampfpfbogklkbnelhmgngdohd@1.6",       # Access Token Extractor by FBTOOL.PRO
+    "lanhjpladilgmdkepgeggnllpiofkefi@0.6",       # Ads Trust
+    "hlkenndednhfkekhgcdicdfddnkalmdm@1.13.0",    # Cookie-Editor
+    "igafpbafmdnfippffaclpmblflhjkbje@1.23.1",    # FBHelper
+    "fdgfkebogiimcoedlicjlajpkdmockpc@4.0.5",     # Meta Pixel Helper
+    "nmnnilimjhkbdmnpojpbihmnphkneckf@1.0.9",     # SMIT Connect
+    "naciaagbkifhpnoodlkhbejjldaiffcm@1.6.9",     # Get Token Cookie
 ]
 
 if not BOT_TOKEN:
@@ -13241,37 +13256,55 @@ def build_farm_king_octo_payload(profile_name, parsed, proxy_data=None):
 
     return payload
 
-
 def ensure_octo_profile_for_farm_king(profile_name, parsed, proxy_data=None):
     try:
         existing = octo_find_profile_by_title(profile_name)
         if existing:
-            profile_uuid = str(existing.get("uuid") or existing.get("id") or "").strip()
-            if profile_uuid:
-                try:
-                    octo_update_profile_tags_by_uuid(profile_uuid, [OCTO_TAG_FARMERS])
-                except Exception:
-                    logging.exception("ensure_octo_profile_for_farm_king tag update by uuid failed for existing profile")
+            try:
+                octo_update_profile_tags_by_title(profile_name, [OCTO_TAG_FARMERS])
+            except Exception:
+                logging.exception("ensure_octo_profile_for_farm_king tag update failed for existing profile")
+
+            try:
+                profile_uuid = extract_octo_profile_uuid_from_result(existing)
+                if profile_uuid:
+                    octo_update_profile_extensions_by_uuid(
+                        profile_uuid,
+                        OCTO_FARM_EXTENSIONS
+                    )
+            except Exception:
+                logging.exception("farm king extensions setup failed for existing profile")
+
             return True, existing
-    except Exception:
-        logging.exception("ensure_octo_profile_for_farm_king pre-check failed")
 
-    payload = build_farm_king_octo_payload(
-        profile_name=profile_name,
-        parsed=parsed,
-        proxy_data=proxy_data
-    )
+        payload = build_farm_king_octo_payload(
+            profile_name=profile_name,
+            parsed=parsed,
+            proxy_data=proxy_data
+        )
 
-    result = octo_create_profile(payload)
+        result = octo_create_profile(payload)
 
-    try:
-        profile_uuid = extract_octo_profile_uuid_from_result(result)
-        if profile_uuid:
-            octo_update_profile_tags_by_uuid(profile_uuid, [OCTO_TAG_FARMERS])
-    except Exception:
-        logging.exception("ensure_octo_profile_for_farm_king tag update by uuid failed after create")
+        try:
+            octo_update_profile_tags_by_title(profile_name, [OCTO_TAG_FARMERS])
+        except Exception:
+            logging.exception("ensure_octo_profile_for_farm_king tag update failed after create")
 
-    return True, result
+        try:
+            profile_uuid = extract_octo_profile_uuid_from_result(result)
+            if profile_uuid:
+                octo_update_profile_extensions_by_uuid(
+                    profile_uuid,
+                    OCTO_FARM_EXTENSIONS
+                )
+        except Exception:
+            logging.exception("farm king extensions setup failed after create")
+
+        return True, result
+
+    except Exception as e:
+        logging.exception("ensure_octo_profile_for_farm_king failed")
+        return False, str(e)
 
 
 def ensure_octo_profile_with_retry(ensure_func, profile_name, parsed, proxy_data=None, retries=6, delay=2):
