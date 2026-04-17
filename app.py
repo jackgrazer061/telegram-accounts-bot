@@ -7735,6 +7735,85 @@ def _sanitize_login(value):
     # обычный id / login
     return value.split()[0].strip()
 
+def extract_cookie_json_from_raw_king_text(raw_text):
+    text = str(raw_text or "").strip()
+    if not text:
+        return ""
+
+    # 1. Сначала ищем блок после "Cookie JSON -"
+    marker_patterns = [
+        r'cookie\s*json\s*[-:]\s*',
+        r'cookies\s*json\s*[-:]\s*',
+    ]
+
+    for pattern in marker_patterns:
+        match = re.search(pattern, text, flags=re.IGNORECASE)
+        if match:
+            tail = text[match.end():].strip()
+
+            # пробуем вытащить JSON-массив начиная с первой [
+            start = tail.find("[")
+            if start != -1:
+                candidate = tail[start:].strip()
+
+                extracted = extract_balanced_json_array(candidate)
+                if extracted:
+                    return extracted
+
+    # 2. Если явного "Cookie JSON -" нет,
+    # ищем любой валидный JSON-массив в тексте
+    bracket_positions = [m.start() for m in re.finditer(r"\[", text)]
+    for start in bracket_positions:
+        candidate = text[start:].strip()
+        extracted = extract_balanced_json_array(candidate)
+        if extracted:
+            return extracted
+
+    return ""
+
+
+def extract_balanced_json_array(text):
+    text = str(text or "").strip()
+    if not text or not text.startswith("["):
+        return ""
+
+    depth = 0
+    in_string = False
+    escape = False
+
+    for i, ch in enumerate(text):
+        if escape:
+            escape = False
+            continue
+
+        if ch == "\\":
+            escape = True
+            continue
+
+        if ch == '"':
+            in_string = not in_string
+            continue
+
+        if in_string:
+            continue
+
+        if ch == "[":
+            depth += 1
+        elif ch == "]":
+            depth -= 1
+
+            if depth == 0:
+                candidate = text[:i + 1].strip()
+
+                try:
+                    parsed = json.loads(candidate)
+                    if isinstance(parsed, list):
+                        return candidate
+                except Exception:
+                    return ""
+
+    return ""
+
 
 def parse_crypto_king_raw_data(raw_text):
     text_original = str(raw_text or "")
@@ -7908,6 +7987,11 @@ def parse_crypto_king_raw_data(raw_text):
     # если email_password случайно выглядит как email — чистим
     if _validate_email(result["email_password"]):
         result["email_password"] = ""
+
+    # если cookies_json не нашли обычным способом —
+    # пробуем вытащить любой валидный JSON-массив из raw текста
+    if not result["cookies_json"]:
+        result["cookies_json"] = extract_cookie_json_from_raw_king_text(text_original)
 
     return result
 
