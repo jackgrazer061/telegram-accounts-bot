@@ -13566,35 +13566,61 @@ def try_import_crypto_king_cookies(profile_uuid, cookies_payload):
     if not cookies_payload or not cookies_payload.get("text"):
         return False, "cookies пустые"
 
-    temp_path = save_crypto_cookies_temp_file(profile_uuid, cookies_payload)
-
     headers = {
         "X-Octo-Api-Token": OCTO_API_TOKEN,
     }
 
-    # ВАЖНО:
-    # если этот endpoint у тебя не совпадёт с реальным Octo API,
-    # просто замени URL, а остальная логика уже готова.
-    url = f"{OCTO_API_BASE}/profiles/{profile_uuid}/cookies/import"
+    url = f"{OCTO_API_BASE}/profiles/{profile_uuid}/import_cookies"
 
-    with open(temp_path, "rb") as f:
-        files = {
-            "file": (
-                os.path.basename(temp_path),
-                f.read(),
-                "application/json" if cookies_payload["format"] == "json" else "text/plain"
+    try:
+        if cookies_payload["format"] == "json":
+            resp = requests.post(
+                url,
+                headers={
+                    "X-Octo-Api-Token": OCTO_API_TOKEN,
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "cookies": json.loads(cookies_payload["text"])
+                },
+                timeout=120
             )
-        }
-        resp = requests.post(url, headers=headers, files=files, timeout=120)
+        else:
+            resp = requests.post(
+                url,
+                headers=headers,
+                files={
+                    "cookies": (
+                        "cookies.txt",
+                        cookies_payload["text"].encode("utf-8"),
+                        "text/plain"
+                    )
+                },
+                timeout=120
+            )
 
-    if resp.status_code >= 400:
+        if resp.status_code >= 400:
+            try:
+                err = resp.json()
+            except Exception:
+                err = resp.text
+            return False, f"Octo cookie import error {resp.status_code}: {err}"
+
         try:
-            err = resp.json()
+            data = resp.json()
         except Exception:
-            err = resp.text
-        return False, f"Octo cookie import error {resp.status_code}: {err}"
+            data = {}
 
-    return True, "cookies imported"
+        if isinstance(data, dict):
+            success = data.get("success")
+            if success is False:
+                return False, f"Octo cookie import error: {data}"
+
+        return True, "cookies imported"
+
+    except Exception as e:
+        logging.exception("try_import_crypto_king_cookies failed")
+        return False, str(e)
 
 def ensure_octo_profile_for_crypto_king(profile_name, parsed, proxy_data=None):
     try:
@@ -14129,6 +14155,26 @@ def handle_message(msg):
 
             clear_state(user_id)
             send_misc_menu(chat_id, "Меню Прочее:")
+            return
+
+        if text == ADMIN_ADD_STICKERS:
+            if not has_access(user_id):
+                tg_send_message(chat_id, "Нет доступа.")
+                return
+
+            if not can_see_misc(user_id):
+                send_main_menu(chat_id, "Главное меню:", user_id=user_id)
+                return
+
+            set_state(user_id, {
+                "mode": "awaiting_sticker_add",
+                "updated_at": time.time()
+            })
+
+            tg_send_message(
+                chat_id,
+                "Пришли стикер одним сообщением — я добавлю его в очередь."
+            )
             return
 
         if text == BTN_BACK_FROM_MISC:
