@@ -1164,6 +1164,10 @@ def add_sticker_to_sheet(file_id, sticker_type="", emoji="", set_name=""):
 def maybe_send_scheduled_sticker_broadcast():
     now = datetime.now(MOSCOW_TZ)
 
+    # 5 = суббота, 6 = воскресенье
+    if now.weekday() in {5, 6}:
+        return
+
     if now.hour not in STICKER_SEND_HOURS:
         return
 
