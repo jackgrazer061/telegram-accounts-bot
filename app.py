@@ -17261,6 +17261,7 @@ def handle_message(msg):
             state["farm_kings_bulk_queue"] = queue
             state["farm_kings_bulk_results"] = []
             state["farm_kings_bulk_current_index"] = 0
+            state["farm_kings_bulk_proxy_collect_index"] = 0
             state["farm_kings_bulk_username"] = username
             state["farm_kings_bulk_issue_rows"] = []
 
@@ -17271,42 +17272,45 @@ def handle_message(msg):
 
         if state.get("mode") == FARM_KING_OCTO_MODE_BULK_PROXY:
             state = get_state(user_id)
-        
+
             queue = list(state.get("farm_kings_bulk_queue", []))
-            current_index = int(state.get("farm_kings_bulk_current_index", 0))
-        
-            if current_index >= len(queue):
+            proxy_collect_index = int(state.get("farm_kings_bulk_proxy_collect_index", 0))
+
+            if proxy_collect_index >= len(queue):
                 tg_send_message(chat_id, "Очередь пуста")
                 return
-        
+
             proxy_text = text.strip()
-        
-            # сохраняем прокси в текущий элемент
-            queue[current_index]["proxy_text"] = proxy_text
+
+            # сохраняем прокси в текущий элемент очереди
+            queue[proxy_collect_index]["proxy_text"] = proxy_text
             state["farm_kings_bulk_queue"] = queue
-        
-            # двигаемся к следующему king
-            current_index += 1
-            state["farm_kings_bulk_current_index"] = current_index
-        
+
+            # двигаем отдельный индекс сбора прокси
+            proxy_collect_index += 1
+            state["farm_kings_bulk_proxy_collect_index"] = proxy_collect_index
+
             set_state_with_custom_ttl(user_id, state, FARM_KING_BULK_PROXY_TTL)
-        
-            # если есть ещё king — просим следующий прокси
-            if current_index < len(queue):
-                next_item = queue[current_index]
-        
+
+            # если есть ещё king — просим следующий proxy
+            if proxy_collect_index < len(queue):
+                next_item = queue[proxy_collect_index]
+
                 tg_send_message(
                     chat_id,
                     f"Скинь socks5 прокси для farm king {next_item.get('king_name')}\n\n"
-                    f"Шаг {current_index + 1} из {len(queue)}\n\n"
+                    f"Шаг {proxy_collect_index + 1} из {len(queue)}\n\n"
                     f"Формат:\n"
                     f"socks5://login:password@host:port\n"
                     f"или\n"
                     f"socks5://host:port"
                 )
                 return
-        
-            # если все прокси собраны — запускаем worker
+
+            # все proxy собраны -> сбрасываем рабочий индекс на начало
+            state["farm_kings_bulk_current_index"] = 0
+            set_state_with_custom_ttl(user_id, state, FARM_KING_BULK_PROXY_TTL)
+
             start_farm_bulk_worker_if_needed(chat_id, user_id)
             return
 
