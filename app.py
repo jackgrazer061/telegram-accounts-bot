@@ -288,7 +288,7 @@ DEPT_GAMBLA = '🎰Гембла'
 CRYPTO_NAMES = [
     '№3 dasha', '№5 mark', '№20 misha',
     '№32 alex', '№34 anton', '№37 vladimir2',
-    '№4 nikita', '№57 VD3', '№60 MSH5'
+    '№4 nikita', '№57 VD3', '№60 MSH5', '№62 IA14'
 ]
 
 GAMBLA_NAMES = [
