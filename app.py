@@ -5929,8 +5929,16 @@ def run_farm_bulk_worker(chat_id, user_id):
 
             time.sleep(0.3)
 
-    except Exception:
+    except Exception as e:
         logging.exception("run_farm_bulk_worker crashed")
+
+        try:
+            state = get_state(user_id)
+            state["farm_bulk_last_error"] = str(e)
+            set_state_with_custom_ttl(user_id, state, FARM_KING_BULK_PROXY_TTL)
+        except Exception:
+            logging.exception("failed to save farm_bulk_last_error")
+
         try:
             if progress_message_id:
                 tg_delete_message(chat_id, progress_message_id)
@@ -5938,7 +5946,10 @@ def run_farm_bulk_worker(chat_id, user_id):
             pass
 
         try:
-            tg_send_message(chat_id, "Ошибка фоновой массовой выдачи farm king.")
+            tg_send_long_message(
+                chat_id,
+                f"Ошибка фоновой массовой выдачи farm king.\n\n{str(e)}"
+            )
         except Exception:
             pass
     finally:
@@ -6321,7 +6332,13 @@ def finish_farm_kings_bulk(chat_id, user_id):
 
     if not results:
         clear_state(user_id)
-        send_farm_kings_menu(chat_id, "Не удалось выдать ни одного farm king.")
+    
+        error_text = str(state.get("farm_bulk_last_error", "неизвестная ошибка"))
+    
+        send_farm_kings_menu(
+            chat_id,
+            f"Не удалось выдать ни одного farm king.\n\nОшибка:\n{error_text}"
+        )
         return
 
     message_parts = build_farm_kings_bulk_result_messages(results)
