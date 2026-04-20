@@ -3734,7 +3734,7 @@ def handle_sticker_message(msg):
             send_broadcast_message(msg_id)
 
             clear_state(user_id)
-            send_admin_menu(chat_id, "Меню Admin:", user_id=user_id)
+            send_main_menu(chat_id, "Главное меню:", user_id=user_id)
             return
 
         if state.get("mode") == MSG_MODE_REPLY:
@@ -3774,8 +3774,12 @@ def handle_sticker_message(msg):
         if state.get("mode") != "awaiting_sticker_add":
             return
 
-        if not is_admin(user_id):
+        if not has_access(user_id):
             tg_send_message(chat_id, "Нет доступа.")
+            return
+
+        if not can_see_misc(user_id):
+            send_main_menu(chat_id, "Главное меню:", user_id=user_id)
             return
 
         sticker = msg.get("sticker", {}) or {}
