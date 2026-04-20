@@ -10401,8 +10401,23 @@ def process_farm_kings_bulk_proxy_step(chat_id, user_id, username, proxy_text):
                 proxy_data=proxy_data
             )
 
-        octo_msg = str(octo_result)
-        logging.error(f"OCTO ERROR (farm bulk): {octo_msg}")
+        if isinstance(octo_result, dict):
+            octo_msg = str(
+                octo_result.get("msg")
+                or octo_result.get("error")
+                or octo_result.get("detail")
+                or octo_result.get("message")
+                or octo_result
+            )
+        else:
+            octo_msg = str(octo_result or "").strip()
+
+        if not octo_msg:
+            octo_msg = "Octo вернул пустой ответ"
+
+        logging.error(f"OCTO RESULT (farm bulk): {octo_result}")
+        logging.error(f"OCTO MSG (farm bulk): {octo_msg}")
+
     except Exception as e:
         logging.exception("process_farm_kings_bulk_proxy_step octo crashed")
         octo_msg = str(e)
@@ -10473,6 +10488,9 @@ def process_farm_kings_bulk_proxy_step(chat_id, user_id, username, proxy_text):
             "cookies_msg": cookies_msg
         })
     else:
+        if not octo_msg:
+            octo_msg = "не удалось создать Octo профиль"
+
         results.append({
             "king_name": king_name,
             "price": price_value,
@@ -10480,7 +10498,8 @@ def process_farm_kings_bulk_proxy_step(chat_id, user_id, username, proxy_text):
             "supplier": supplier_value,
             "data_text": data_text,
             "octo_ok": False,
-            "error_text": octo_msg or "не удалось создать Octo профиль"
+            "error_text": octo_msg,
+            "octo_result_raw": str(octo_result)
         })
 
     state["farm_kings_bulk_results"] = results
