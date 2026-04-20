@@ -6111,6 +6111,20 @@ def process_farm_kings_bulk_proxy_step_background(chat_id, user_id, username):
         error_text = str(e)
 
     if not octo_ok:
+        if not error_text:
+            if isinstance(octo_result, dict):
+                error_text = str(
+                    octo_result.get("msg")
+                    or octo_result.get("error")
+                    or octo_result.get("detail")
+                    or octo_result
+                )
+            else:
+                error_text = str(octo_result or "").strip()
+
+        if not error_text:
+            error_text = "не удалось завести в Octo"
+
         results.append({
             "king_name": king_name,
             "price": price_value,
@@ -6119,8 +6133,13 @@ def process_farm_kings_bulk_proxy_step_background(chat_id, user_id, username):
             "data_text": data_text,
             "parsed_farm_king": parsed_farm_king,
             "octo_ok": False,
-            "error_text": error_text or str(octo_result or "не удалось завести в Octo")
+            "error_text": error_text
         })
+
+        state["farm_kings_bulk_results"] = results
+        state["farm_kings_bulk_current_index"] = current_index + 1
+        set_state_with_custom_ttl(user_id, state, FARM_KING_BULK_PROXY_TTL)
+        return
 
         state["farm_kings_bulk_results"] = results
         state["farm_kings_bulk_current_index"] = current_index + 1
