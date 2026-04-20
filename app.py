@@ -3819,7 +3819,7 @@ def handle_sticker_message(msg):
         else:
             tg_send_message(chat_id, "Этот стикер уже есть в очереди.")
 
-        send_admin_menu(chat_id, "Меню Admin:", user_id=user_id)
+        send_main_menu(chat_id, "Главное меню:", user_id=user_id)
 
     except Exception as e:
         logging.exception("handle_sticker_message crashed")
