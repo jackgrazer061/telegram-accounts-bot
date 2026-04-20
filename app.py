@@ -10366,6 +10366,7 @@ def process_farm_kings_bulk_proxy_step(chat_id, user_id, username, proxy_text):
             )
 
         octo_msg = str(octo_result)
+        logging.error(f"OCTO ERROR (farm bulk): {octo_msg}")
     except Exception as e:
         logging.exception("process_farm_kings_bulk_proxy_step octo crashed")
         octo_msg = str(e)
