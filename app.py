@@ -6117,13 +6117,17 @@ def process_farm_kings_bulk_proxy_step_background(chat_id, user_id, username):
                     octo_result.get("msg")
                     or octo_result.get("error")
                     or octo_result.get("detail")
+                    or octo_result.get("message")
                     or octo_result
-                )
+                ).strip()
             else:
                 error_text = str(octo_result or "").strip()
 
         if not error_text:
-            error_text = "не удалось завести в Octo"
+            error_text = "Octo вернул пустой ответ"
+
+        logging.error(f"FARM BULK OCTO RAW RESULT: {octo_result}")
+        logging.error(f"FARM BULK OCTO ERROR TEXT: {error_text}")
 
         results.append({
             "king_name": king_name,
