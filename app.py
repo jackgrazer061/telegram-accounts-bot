@@ -43,6 +43,7 @@ OCTO_CRYPTO_EXTENSIONS = [
     "fdgfkebogiimcoedlicjlajpkdmockpc@4.0.5",     # Meta Pixel Helper
     "nmnnilimjhkbdmnpojpbihmnphkneckf@1.0.9",     # SMIT Connect
     "naciaagbkifhpnoodlkhbejjldaiffcm@1.6.9",     # Get Token Cookie
+    "lopekoolgoijpmaidblgfgelbkfkgmod@0.6.0",     # Pass key
 ]
 
 OCTO_FARM_EXTENSIONS = [
@@ -53,6 +54,7 @@ OCTO_FARM_EXTENSIONS = [
     "fdgfkebogiimcoedlicjlajpkdmockpc@4.0.5",     # Meta Pixel Helper
     "nmnnilimjhkbdmnpojpbihmnphkneckf@1.0.9",     # SMIT Connect
     "naciaagbkifhpnoodlkhbejjldaiffcm@1.6.9",     # Get Token Cookie
+    "lopekoolgoijpmaidblgfgelbkfkgmod@0.6.0",     # Pass key
 ]
 
 if not BOT_TOKEN:
