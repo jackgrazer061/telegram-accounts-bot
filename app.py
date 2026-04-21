@@ -6196,12 +6196,12 @@ def process_farm_kings_bulk_proxy_step_background(chat_id, user_id, username):
 
     supabase_insert("База_фарм_кинг", {
         "nazvanie": king_name or None,
-        "data_pokypki": to_supabase_date(row[1]),
+        "data_pokypki": normalize_date_for_supabase(row[1]),
         "price": row[2] or None,
         "y_kogo_kypili": row[3] or None,
         "status": "taken",
         "komy_vidali": "farm",
-        "data_vzatia": to_supabase_date(today),
+        "data_vzatia": normalize_date_for_supabase(today),
         "geo": geo_value or None,
         "kto_vzal": who_took_text or None,
         "dannie": row[9] or None,
@@ -9008,12 +9008,15 @@ def build_account_search_text(account_number):
 def supabase_insert(table_name, data):
     if not supabase:
         logging.warning(f"supabase disabled, skip insert into {table_name}")
-        return
+        return False
 
     try:
-        supabase.table(table_name).insert(data).execute()
-    except Exception:
-        logging.exception(f"supabase insert failed: {table_name}")
+        result = supabase.table(table_name).insert(data).execute()
+        logging.info(f"supabase insert ok: {table_name} data={data}")
+        return True
+    except Exception as e:
+        logging.exception(f"supabase insert failed: {table_name}, error={e}, data={data}")
+        return False
 
 
 def normalize_date_for_supabase(value):
@@ -11454,7 +11457,21 @@ def issue_kings_bulk(chat_id, user_id, username, king_names):
                     supplier=item["supplier"],
                     for_whom=king_for_whom
                 )
-
+            
+                supabase_insert("База_кингов", {
+                    "name_king": item["king_name"] or None,
+                    "price": item["price"] or None,
+                    "y_kogo_kypili": item["supplier"] or None,
+                    "status": "taken",
+                    "komy_vidali": king_for_whom or None,
+                    "data_vzatia": normalize_date_for_supabase(today),
+                    "geo": item["geo"] or None,
+                    "kto_vzal": f"@{username}" if username else "без username",
+                    "Dannie": item["data_text"] or None,
+                    "SYNC_ID": item["sync_id"] or None,
+                    "data_pokupki": normalize_date_for_supabase(item["purchase_date"]),
+                })
+            
             invalidate_stats_cache()
             clear_state(user_id)
 
@@ -17049,14 +17066,14 @@ def handle_message(msg):
                     "y_kogo_kypili": row[3] or None,
                     "status": "taken",
                     "komy_vidali": "farm",
-                    "data_vzatia": to_supabase_date(today),
+                    "data_vzatia": normalize_date_for_supabase(today),
                     "geo": geo_value or None,
                     "kto_vzal": who_took_text or None,
                     "dannie": row[9] or None,
                     "dannie_2": row[10] or None,
                     "dannie_3": row[11] or None,
                     "SYNC_ID": sync_id or None,
-                    "data_pokupki": to_supabase_date(row[1]),
+                    "data_pokupki": normalize_date_for_supabase(row[1]),
                 })
 
                 if sync_id:
@@ -17853,14 +17870,14 @@ def handle_message(msg):
                     "postavshik": row[3] or None,
                     "status": "taken",
                     "komy_vidali": king_for_whom or None,
-                    "data_vzatia": to_supabase_date(today),
+                    "data_vzatia": normalize_date_for_supabase(today),
                     "geo": geo_value or None,
                     "kto_vzal": who_took_text or None,
                     "dannie": row[9] or None,
                     "dannie_2": row[10] or None,
                     "dannie_3": row[11] or None,
                     "SYNC_ID": sync_id or None,
-                    "data_pokupki": to_supabase_date(row[1]),
+                    "data_pokupki": normalize_date_for_supabase(row[1]),
                 })
 
                 if sync_id:
