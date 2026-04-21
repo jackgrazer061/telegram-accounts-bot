@@ -122,6 +122,7 @@ FARMERS_USERS = {
     8589105033: "owenwilson_farmer",
     8503147017: "zendaya_farmer",
     8797795819: "markzuckerberg_farm",
+    8436601290: "BillGates_Farmer",
 }
 
 MISC_HIDDEN_USERS = {
