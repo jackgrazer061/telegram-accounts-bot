@@ -5274,75 +5274,68 @@ def find_last_pixel_issue_row(pixel_name=None, pixel_id=None):
     return last_match
 
 
-def return_pixel_to_ban(pixel_query, comment_text=""):
-    found = find_pixel_in_base_by_data(pixel_query)
+def return_pixel_to_ban(pixel_id, comment_text=""):
+    found = find_pixel_in_base(pixel_id)
     if not found:
         return False, "Пиксель не найден."
 
-    row = found["row"]
-    if len(row) < 8:
-        row = row + [''] * (8 - len(row))
+    row = ensure_row_len(found["row"], 26)
 
-    status = str(row[3]).strip().lower()
-    if status == "ban":
-        return False, "Этот Пиксель уже в ban."
-
-    data_text = row[7]
-    pixel_name = extract_pixel_name_from_data(data_text)
-    pixel_id = extract_pixel_id_from_data(data_text)
+    if str(row[4]).strip().lower() == "ban":
+        return False, "Пиксель уже в ban."
 
     sheet_update_and_refresh(
         SHEET_PIXELS,
-        f"D{found['row_index']}:E{found['row_index']}",
+        f"E{found['row_index']}:F{found['row_index']}",
         [["ban", "ban"]]
     )
 
-    row = ensure_row_len(row, 26)
-    sync_id = row[8]
-    
-    if sync_id:
-        sync_status_to_basebot(BASEBOT_SHEET_PIXELS, sync_id, "ban")
-
-    issue_info = find_last_pixel_issue_row(pixel_name=pixel_name, pixel_id=pixel_id)
+    issue_info = find_last_pixel_issue_row(pixel_id)
     if issue_info:
         mark_issue_row_as_ban(issue_info["row_index"], comment_text)
+
+    supabase_update(
+        "База_пикселей",
+        "pixel_id",
+        pixel_id,
+        {
+            "status": "ban",
+            "dla_kogo": "ban",
+        }
+    )
 
     invalidate_stats_cache()
     return True, "Пиксель переведён в ban."
 
-def return_pixel_to_free(pixel_query):
-    found = find_pixel_in_base_by_data(pixel_query)
+def return_pixel_to_free(pixel_id):
+    found = find_pixel_in_base(pixel_id)
     if not found:
         return False, "Пиксель не найден."
 
-    row = found["row"]
-    if len(row) < 8:
-        row = row + [''] * (8 - len(row))
+    row = ensure_row_len(found["row"], 26)
 
-    status = str(row[3]).strip().lower()
-
-    if status == "free":
-        return False, "Этот Пиксель уже free."
-
-    data_text = row[7]
-    pixel_name = extract_pixel_name_from_data(data_text)
-    pixel_id = extract_pixel_id_from_data(data_text)
+    if str(row[4]).strip().lower() == "free":
+        return False, "Пиксель уже free."
 
     sheet_update_and_refresh(
         SHEET_PIXELS,
-        f"D{found['row_index']}:G{found['row_index']}",
+        f"E{found['row_index']}:H{found['row_index']}",
         [["free", "", "", ""]]
     )
 
-    row = ensure_row_len(row, 26)
-    sync_id = row[8]
+    delete_last_pixel_issue_row(pixel_id)
 
-    if sync_id:
-        sync_status_to_basebot(BASEBOT_SHEET_PIXELS, sync_id, "free")
-
-    issue_info = find_last_pixel_issue_row(pixel_name=pixel_name, pixel_id=pixel_id)
-    if issue_info:
-        sheet_delete_row_and_refresh(SHEET_ISSUES, issue_info["row_index"])
+    supabase_update(
+        "База_пикселей",
+        "pixel_id",
+        pixel_id,
+        {
+            "status": "free",
+            "dla_kogo": None,
+            "kto_vzal": None,
+            "data_vidachi": None,
+        }
+    )
 
     invalidate_stats_cache()
     return True, "Пиксель возвращён в free."
@@ -7117,19 +7110,15 @@ def build_farm_fp_search_text(fp_link):
 def return_farm_fp_to_ban(fp_link, comment_text=""):
     found = find_farm_fp_in_base(fp_link)
     if not found:
-        return False, "Farm FP не найдено."
+        return False, "ФП не найдено."
 
-    row = found["row"]
-    if len(row) < 9:
-        row = row + [''] * (9 - len(row))
+    row = ensure_row_len(found["row"], 26)
 
-    status = str(row[5]).strip().lower()
-
-    if status == "ban":
-        return False, "Это farm FP уже в ban."
+    if str(row[5]).strip().lower() == "ban":
+        return False, "Это ФП уже в ban."
 
     sheet_update_and_refresh(
-        SHEET_FARM_FPS,
+        SHEET_FARM_FP,
         f"F{found['row_index']}:G{found['row_index']}",
         [["ban", "ban"]]
     )
@@ -7138,6 +7127,16 @@ def return_farm_fp_to_ban(fp_link, comment_text=""):
     if issue_info:
         mark_issue_row_as_ban(issue_info["row_index"], comment_text)
 
+    supabase_update(
+        "База_фарм_фп",
+        "link_fp",
+        fp_link,
+        {
+            "status": "ban",
+            "dla_kogo": "ban",
+        }
+    )
+
     invalidate_stats_cache()
     return True, "Farm FP переведено в ban."
 
@@ -7145,24 +7144,32 @@ def return_farm_fp_to_ban(fp_link, comment_text=""):
 def return_farm_fp_to_free(fp_link):
     found = find_farm_fp_in_base(fp_link)
     if not found:
-        return False, "Farm FP не найдено."
+        return False, "ФП не найдено."
 
-    row = found["row"]
-    if len(row) < 9:
-        row = row + [''] * (9 - len(row))
+    row = ensure_row_len(found["row"], 26)
 
-    status = str(row[5]).strip().lower()
-
-    if status == "free":
-        return False, "Это farm FP уже free."
+    if str(row[5]).strip().lower() == "free":
+        return False, "Это ФП уже free."
 
     sheet_update_and_refresh(
-        SHEET_FARM_FPS,
+        SHEET_FARM_FP,
         f"F{found['row_index']}:I{found['row_index']}",
         [["free", "", "", ""]]
     )
 
     delete_last_fp_issue_row(fp_link)
+
+    supabase_update(
+        "База_фарм_фп",
+        "link_fp",
+        fp_link,
+        {
+            "status": "free",
+            "dla_kogo": None,
+            "kto_vzal": None,
+            "data_vidachi": None,
+        }
+    )
 
     invalidate_stats_cache()
     return True, "Farm FP возвращено в free."
@@ -12196,90 +12203,126 @@ def find_king_in_base_by_name(king_name):
 
 
 def return_king_to_ban(king_name, comment_text=""):
-    base_info = find_king_in_base_by_name(king_name)
-    if not base_info:
-        return False, "Кинг не найден в базах."
+    found = find_king_in_base_by_name(king_name)
+    if not found:
+        return False, "Кинг не найден."
 
-    row = base_info["row"]
-    sheet_name = base_info["sheet_name"]
+    row = ensure_row_len(found["row"], 26)
 
-    if len(row) < 12:
-        row = row + [''] * (12 - len(row))
-
-    status = str(row[4]).strip().lower()
-
-    if status == "ban":
+    if str(row[4]).strip().lower() == "ban":
         return False, "Этот кинг уже в ban."
 
     sheet_update_and_refresh(
-        sheet_name,
-        f"E{base_info['row_index']}:F{base_info['row_index']}",
+        SHEET_KINGS,
+        f"E{found['row_index']}:F{found['row_index']}",
         [["ban", "ban"]]
     )
 
-    row = ensure_row_len(row, 26)
     sync_id = row[12]
-    
     if sync_id:
-        if sheet_name == SHEET_KINGS:
-            sync_status_to_basebot(BASEBOT_SHEET_KINGS, sync_id, "ban")
-        elif sheet_name == SHEET_CRYPTO_KINGS:
-            sync_status_to_basebot(BASEBOT_SHEET_CRYPTO_KINGS, sync_id, "ban")
+        sync_status_to_basebot(BASEBOT_SHEET_KINGS, sync_id, "ban")
 
     issue_info = find_last_king_issue_row(king_name)
     if issue_info:
         mark_issue_row_as_ban(issue_info["row_index"], comment_text)
 
+    supabase_update(
+        "База_кингов",
+        "name_king",
+        king_name,
+        {
+            "status": "ban",
+            "komy_vidali": "ban",
+        }
+    )
+
     invalidate_stats_cache()
     return True, f"Кинг '{king_name}' переведён в ban."
 
 def return_king_to_free(king_name):
-    base_info = find_king_in_base_by_name(king_name)
-    if not base_info:
-        return False, "Кинг не найден в базах."
 
-    row = base_info["row"]
-    sheet_name = base_info["sheet_name"]
+    found = find_king_in_base_by_name(king_name)
 
-    if len(row) < 12:
-        row = row + [''] * (12 - len(row))
+    if not found:
+
+        return False, "Кинг не найден."
+
+    row = ensure_row_len(found["row"], 26)
 
     status = str(row[4]).strip().lower()
 
     if status == "free":
+
         return False, "Этот кинг уже free."
 
-    old_king_name = str(row[0]).strip()
+    old_name = str(row[0]).strip()
 
     sheet_update_and_refresh(
-        sheet_name,
-        f"A{base_info['row_index']}:I{base_info['row_index']}",
+
+        SHEET_KINGS,
+
+        f"A{found['row_index']}:I{found['row_index']}",
+
         [[
-            "",          # A название очищаем
-            row[1],      # B дата покупки
-            row[2],      # C цена
-            row[3],      # D поставщик
-            "free",      # E статус
-            "",          # F для кого
-            "",          # G дата взятия
-            row[7],      # H geo
-            ""           # I кто взял
+
+            "",
+
+            row[1],
+
+            row[2],
+
+            row[3],
+
+            "free",
+
+            "",
+
+            "",
+
+            row[7],
+
+            ""
+
         ]]
+
     )
 
-    row = ensure_row_len(row, 26)
     sync_id = row[12]
-    
-    if sync_id:
-        if sheet_name == SHEET_KINGS:
-            sync_status_to_basebot(BASEBOT_SHEET_KINGS, sync_id, "free")
-        elif sheet_name == SHEET_CRYPTO_KINGS:
-            sync_status_to_basebot(BASEBOT_SHEET_CRYPTO_KINGS, sync_id, "free")
 
-    if old_king_name:
-        delete_last_king_issue_row(old_king_name)
+    if sync_id:
+
+        sync_status_to_basebot(BASEBOT_SHEET_KINGS, sync_id, "free")
+
+    if old_name:
+
+        delete_last_king_issue_row(old_name)
+
+    supabase_update(
+
+        "База_кингов",
+
+        "name_king",
+
+        old_name or king_name,
+
+        {
+
+            "name_king": None,
+
+            "status": "free",
+
+            "komy_vidali": None,
+
+            "data_vzatia": None,
+
+            "kto_vzal": None,
+
+        }
+
+    )
 
     invalidate_stats_cache()
+
     return True, f"Кинг '{king_name}' возвращён в free."
 
 def find_crypto_king_in_base_by_name(king_name):
