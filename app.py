@@ -4279,6 +4279,16 @@ def return_fp_to_ban(fp_link, comment_text=""):
     if issue_info:
         mark_issue_row_as_ban(issue_info["row_index"], comment_text)
 
+    supabase_update(
+        "База_ФП",
+        "link_fp",
+        fp_link,
+        {
+            "status": "ban",
+            "dla_kogo": "ban",
+        }
+    )
+
     invalidate_stats_cache()
     return True, "ФП переведено в ban."
 
@@ -4304,6 +4314,18 @@ def return_fp_to_free(fp_link):
     )
 
     delete_last_fp_issue_row(fp_link)
+
+    supabase_update(
+        "База_ФП",
+        "link_fp",
+        fp_link,
+        {
+            "status": "free",
+            "dla_kogo": None,
+            "kto_vzal": None,
+            "data_vidachi": None,
+        }
+    )
 
     invalidate_stats_cache()
     return True, "ФП возвращено в free."
@@ -6225,6 +6247,16 @@ def process_farm_kings_bulk_proxy_step_background(chat_id, user_id, username):
         "farm"
     ])
 
+    supabase_insert_issue_row(
+        name=king_name,
+        shop="KING",
+        purchase_date=row[1],
+        price=row[2],
+        issue_date=today,
+        supplier=row[3],
+        for_whom="farm",
+    )
+
     results.append({
         "king_name": king_name,
         "price": price_value,
@@ -6500,13 +6532,23 @@ def return_farm_king_to_ban(king_name, comment_text=""):
 
     row = ensure_row_len(row, 26)
     sync_id = row[12]
-    
+
     if sync_id:
         sync_status_to_basebot(BASEBOT_SHEET_FARM_KINGS, sync_id, "ban")
 
     issue_info = find_last_king_issue_row(king_name)
     if issue_info:
         mark_issue_row_as_ban(issue_info["row_index"], comment_text)
+
+    supabase_update(
+        "База_фарм_кинг",
+        "nazvanie",
+        king_name,
+        {
+            "status": "ban",
+            "komy_vidali": "ban",
+        }
+    )
 
     invalidate_stats_cache()
     return True, f"Кинг '{king_name}' переведён в ban."
@@ -6545,12 +6587,25 @@ def return_farm_king_to_free(king_name):
 
     row = ensure_row_len(row, 26)
     sync_id = row[12]
-    
+
     if sync_id:
         sync_status_to_basebot(BASEBOT_SHEET_FARM_KINGS, sync_id, "free")
 
     if old_king_name:
         delete_last_king_issue_row(old_king_name)
+
+    supabase_update(
+        "База_фарм_кинг",
+        "nazvanie",
+        old_king_name or king_name,
+        {
+            "nazvanie": None,
+            "status": "free",
+            "komy_vidali": None,
+            "data_vzatia": None,
+            "kto_vzal": None,
+        }
+    )
 
     invalidate_stats_cache()
     return True, f"Farm king '{king_name}' возвращён в free."
@@ -6859,13 +6914,23 @@ def return_farm_bm_to_ban(bm_id, comment_text=""):
 
     row = ensure_row_len(row, 26)
     sync_id = row[9]
-    
+
     if sync_id:
         sync_status_to_basebot(BASEBOT_SHEET_FARM_BMS, sync_id, "ban")
 
     issue_info = find_last_bm_issue_row(bm_id)
     if issue_info:
         mark_issue_row_as_ban(issue_info["row_index"], comment_text)
+
+    supabase_update(
+        "База_фарм_бм",
+        "id_BMa",
+        bm_id,
+        {
+            "status": "ban",
+            "dla_kogo": "ban",
+        }
+    )
 
     invalidate_stats_cache()
     return True, f"BM '{bm_id}' переведён в ban."
@@ -6892,11 +6957,23 @@ def return_farm_bm_to_free(bm_id):
 
     row = ensure_row_len(row, 26)
     sync_id = row[9]
-    
+
     if sync_id:
         sync_status_to_basebot(BASEBOT_SHEET_FARM_BMS, sync_id, "free")
 
     delete_last_bm_issue_row(bm_id)
+
+    supabase_update(
+        "База_фарм_бм",
+        "id_BMa",
+        bm_id,
+        {
+            "status": "free",
+            "dla_kogo": None,
+            "kto_vzal": None,
+            "data_vidachi": None,
+        }
+    )
 
     invalidate_stats_cache()
     return True, f"Farm BM '{bm_id}' возвращён в free."
@@ -9018,6 +9095,40 @@ def supabase_insert(table_name, data):
         logging.exception(f"supabase insert failed: {table_name}, error={e}, data={data}")
         return False
 
+def supabase_update(table_name, match_field, match_value, data):
+    if not supabase:
+        logging.warning(f"supabase disabled, skip update in {table_name}")
+        return False
+
+    try:
+        result = (
+            supabase
+            .table(table_name)
+            .update(data)
+            .eq(match_field, match_value)
+            .execute()
+        )
+        logging.info(
+            f"supabase update ok: {table_name} where {match_field}={match_value} data={data}"
+        )
+        return True
+    except Exception as e:
+        logging.exception(
+            f"supabase update failed: {table_name}, match_field={match_field}, match_value={match_value}, error={e}, data={data}"
+        )
+        return False
+
+def supabase_insert_issue_row(name, shop, purchase_date, price, issue_date, supplier, for_whom):
+    return supabase_insert("Простые лички 26", {
+        "name": name or None,
+        "shop": shop or None,
+        "data_pokupki": normalize_date_for_supabase(purchase_date),
+        "price": normalize_numeric_for_sheet(price) if price not in [None, ""] else None,
+        "data_vidachi": normalize_date_for_supabase(issue_date),
+        "u_kogo_kupili": supplier or None,
+        "komu_peredali": for_whom or None,
+    })
+
 
 def normalize_date_for_supabase(value):
     text = str(value or "").strip()
@@ -10848,13 +10959,23 @@ def return_bm_to_ban(bm_id, comment_text=""):
 
     row = ensure_row_len(row, 26)
     sync_id = row[9]
-    
+
     if sync_id:
         sync_status_to_basebot(BASEBOT_SHEET_BMS, sync_id, "ban")
 
     issue_info = find_last_bm_issue_row(bm_id)
     if issue_info:
         mark_issue_row_as_ban(issue_info["row_index"], comment_text)
+
+    supabase_update(
+        "База_БМ",
+        "id_BMa",
+        bm_id,
+        {
+            "status": "ban",
+            "dla_kogo": "ban",
+        }
+    )
 
     invalidate_stats_cache()
     return True, f"БМ '{bm_id}' переведён в ban."
@@ -10886,6 +11007,18 @@ def return_bm_to_free(bm_id):
         sync_status_to_basebot(BASEBOT_SHEET_BMS, sync_id, "free")
 
     delete_last_bm_issue_row(bm_id)
+
+    supabase_update(
+        "База_БМ",
+        "id_BMa",
+        bm_id,
+        {
+            "status": "free",
+            "dla_kogo": None,
+            "kto_vzal": None,
+            "data_vidachi": None,
+        }
+    )
 
     invalidate_stats_cache()
     return True, f"БМ '{bm_id}' возвращён в free."
@@ -11472,6 +11605,16 @@ def issue_kings_bulk(chat_id, user_id, username, king_names):
                     "data_pokupki": normalize_date_for_supabase(item["purchase_date"]),
                 })
             
+                supabase_insert_issue_row(
+                    name=item["king_name"],
+                    shop="KING",
+                    purchase_date=item["purchase_date"],
+                    price=item["price"],
+                    issue_date=today,
+                    supplier=item["supplier"],
+                    for_whom=king_for_whom,
+                )
+            
             invalidate_stats_cache()
             clear_state(user_id)
 
@@ -11868,6 +12011,23 @@ def process_crypto_bulk_proxy_step(chat_id, user_id, username, proxy_text):
     mark_sheet_cache_stale(SHEET_CRYPTO_KINGS)
 
     sync_id = current_item.get("sync_id")
+
+    supabase_insert("База_крипта_кинги", {
+        "nazvanie": king_name or None,
+        "price": row[2] or None,
+        "postavshik": row[3] or None,
+        "status": "taken",
+        "komy_vidali": king_for_whom or None,
+        "data_vzatia": normalize_date_for_supabase(today),
+        "geo": geo_value or None,
+        "kto_vzal": who_took_text or None,
+        "dannie": row[9] or None,
+        "dannie_2": row[10] or None,
+        "dannie_3": row[11] or None,
+        "SYNC_ID": current_item.get("sync_id") or None,
+        "data_pokupki": normalize_date_for_supabase(row[1]),
+    })
+    
     if sync_id:
         try:
             sync_status_to_basebot(BASEBOT_SHEET_CRYPTO_KINGS, sync_id, "taken")
@@ -11883,6 +12043,16 @@ def process_crypto_bulk_proxy_step(chat_id, user_id, username, proxy_text):
         row[3],
         king_for_whom
     ])
+
+    supabase_insert_issue_row(
+        name=king_name,
+        shop="KING",
+        purchase_date=row[1],
+        price=row[2],
+        issue_date=today,
+        supplier=row[3],
+        for_whom=king_for_whom,
+    )
 
     results.append({
         "king_name": king_name,
@@ -17090,6 +17260,16 @@ def handle_message(msg):
 
                 invalidate_stats_cache()
 
+                supabase_insert_issue_row(
+                    name=king_name,
+                    shop="KING",
+                    purchase_date=row[1],
+                    price=row[2],
+                    issue_date=today,
+                    supplier=row[3],
+                    for_whom="farm",
+                )
+
                 preview_message_id = state.get("farm_king_preview_message_id")
 
                 set_state(user_id, {
@@ -17893,6 +18073,16 @@ def handle_message(msg):
                 )
 
                 invalidate_stats_cache()
+
+                supabase_insert_issue_row(
+                    name=king_name,
+                    shop="KING",
+                    purchase_date=row[1],
+                    price=row[2],
+                    issue_date=today,
+                    supplier=row[3],
+                    for_whom=king_for_whom,
+                )
 
                 preview_message_id = state.get("crypto_preview_message_id")
 
