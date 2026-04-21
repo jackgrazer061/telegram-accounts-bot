@@ -13,6 +13,7 @@ from google.oauth2.service_account import Credentials
 import threading
 import uuid
 import tempfile
+from supabase import create_client
 
 app = Flask(__name__)
 CORS(app)
@@ -34,6 +35,8 @@ OCTO_TAG_SIDO = "Sido"
 OCTO_TAG_CORBY = "corby"
 OCTO_TAG_ACCOUNT_MANAGERS = "AccountManagers"
 OCTO_TAG_FARMERS = "Farmers"
+SUPABASE_URL = os.environ.get("SUPABASE_URL", "").strip()
+SUPABASE_SERVICE_ROLE_KEY = os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "").strip()
 
 OCTO_CRYPTO_EXTENSIONS = [
     "jdiljjjlnmciheackloanmdcnkoknpji@1.6",       # Access Token Extractor by FBTOOL.PRO
@@ -71,6 +74,10 @@ if not BACKUP_SPREADSHEET_ID:
 
 if not BASEBOT_SPREADSHEET_ID:
     raise RuntimeError("BASEBOT_SPREADSHEET_ID не задан")
+
+supabase = None
+if SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY:
+    supabase = create_client(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
     
 
 # =========================
@@ -6146,11 +6153,6 @@ def process_farm_kings_bulk_proxy_step_background(chat_id, user_id, username):
         set_state_with_custom_ttl(user_id, state, FARM_KING_BULK_PROXY_TTL)
         return
 
-        state["farm_kings_bulk_results"] = results
-        state["farm_kings_bulk_current_index"] = current_index + 1
-        set_state_with_custom_ttl(user_id, state, FARM_KING_BULK_PROXY_TTL)
-        return
-
     cookies_ok = False
     cookies_msg = ""
     try:
@@ -6191,6 +6193,22 @@ def process_farm_kings_bulk_proxy_step_background(chat_id, user_id, username):
     mark_sheet_cache_stale(SHEET_FARM_KINGS)
 
     sync_id = current_item.get("sync_id")
+
+    supabase_insert("База_фарм_кинг", {
+        "nazvanie": king_name or None,
+        "data_pokypki": to_supabase_date(row[1]),
+        "price": row[2] or None,
+        "y_kogo_kypili": row[3] or None,
+        "status": "taken",
+        "komy_vidali": "farm",
+        "data_vzatia": to_supabase_date(today),
+        "geo": geo_value or None,
+        "kto_vzal": who_took_text or None,
+        "dannie": row[9] or None,
+        "dannie_2": row[10] or None,
+        "dannie_3": row[11] or None,
+        "SYNC_ID": sync_id or None,
+    })
     if sync_id:
         try:
             sync_status_to_basebot(BASEBOT_SHEET_FARM_KINGS, sync_id, "taken")
@@ -8986,6 +9004,40 @@ def build_account_search_text(account_number):
         text += f"Для кого взял: {for_whom}\n"
 
     return text
+
+def supabase_insert(table_name, data):
+    if not supabase:
+        logging.warning(f"supabase disabled, skip insert into {table_name}")
+        return
+
+    try:
+        supabase.table(table_name).insert(data).execute()
+    except Exception:
+        logging.exception(f"supabase insert failed: {table_name}")
+
+
+def normalize_date_for_supabase(value):
+    text = str(value or "").strip()
+    if not text:
+        return None
+
+    for fmt in ("%d/%m/%Y", "%Y-%m-%d", "%d.%m.%Y"):
+        try:
+            return datetime.strptime(text, fmt).strftime("%Y-%m-%d")
+        except Exception:
+            pass
+
+    return None
+
+
+def normalize_numeric_for_supabase(value):
+    text = str(value or "").strip().replace(",", ".")
+    if not text:
+        return None
+    try:
+        return float(text)
+    except Exception:
+        return None
 
 
 # =========================
@@ -16991,6 +17043,22 @@ def handle_message(msg):
                 )
                 mark_sheet_cache_stale(SHEET_FARM_KINGS)
 
+                supabase_insert("База_фарм_кинг", {
+                    "nazvanie": king_name or None,
+                    "price": row[2] or None,
+                    "y_kogo_kypili": row[3] or None,
+                    "status": "taken",
+                    "komy_vidali": "farm",
+                    "data_vzatia": to_supabase_date(today),
+                    "geo": geo_value or None,
+                    "kto_vzal": who_took_text or None,
+                    "dannie": row[9] or None,
+                    "dannie_2": row[10] or None,
+                    "dannie_3": row[11] or None,
+                    "SYNC_ID": sync_id or None,
+                    "data_pokupki": to_supabase_date(row[1]),
+                })
+
                 if sync_id:
                     sync_status_to_basebot(BASEBOT_SHEET_FARM_KINGS, sync_id, "taken")
 
@@ -17778,6 +17846,22 @@ def handle_message(msg):
                     ]]
                 )
                 mark_sheet_cache_stale(SHEET_CRYPTO_KINGS)
+
+                supabase_insert("База_крипта_кинги", {
+                    "nazvanie": king_name or None,
+                    "price": row[2] or None,
+                    "postavshik": row[3] or None,
+                    "status": "taken",
+                    "komy_vidali": king_for_whom or None,
+                    "data_vzatia": to_supabase_date(today),
+                    "geo": geo_value or None,
+                    "kto_vzal": who_took_text or None,
+                    "dannie": row[9] or None,
+                    "dannie_2": row[10] or None,
+                    "dannie_3": row[11] or None,
+                    "SYNC_ID": sync_id or None,
+                    "data_pokupki": to_supabase_date(row[1]),
+                })
 
                 if sync_id:
                     sync_status_to_basebot(BASEBOT_SHEET_CRYPTO_KINGS, sync_id, "taken")
