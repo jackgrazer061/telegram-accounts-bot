@@ -6367,6 +6367,16 @@ def process_farm_kings_bulk_proxy_step_background(chat_id, user_id, username):
             row[11]
         ]]
     )
+    supabase_mark_taken(
+        "База_фарм_кинги",
+        "nazvanie",
+        king_name,
+        who_took_text,
+        {
+            "komy_vidali": "farm",
+            "data_vzatia": normalize_date_for_supabase(today)
+        }
+    )
     mark_sheet_cache_stale(SHEET_FARM_KINGS)
 
     sync_id = current_item.get("sync_id")
@@ -7170,6 +7180,17 @@ def issue_farm_bm(chat_id, user_id, username):
             ]]
         )
 
+        supabase_mark_taken(
+            "База_фарм_бм",
+            "id_bm",
+            row[0],
+            who_took_text,
+            {
+                "dla_kogo": "farm",
+                "data_vidachi": normalize_date_for_supabase(today)
+            }
+        )
+
         side_errors = []
 
         if sync_id:
@@ -7457,6 +7478,16 @@ def issue_farm_fps(chat_id, user_id, username, count_needed):
                         who_took_text,
                         today
                     ]]
+                )
+                supabase_mark_taken(
+                    "База_фарм_фп",
+                    "link_fp",
+                    row[0],
+                    who_took_text,
+                    {
+                        "dla_kogo": "farm",
+                        "data_vidachi": normalize_date_for_supabase(today)
+                    }
                 )
 
                 issue_rows.append([
@@ -9214,6 +9245,12 @@ def return_account_to_ban(account_number, comment_text=""):
         [["ban"]]
     )
 
+    try:
+        fresh_row = get_sheet_row_live(SHEET_ACCOUNTS, base_info["row_index"], min_len=13)
+        supabase_upsert_account_from_google_row(fresh_row)
+    except Exception:
+        logging.exception("account mirror to supabase failed after ban")
+
     if issue_info:
         mark_issue_row_as_ban(issue_info["row_index"], comment_text)
 
@@ -9241,6 +9278,12 @@ def return_account_to_free(account_number):
         f"I{base_info['row_index']}:L{base_info['row_index']}",
         [["free", "", "", ""]]
     )
+
+    try:
+        fresh_row = get_sheet_row_live(SHEET_ACCOUNTS, base_info["row_index"], min_len=13)
+        supabase_upsert_account_from_google_row(fresh_row)
+    except Exception:
+        logging.exception("account mirror to supabase failed after return")
 
     delete_last_issue_row(account_number)
 
@@ -9306,6 +9349,78 @@ def supabase_insert(table_name, data):
         logging.exception(f"supabase insert failed: {table_name}, error={e}, data={data}")
         return False
 
+def supabase_upsert_account_from_google_row(row):
+    if not supabase:
+        return False
+
+    try:
+        row = ensure_row_len(row, 13)
+
+        account_number = str(row[0]).strip()
+        if not account_number:
+            return False
+
+        payload = {
+            "nomer_lichki": account_number,
+            "data_pokupki": normalize_date_for_supabase(row[1]),
+            "price": normalize_numeric_for_supabase(row[2]),
+            "y_kogo_kypili": row[3] or None,
+            "limit": normalize_numeric_for_supabase(row[4]),
+            "threshold": row[5] or None,
+            "gmt": row[6] or None,
+            "skladi": row[7] or None,
+            "status": (row[8] or "").strip().lower() or None,
+            "dla_kogo": row[9] or None,
+            "data_vidachi": normalize_date_for_supabase(row[10]),
+            "kto_vzal": row[11] or None,
+            "currency": row[12] or None,
+        }
+
+        existing = (
+            supabase
+            .table("База_личек")
+            .select("nomer_lichki")
+            .eq("nomer_lichki", account_number)
+            .limit(1)
+            .execute()
+        )
+
+        rows = existing.data or []
+
+        if rows:
+            supabase.table("База_личек").update(payload).eq("nomer_lichki", account_number).execute()
+        else:
+            supabase.table("База_личек").insert(payload).execute()
+
+        return True
+
+    except Exception:
+        logging.exception("supabase_upsert_account_from_google_row failed")
+        return False
+
+def supabase_update_status(table, id_field, id_value, status, extra=None):
+    data = {"status": status}
+    if extra:
+        data.update(extra)
+
+    try:
+        supabase.table(table).update(data).eq(id_field, id_value).execute()
+    except Exception:
+        logging.exception(f"supabase_update_status failed: {table}")
+
+def supabase_mark_taken(table, id_field, id_value, user, extra=None):
+    data = {
+        "status": "taken",
+        "kto_vzal": user,
+    }
+    if extra:
+        data.update(extra)
+
+    try:
+        supabase.table(table).update(data).eq(id_field, id_value).execute()
+    except Exception:
+        logging.exception(f"supabase_mark_taken failed: {table}")
+
 def supabase_update(table_name, match_field, match_value, data):
     if not supabase:
         logging.warning(f"supabase disabled, skip update in {table_name}")
@@ -9328,6 +9443,90 @@ def supabase_update(table_name, match_field, match_value, data):
             f"supabase update failed: {table_name}, match_field={match_field}, match_value={match_value}, error={e}, data={data}"
         )
         return False
+
+def supabase_get_account_by_number(account_number):
+    if not supabase:
+        return None
+
+    try:
+        result = (
+            supabase
+            .table("База_личек")
+            .select("*")
+            .eq("nomer_lichki", str(account_number).strip())
+            .limit(1)
+            .execute()
+        )
+        rows = result.data or []
+        return rows[0] if rows else None
+    except Exception:
+        logging.exception("supabase_get_account_by_number failed")
+        return None
+
+
+def supabase_issue_account(account_number, for_whom, who_took_text, today_ddmmyyyy):
+    return supabase_update(
+        "База_личек",
+        "nomer_lichki",
+        str(account_number).strip(),
+        {
+            "status": "taken",
+            "dla_kogo": for_whom,
+            "kto_vzal": who_took_text,
+            "data_vidachi": normalize_date_for_supabase(today_ddmmyyyy),
+        }
+    )
+
+
+def supabase_return_account_to_free(account_number):
+    return supabase_update(
+        "База_личек",
+        "nomer_lichki",
+        str(account_number).strip(),
+        {
+            "status": "free",
+            "dla_kogo": None,
+            "kto_vzal": None,
+            "data_vidachi": None,
+        }
+    )
+
+
+def supabase_ban_account(account_number):
+    return supabase_update(
+        "База_личек",
+        "nomer_lichki",
+        str(account_number).strip(),
+        {
+            "status": "ban",
+            "dla_kogo": "ban",
+        }
+    )
+
+
+def normalize_account_row_from_supabase(row):
+    if not row:
+        return None
+
+    purchase_date = denormalize_date_from_supabase(row.get("data_pokupki"))
+    issue_date = denormalize_date_from_supabase(row.get("data_vidachi"))
+
+    return {
+        "account_number": str(row.get("nomer_lichki") or "").strip(),
+        "purchase_date": purchase_date or "",
+        "price": row.get("price") or "",
+        "supplier": row.get("y_kogo_kypili") or "",
+        "limit_value": row.get("limit"),
+        "threshold": row.get("threshold"),
+        "gmt": row.get("gmt"),
+        "currency": row.get("currency") or "",
+        "warehouses": row.get("skladi") or "",
+        "status": str(row.get("status") or "").strip().lower(),
+        "for_whom": row.get("dla_kogo") or "",
+        "who_took": row.get("kto_vzal") or "",
+        "date_taken": issue_date or "",
+        "raw": row,
+    }
 
 def supabase_insert_issue_row(name, shop, purchase_date, price, issue_date, supplier, for_whom):
     return supabase_insert("Простые лички 26", {
@@ -9365,6 +9564,20 @@ def normalize_numeric_for_supabase(value):
         return float(text)
     except Exception:
         return None
+
+def denormalize_date_from_supabase(value):
+    text = str(value or "").strip()
+    if not text:
+        return ""
+
+    try:
+        if re.match(r"^\d{4}-\d{2}-\d{2}$", text):
+            dt = datetime.strptime(text, "%Y-%m-%d")
+            return dt.strftime("%d/%m/%Y")
+    except Exception:
+        pass
+
+    return text
 
 
 # =========================
@@ -9720,6 +9933,12 @@ def issue_accounts_bulk(account_numbers, for_whom, username):
             row[9] = for_whom
             row[10] = today
             row[11] = who_took_text
+
+            try:
+                fresh_row = get_sheet_row_live(SHEET_ACCOUNTS, row_index, min_len=13)
+                supabase_upsert_account_from_google_row(fresh_row)
+            except Exception:
+                logging.exception("account mirror to supabase failed after issue")
 
             issue_rows.append([
                 account_number,
@@ -10649,6 +10868,16 @@ def process_kings_bulk_proxy_step(chat_id, user_id, username, proxy_text):
                             who_took_text
                         ]]
                     )
+                    supabase_mark_taken(
+                        "База_кингов",
+                        "nazvanie",
+                        king_name,
+                        who_took_text,
+                        {
+                            "komy_vidali": username,
+                            "data_vzatia": normalize_date_for_supabase(today)
+                        }
+                    )
 
                     if sync_id:
                         sync_status_to_basebot(
@@ -11343,6 +11572,17 @@ def confirm_bm_issue(chat_id, user_id, username):
                     who_took_text,
                     today
                 ]]
+            )
+
+            supabase_mark_taken(
+                "База_БМ",
+                "id_bm",
+                row[0],
+               who_took_text,
+                {
+                      "dla_kogo": "account",
+                    "data_vidachi": normalize_date_for_supabase(today)
+                }
             )
 
             if sync_id:
