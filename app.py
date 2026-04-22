@@ -6238,7 +6238,7 @@ def process_farm_kings_bulk_proxy_step_background(chat_id, user_id, username):
 
     sync_id = current_item.get("sync_id")
 
-    supabase_insert("База_фарм_кинг", {
+    supabase_insert("База_фарм_кинги", {
         "nazvanie": king_name or None,
         "data_pokupki": normalize_date_for_supabase(row[1]),
         "price": row[2] or None,
@@ -17295,7 +17295,7 @@ def handle_message(msg):
                 )
                 mark_sheet_cache_stale(SHEET_FARM_KINGS)
 
-                supabase_insert("База_фарм_кинг", {
+                supabase_insert("База_фарм_кинги", {
                     "nazvanie": king_name or None,
                     "price": row[2] or None,
                     "y_kogo_kypili": row[3] or None,
