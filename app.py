@@ -135,7 +135,6 @@ FARMERS_USERS = {
 MISC_HIDDEN_USERS = {
     7851493919,  # CateBlanchettAccountManager
     8797795819,  # markzuckerberg_farm
-    8435159019,  # Robert_Pattinson_Account_Manager
     7426931469,  # JimCarrey_AccountManager
     8589105033,  # owenwilson_farmer
 }
@@ -216,6 +215,7 @@ STICKER_BROADCAST_USERS = [
     7953116439,
     8334712952,
     8035275476,
+    8435159019,
     8482380951,
     8389730381,
     8503147017,
@@ -1494,13 +1494,19 @@ def notify_admin_about_error(source, error_text, extra_text=""):
 
 def get_poll_target_users(scope):
     if scope == POLL_SCOPE_ACCOUNTS:
-        return dict(ACCOUNTS_USERS)
+        result = dict(ACCOUNTS_USERS)
+        result.pop(8797795819, None)
+        return result
+
     if scope == POLL_SCOPE_FARMERS:
-        return dict(FARMERS_USERS)
+        result = dict(FARMERS_USERS)
+        result.pop(8797795819, None)
+        return result
 
     result = {}
     result.update(ACCOUNTS_USERS)
     result.update(FARMERS_USERS)
+    result.pop(8797795819, None)
     return result
 
 def get_poll_admin_viewers():
