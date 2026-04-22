@@ -7079,7 +7079,7 @@ def return_farm_bm_to_ban(bm_id, comment_text=""):
 
     supabase_update(
         "База_фарм_бм",
-        "id_BMa",
+        "id_bm",
         bm_id,
         {
             "status": "ban",
