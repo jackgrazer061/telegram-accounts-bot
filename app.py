@@ -3512,6 +3512,58 @@ def add_kings_from_txt_content(file_text, target_sheet=SHEET_KINGS):
                 ])
             basebot_append_rows(basebot_sheet, basebot_rows)
 
+        for row in to_append:
+            if target_sheet == SHEET_KINGS:
+                supabase_insert("База_кингов", {
+                    "nazvanie": row[0] or None,
+                    "data_pokupki": normalize_date_for_supabase(row[1]),
+                    "price": normalize_numeric_for_supabase(row[2]),
+                    "y_kogo_kypili": row[3] or None,
+                    "status": row[4] or "free",
+                    "komy_vidali": row[5] or None,
+                    "data_vzatia": normalize_date_for_supabase(row[6]),
+                    "geo": row[7] or None,
+                    "kto_vzal": row[8] or None,
+                    "dannie": row[9] or None,
+                    "dannie_2": row[10] or None,
+                    "dannie_3": row[11] or None,
+                    "SYNC_ID": row[12] or None,
+                })
+
+            elif target_sheet == SHEET_CRYPTO_KINGS:
+                supabase_insert("База_крипта_кинги", {
+                    "nazvanie": row[0] or None,
+                    "data_pokupki": normalize_date_for_supabase(row[1]),
+                    "price": normalize_numeric_for_supabase(row[2]),
+                    "postavshik": row[3] or None,
+                    "status": row[4] or "free",
+                    "komy_vidali": row[5] or None,
+                    "data_vzatia": normalize_date_for_supabase(row[6]),
+                    "geo": row[7] or None,
+                    "kto_vzal": row[8] or None,
+                    "dannie": row[9] or None,
+                    "dannie_2": row[10] or None,
+                    "dannie_3": row[11] or None,
+                    "SYNC_ID": row[12] or None,
+                })
+
+            elif target_sheet == SHEET_FARM_KINGS:
+                supabase_insert("База_фарм_кинги", {
+                    "nazvanie": row[0] or None,
+                    "data_pokupki": normalize_date_for_supabase(row[1]),
+                    "price": normalize_numeric_for_supabase(row[2]),
+                    "y_kogo_kypili": row[3] or None,
+                    "status": row[4] or "free",
+                    "komy_vidali": row[5] or None,
+                    "data_vzatia": normalize_date_for_supabase(row[6]),
+                    "geo": row[7] or None,
+                    "kto_vzal": row[8] or None,
+                    "dannie": row[9] or None,
+                    "dannie_2": row[10] or None,
+                    "dannie_3": row[11] or None,
+                    "SYNC_ID": row[12] or None,
+                })
+
         invalidate_stats_cache()
 
     message = (
@@ -3557,7 +3609,7 @@ def add_bms_from_txt_content(file_text, target_sheet=SHEET_BMS):
 
     if to_append:
         sheet_append_rows_and_refresh(target_sheet, to_append)
-
+    
         if target_sheet == SHEET_BMS:
             basebot_sheet = BASEBOT_SHEET_BMS
             bm_type = "bm"
@@ -3567,7 +3619,7 @@ def add_bms_from_txt_content(file_text, target_sheet=SHEET_BMS):
         else:
             basebot_sheet = None
             bm_type = "bm"
-
+    
         if basebot_sheet:
             try:
                 basebot_rows = []
@@ -3582,13 +3634,42 @@ def add_bms_from_txt_content(file_text, target_sheet=SHEET_BMS):
                         "",       # data3
                         row[9],   # sync_id (J)
                     ])
-
+    
                 basebot_append_rows(basebot_sheet, basebot_rows)
-
+    
             except Exception as e:
                 logging.exception("add_bms_from_txt_content basebot sync failed")
                 errors.append(f"BaseBot sync error: {e}")
-
+    
+        for row in to_append:
+            if target_sheet == SHEET_BMS:
+                supabase_insert("База_БМ", {
+                    "id_bm": row[0] or None,
+                    "data_pokupki": normalize_date_for_supabase(row[1]),
+                    "price": normalize_numeric_for_supabase(row[2]),
+                    "y_kogo_kypili": row[3] or None,
+                    "status": row[4] or "free",
+                    "dla_kogo": row[5] or None,
+                    "kto_vzal": row[7] or None,
+                    "data_vidachi": normalize_date_for_supabase(row[6]),
+                    "SYNC_ID": row[9] or None,
+                    "dannie": row[8] or None,
+                })
+    
+            elif target_sheet == SHEET_FARM_BMS:
+                supabase_insert("База_фарм_бм", {
+                    "id_bm": row[0] or None,
+                    "data_pokypki": normalize_date_for_supabase(row[1]),
+                    "price": normalize_numeric_for_supabase(row[2]),
+                    "y_kogo_kypili": row[3] or None,
+                    "status": row[4] or "free",
+                    "dla_kogo": row[5] or None,
+                    "kto_vzal": row[7] or None,
+                    "data_vidachi": normalize_date_for_supabase(row[6]),
+                    "SYNC_ID": row[9] or None,
+                    "dannie": row[8] or None,
+                })
+    
         invalidate_stats_cache()
 
     label = "farm BM" if target_sheet == SHEET_FARM_BMS else "BM"
@@ -4068,6 +4149,34 @@ def add_fps_from_text(text, target_sheet=SHEET_FPS):
     if to_append:
         sheet_append_rows_and_refresh(target_sheet, to_append)
         warehouse_rows_added = append_auto_warehouse_rows_for_new_fps(added_items)
+    
+        for row in to_append:
+            if target_sheet == SHEET_FPS:
+                supabase_insert("База_ФП", {
+                    "link_fp": row[0] or None,
+                    "data_pokupki": normalize_date_for_supabase(row[1]),
+                    "price": normalize_numeric_for_supabase(row[2]),
+                    "y_kogo_kypili": row[3] or None,
+                    "sklad": row[4] or None,
+                    "status": row[5] or "free",
+                    "dla_kogo": row[6] or None,
+                    "kto_vzal": row[7] or None,
+                    "data_vidachi": normalize_date_for_supabase(row[8]),
+                })
+    
+            elif target_sheet == SHEET_FARM_FPS:
+                supabase_insert("База_фарм_фп", {
+                    "link_fp": row[0] or None,
+                    "data_pokupki": normalize_date_for_supabase(row[1]),
+                    "price": normalize_numeric_for_supabase(row[2]),
+                    "y_kogo_kypili": row[3] or None,
+                    "sklad": row[4] or None,
+                    "status": row[5] or "free",
+                    "dla_kogo": row[6] or None,
+                    "kto_vzal": row[7] or None,
+                    "data_vidachi": normalize_date_for_supabase(row[8]),
+                })
+    
         invalidate_stats_cache()
 
     message = (
@@ -4186,6 +4295,19 @@ def add_pixels_from_text(file_text):
             ])
 
         basebot_append_rows(BASEBOT_SHEET_PIXELS, basebot_rows)
+
+        for row in to_append:
+            supabase_insert("База_пикселей", {
+                "data_pokupki": normalize_date_for_supabase(row[0]),
+                "price": normalize_numeric_for_supabase(row[1]),
+                "y_kogo_kypili": row[2] or None,
+                "status": row[3] or "free",
+                "komy_vidali": row[4] or None,
+                "data_vzatia": normalize_date_for_supabase(row[5]),
+                "kto_vzal": row[6] or None,
+                "dannie": row[7] or None,
+                "SYNC_ID": row[8] or None,
+            })
         invalidate_stats_cache()
 
     message = (
@@ -9373,6 +9495,25 @@ def add_accounts_from_text(text):
 
     if to_append:
         sheet_append_rows_and_refresh(SHEET_ACCOUNTS, to_append)
+    
+        for row in to_append:
+            supabase_insert("База_личек", {
+                "account_number": row[0] or None,
+                "data_pokupki": normalize_date_for_supabase(row[1]),
+                "price": normalize_numeric_for_supabase(row[2]),
+                "u_kogo_kupili": row[3] or None,
+                "sklad": row[7] or None,
+                "status": row[8] or "free",
+                "limit": None,
+                "threshold": None,
+                "gmt": None,
+                "link": None,
+                "komu_vidali": None,
+                "data_vidachi": None,
+                "valuta": None,
+                "kto_vzal": None,
+            })
+    
         invalidate_stats_cache()
 
     message = (
