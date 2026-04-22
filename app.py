@@ -5274,23 +5274,36 @@ def find_last_pixel_issue_row(pixel_name=None, pixel_id=None):
     return last_match
 
 
-def return_pixel_to_ban(pixel_id, comment_text=""):
-    found = find_pixel_in_base(pixel_id)
+def return_pixel_to_ban(pixel_query, comment_text=""):
+    found = find_pixel_in_base_by_data(pixel_query)
     if not found:
         return False, "Пиксель не найден."
 
-    row = ensure_row_len(found["row"], 26)
+    row = found["row"]
+    if len(row) < 8:
+        row = row + [''] * (8 - len(row))
 
-    if str(row[4]).strip().lower() == "ban":
-        return False, "Пиксель уже в ban."
+    status = str(row[3]).strip().lower()
+    if status == "ban":
+        return False, "Этот Пиксель уже в ban."
+
+    data_text = row[7]
+    pixel_name = extract_pixel_name_from_data(data_text)
+    pixel_id = extract_pixel_id_from_data(data_text)
 
     sheet_update_and_refresh(
         SHEET_PIXELS,
-        f"E{found['row_index']}:F{found['row_index']}",
+        f"D{found['row_index']}:E{found['row_index']}",
         [["ban", "ban"]]
     )
 
-    issue_info = find_last_pixel_issue_row(pixel_id)
+    row = ensure_row_len(row, 26)
+    sync_id = row[8]
+
+    if sync_id:
+        sync_status_to_basebot(BASEBOT_SHEET_PIXELS, sync_id, "ban")
+
+    issue_info = find_last_pixel_issue_row(pixel_name=pixel_name, pixel_id=pixel_id)
     if issue_info:
         mark_issue_row_as_ban(issue_info["row_index"], comment_text)
 
@@ -5300,40 +5313,57 @@ def return_pixel_to_ban(pixel_id, comment_text=""):
         data_text,
         {
             "status": "ban",
-            "dla_kogo": "ban",
+            "komy_vidali": "ban",
         }
     )
 
     invalidate_stats_cache()
     return True, "Пиксель переведён в ban."
 
-def return_pixel_to_free(pixel_id):
-    found = find_pixel_in_base(pixel_id)
+def return_pixel_to_free(pixel_query):
+    found = find_pixel_in_base_by_data(pixel_query)
     if not found:
         return False, "Пиксель не найден."
 
-    row = ensure_row_len(found["row"], 26)
+    row = found["row"]
+    if len(row) < 8:
+        row = row + [''] * (8 - len(row))
 
-    if str(row[4]).strip().lower() == "free":
-        return False, "Пиксель уже free."
+    status = str(row[3]).strip().lower()
+
+    if status == "free":
+        return False, "Этот Пиксель уже free."
+
+    data_text = row[7]
+    pixel_name = extract_pixel_name_from_data(data_text)
+    pixel_id = extract_pixel_id_from_data(data_text)
 
     sheet_update_and_refresh(
         SHEET_PIXELS,
-        f"E{found['row_index']}:H{found['row_index']}",
+        f"D{found['row_index']}:G{found['row_index']}",
         [["free", "", "", ""]]
     )
 
-    delete_last_pixel_issue_row(pixel_id)
+    row = ensure_row_len(row, 26)
+    sync_id = row[8]
+
+    if sync_id:
+        sync_status_to_basebot(BASEBOT_SHEET_PIXELS, sync_id, "free")
+
+    issue_info = find_last_pixel_issue_row(pixel_name=pixel_name, pixel_id=pixel_id)
+    if issue_info:
+        sheet_delete_row_and_refresh(SHEET_ISSUES, issue_info["row_index"])
 
     supabase_update(
         "База_пикселей",
         "dannie",
         data_text,
+        {
             "status": "free",
-            "dla_kogo": None,
+            "komy_vidali": None,
+            "data_vzatia": None,
             "kto_vzal": None,
-            "data_vidachi": None,
-    }
+        }
     )
 
     invalidate_stats_cache()
@@ -6210,7 +6240,7 @@ def process_farm_kings_bulk_proxy_step_background(chat_id, user_id, username):
 
     supabase_insert("База_фарм_кинг", {
         "nazvanie": king_name or None,
-        "data_pokypki": normalize_date_for_supabase(row[1]),
+        "data_pokupki": normalize_date_for_supabase(row[1]),
         "price": row[2] or None,
         "y_kogo_kypili": row[3] or None,
         "status": "taken",
