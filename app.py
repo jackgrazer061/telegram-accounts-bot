@@ -7377,7 +7377,7 @@ def return_farm_fp_to_free(fp_link):
         return False, "Это ФП уже free."
 
     sheet_update_and_refresh(
-        SHEET_FARM_FP,
+        SHEET_FARM_FPS,
         f"F{found['row_index']}:I{found['row_index']}",
         [["free", "", "", ""]]
     )
