@@ -3569,20 +3569,25 @@ def add_bms_from_txt_content(file_text, target_sheet=SHEET_BMS):
             bm_type = "bm"
 
         if basebot_sheet:
-            basebot_rows = []
-            for row in to_append:
-                basebot_rows.append([
-                    bm_type,  # тип
-                    row[3],   # supplier
-                    row[4],   # status
-                    "",       # geo
-                    row[8],   # data
-                    "",       # data2
-                    "",       # data3
-                    row[9],   # sync_id (J)
-                ])
+            try:
+                basebot_rows = []
+                for row in to_append:
+                    basebot_rows.append([
+                        bm_type,  # тип
+                        row[3],   # supplier
+                        row[4],   # status
+                        "",       # geo
+                        row[8],   # data
+                        "",       # data2
+                        "",       # data3
+                        row[9],   # sync_id (J)
+                    ])
 
-            basebot_append_rows(basebot_sheet, basebot_rows)
+                basebot_append_rows(basebot_sheet, basebot_rows)
+
+            except Exception as e:
+                logging.exception("add_bms_from_txt_content basebot sync failed")
+                errors.append(f"BaseBot sync error: {e}")
 
         invalidate_stats_cache()
 
@@ -7043,18 +7048,45 @@ def issue_farm_bm(chat_id, user_id, username):
             ]]
         )
 
-        if sync_id:
-            sync_status_to_basebot(BASEBOT_SHEET_FARM_BMS, sync_id, "taken")
+        side_errors = []
 
-        append_issue_row_fixed([
-            row[0],
-            "БМ",
-            row[1],
-            normalize_numeric_for_sheet(row[2]),
-            today,
-            row[3],
-            "farm"
-        ])
+        if sync_id:
+            try:
+                sync_status_to_basebot(BASEBOT_SHEET_FARM_BMS, sync_id, "taken")
+            except Exception as e:
+                logging.exception("issue_farm_bm basebot sync failed")
+                side_errors.append(f"BaseBot sync error: {e}")
+
+        try:
+            append_issue_row_fixed([
+                row[0],
+                "БМ",
+                row[1],
+                normalize_numeric_for_sheet(row[2]),
+                today,
+                row[3],
+                "farm"
+            ])
+        except Exception as e:
+            logging.exception("issue_farm_bm issue row append failed")
+            side_errors.append(f"Issues append error: {e}")
+
+        try:
+            supabase_insert("База_фарм_бм", {
+                "id_bm": row[0] or None,
+                "data_pokypki": normalize_date_for_supabase(row[1]),
+                "price": normalize_numeric_for_supabase(row[2]),
+                "y_kogo_kypili": row[3] or None,
+                "status": "taken",
+                "dla_kogo": "farm",
+                "kto_vzal": who_took_text,
+                "data_vidachi": normalize_date_for_supabase(today),
+                "dannie": row[8] or None,
+                "SYNC_ID": sync_id or None,
+            })
+        except Exception as e:
+            logging.exception("issue_farm_bm supabase insert failed")
+            side_errors.append(f"Supabase insert error: {e}")
 
         invalidate_stats_cache()
 
@@ -7069,6 +7101,12 @@ def issue_farm_bm(chat_id, user_id, username):
         tg_send_message(chat_id, row[8])
     else:
         tg_send_message(chat_id, "Данные BM не найдены.")
+
+    if side_errors:
+        tg_send_long_message(
+            chat_id,
+            "BM выдался, но были ошибки в доп. синхронизации:\n\n" + "\n".join(side_errors)
+        )
 
     send_farm_bms_menu(chat_id, "Выбери следующее действие:")
 
