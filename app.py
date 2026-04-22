@@ -5333,7 +5333,7 @@ def return_pixel_to_free(pixel_id):
             "dla_kogo": None,
             "kto_vzal": None,
             "data_vidachi": None,
-        }
+    }
     )
 
     invalidate_stats_cache()
