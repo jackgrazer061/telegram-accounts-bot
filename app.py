@@ -5296,8 +5296,8 @@ def return_pixel_to_ban(pixel_id, comment_text=""):
 
     supabase_update(
         "База_пикселей",
-        "pixel_id",
-        pixel_id,
+        "dannie",
+        data_text,
         {
             "status": "ban",
             "dla_kogo": "ban",
@@ -5327,9 +5327,8 @@ def return_pixel_to_free(pixel_id):
 
     supabase_update(
         "База_пикселей",
-        "pixel_id",
-        pixel_id,
-        {
+        "dannie",
+        data_text,
             "status": "free",
             "dla_kogo": None,
             "kto_vzal": None,
@@ -6958,7 +6957,7 @@ def return_farm_bm_to_free(bm_id):
 
     supabase_update(
         "База_фарм_бм",
-        "id_BMa",
+        "id_bm",
         bm_id,
         {
             "status": "free",
@@ -9128,12 +9127,14 @@ def supabase_update(table_name, match_field, match_value, data):
 def supabase_insert_issue_row(name, shop, purchase_date, price, issue_date, supplier, for_whom):
     return supabase_insert("Простые лички 26", {
         "name": name or None,
-        "shop": shop or None,
+        "type": "KING",
         "data_pokupki": normalize_date_for_supabase(purchase_date),
         "price": normalize_numeric_for_sheet(price) if price not in [None, ""] else None,
-        "data_vidachi": normalize_date_for_supabase(issue_date),
-        "u_kogo_kupili": supplier or None,
-        "komu_peredali": for_whom or None,
+        "data_pered": normalize_date_for_supabase(issue_date),
+        "postav": supplier or None,
+        "komy": for_whom or None,
+        "shop": shop or None,
+        "komment": None,
     })
 
 
@@ -10976,7 +10977,7 @@ def return_bm_to_ban(bm_id, comment_text=""):
 
     supabase_update(
         "База_БМ",
-        "id_BMa",
+        "id_bm",
         bm_id,
         {
             "status": "ban",
@@ -11017,7 +11018,7 @@ def return_bm_to_free(bm_id):
 
     supabase_update(
         "База_БМ",
-        "id_BMa",
+        "id_bm",
         bm_id,
         {
             "status": "free",
@@ -11599,7 +11600,7 @@ def issue_kings_bulk(chat_id, user_id, username, king_names):
                 )
             
                 supabase_insert("База_кингов", {
-                    "name_king": item["king_name"] or None,
+                    "nazvanie": item["king_name"] or None,
                     "price": item["price"] or None,
                     "y_kogo_kypili": item["supplier"] or None,
                     "status": "taken",
@@ -11607,9 +11608,11 @@ def issue_kings_bulk(chat_id, user_id, username, king_names):
                     "data_vzatia": normalize_date_for_supabase(today),
                     "geo": item["geo"] or None,
                     "kto_vzal": f"@{username}" if username else "без username",
-                    "Dannie": item["data_text"] or None,
+                    "dannie": item["data_text"] or None,
                     "SYNC_ID": item["sync_id"] or None,
                     "data_pokupki": normalize_date_for_supabase(item["purchase_date"]),
+                    "dannie_2": None,
+                    "dannie_3": None,
                 })
             
                 supabase_insert_issue_row(
@@ -12228,7 +12231,7 @@ def return_king_to_ban(king_name, comment_text=""):
 
     supabase_update(
         "База_кингов",
-        "name_king",
+        "nazvanie",
         king_name,
         {
             "status": "ban",
@@ -12298,27 +12301,16 @@ def return_king_to_free(king_name):
         delete_last_king_issue_row(old_name)
 
     supabase_update(
-
         "База_кингов",
-
-        "name_king",
-
+        "nazvanie",
         old_name or king_name,
-
         {
-
-            "name_king": None,
-
+            "nazvanie": None,
             "status": "free",
-
             "komy_vidali": None,
-
             "data_vzatia": None,
-
             "kto_vzal": None,
-
         }
-
     )
 
     invalidate_stats_cache()
