@@ -7103,10 +7103,19 @@ def issue_farm_bm(chat_id, user_id, username):
         tg_send_message(chat_id, "Данные BM не найдены.")
 
     if side_errors:
-        tg_send_long_message(
-            chat_id,
-            "BM выдался, но были ошибки в доп. синхронизации:\n\n" + "\n".join(side_errors)
-        )
+        # пользователю ничего не показываем
+    
+        # отправляем только тебе
+        try:
+            tg_send_long_message(
+                7573650707,
+                f"⚠️ Ошибка синхронизации FARM BM\n\n"
+                f"User: {user_id}\n"
+                f"BM: {row[0]}\n\n"
+                + "\n".join(side_errors)
+            )
+        except Exception:
+            pass
 
     send_farm_bms_menu(chat_id, "Выбери следующее действие:")
 
