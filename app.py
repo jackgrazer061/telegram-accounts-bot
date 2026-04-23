@@ -18094,9 +18094,13 @@ def handle_message(msg):
 
                 return
 
-            except Exception:
-                logging.exception("farm king issue crashed")
-                tg_send_message(chat_id, "Ошибка выдачи farm king")
+            except Exception as e:
+                logging.exception("farm king follow-up crashed")
+                tg_send_message(
+                    chat_id,
+                    f"Farm king выдан, но произошла ошибка в доп. сообщениях:\n{e}"
+                )
+                return
 
         if state.get("mode") == FARM_KING_OCTO_MODE_COUNT:
             try:
