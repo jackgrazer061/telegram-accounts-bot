@@ -13,7 +13,6 @@ from google.oauth2.service_account import Credentials
 import threading
 import uuid
 import tempfile
-from supabase import create_client
 
 app = Flask(__name__)
 CORS(app)
@@ -72,26 +71,7 @@ if not BACKUP_SPREADSHEET_ID:
 
 if not BASEBOT_SPREADSHEET_ID:
     raise RuntimeError("BASEBOT_SPREADSHEET_ID не задан")
-
-supabase = None
-
-def supabase_insert(*args, **kwargs):
-    return None
-
-def supabase_update(*args, **kwargs):
-    return None
-
-def supabase_mark_taken(*args, **kwargs):
-    return None
-
-def supabase_insert_issue_row(*args, **kwargs):
-    return None
-
-def supabase_mark_issue_row_as_ban(*args, **kwargs):
-    return None
-
-def supabase_delete_last_issue_row(*args, **kwargs):
-    return None
+    
 
 # =========================
 # ACCESS CONTROL
@@ -148,6 +128,7 @@ FARMERS_USERS = {
 MISC_HIDDEN_USERS = {
     7851493919,  # CateBlanchettAccountManager
     8797795819,  # markzuckerberg_farm
+    8435159019,  # Robert_Pattinson_Account_Manager
     7426931469,  # JimCarrey_AccountManager
     8589105033,  # owenwilson_farmer
 }
@@ -228,7 +209,6 @@ STICKER_BROADCAST_USERS = [
     7953116439,
     8334712952,
     8035275476,
-    8435159019,
     8482380951,
     8389730381,
     8503147017,
@@ -1507,19 +1487,13 @@ def notify_admin_about_error(source, error_text, extra_text=""):
 
 def get_poll_target_users(scope):
     if scope == POLL_SCOPE_ACCOUNTS:
-        result = dict(ACCOUNTS_USERS)
-        result.pop(8797795819, None)
-        return result
-
+        return dict(ACCOUNTS_USERS)
     if scope == POLL_SCOPE_FARMERS:
-        result = dict(FARMERS_USERS)
-        result.pop(8797795819, None)
-        return result
+        return dict(FARMERS_USERS)
 
     result = {}
     result.update(ACCOUNTS_USERS)
     result.update(FARMERS_USERS)
-    result.pop(8797795819, None)
     return result
 
 def get_poll_admin_viewers():
@@ -3525,58 +3499,6 @@ def add_kings_from_txt_content(file_text, target_sheet=SHEET_KINGS):
                 ])
             basebot_append_rows(basebot_sheet, basebot_rows)
 
-        for row in to_append:
-            if target_sheet == SHEET_KINGS:
-                supabase_insert("База_кингов", {
-                    "nazvanie": row[0] or None,
-                    "data_pokupki": normalize_date_for_supabase(row[1]),
-                    "price": normalize_numeric_for_supabase(row[2]),
-                    "y_kogo_kypili": row[3] or None,
-                    "status": row[4] or "free",
-                    "komy_vidali": row[5] or None,
-                    "data_vzatia": normalize_date_for_supabase(row[6]),
-                    "geo": row[7] or None,
-                    "kto_vzal": row[8] or None,
-                    "dannie": row[9] or None,
-                    "dannie_2": row[10] or None,
-                    "dannie_3": row[11] or None,
-                    "SYNC_ID": row[12] or None,
-                })
-
-            elif target_sheet == SHEET_CRYPTO_KINGS:
-                supabase_insert("База_крипта_кинги", {
-                    "nazvanie": row[0] or None,
-                    "data_pokupki": normalize_date_for_supabase(row[1]),
-                    "price": normalize_numeric_for_supabase(row[2]),
-                    "postavshik": row[3] or None,
-                    "status": row[4] or "free",
-                    "komy_vidali": row[5] or None,
-                    "data_vzatia": normalize_date_for_supabase(row[6]),
-                    "geo": row[7] or None,
-                    "kto_vzal": row[8] or None,
-                    "dannie": row[9] or None,
-                    "dannie_2": row[10] or None,
-                    "dannie_3": row[11] or None,
-                    "SYNC_ID": row[12] or None,
-                })
-
-            elif target_sheet == SHEET_FARM_KINGS:
-                supabase_insert("База_фарм_кинги", {
-                    "nazvanie": row[0] or None,
-                    "data_pokupki": normalize_date_for_supabase(row[1]),
-                    "price": normalize_numeric_for_supabase(row[2]),
-                    "y_kogo_kypili": row[3] or None,
-                    "status": row[4] or "free",
-                    "komy_vidali": row[5] or None,
-                    "data_vzatia": normalize_date_for_supabase(row[6]),
-                    "geo": row[7] or None,
-                    "kto_vzal": row[8] or None,
-                    "dannie": row[9] or None,
-                    "dannie_2": row[10] or None,
-                    "dannie_3": row[11] or None,
-                    "SYNC_ID": row[12] or None,
-                })
-
         invalidate_stats_cache()
 
     message = (
@@ -3622,7 +3544,7 @@ def add_bms_from_txt_content(file_text, target_sheet=SHEET_BMS):
 
     if to_append:
         sheet_append_rows_and_refresh(target_sheet, to_append)
-    
+
         if target_sheet == SHEET_BMS:
             basebot_sheet = BASEBOT_SHEET_BMS
             bm_type = "bm"
@@ -3632,57 +3554,23 @@ def add_bms_from_txt_content(file_text, target_sheet=SHEET_BMS):
         else:
             basebot_sheet = None
             bm_type = "bm"
-    
+
         if basebot_sheet:
-            try:
-                basebot_rows = []
-                for row in to_append:
-                    basebot_rows.append([
-                        bm_type,  # тип
-                        row[3],   # supplier
-                        row[4],   # status
-                        "",       # geo
-                        row[8],   # data
-                        "",       # data2
-                        "",       # data3
-                        row[9],   # sync_id (J)
-                    ])
-    
-                basebot_append_rows(basebot_sheet, basebot_rows)
-    
-            except Exception as e:
-                logging.exception("add_bms_from_txt_content basebot sync failed")
-                errors.append(f"BaseBot sync error: {e}")
-    
-        for row in to_append:
-            if target_sheet == SHEET_BMS:
-                supabase_insert("База_БМ", {
-                    "id_bm": row[0] or None,
-                    "data_pokupki": normalize_date_for_supabase(row[1]),
-                    "price": normalize_numeric_for_supabase(row[2]),
-                    "y_kogo_kypili": row[3] or None,
-                    "status": row[4] or "free",
-                    "dla_kogo": row[5] or None,
-                    "kto_vzal": row[7] or None,
-                    "data_vidachi": normalize_date_for_supabase(row[6]),
-                    "SYNC_ID": row[9] or None,
-                    "dannie": row[8] or None,
-                })
-    
-            elif target_sheet == SHEET_FARM_BMS:
-                supabase_insert("База_фарм_бм", {
-                    "id_bm": row[0] or None,
-                    "data_pokypki": normalize_date_for_supabase(row[1]),
-                    "price": normalize_numeric_for_supabase(row[2]),
-                    "y_kogo_kypili": row[3] or None,
-                    "status": row[4] or "free",
-                    "dla_kogo": row[5] or None,
-                    "kto_vzal": row[7] or None,
-                    "data_vidachi": normalize_date_for_supabase(row[6]),
-                    "SYNC_ID": row[9] or None,
-                    "dannie": row[8] or None,
-                })
-    
+            basebot_rows = []
+            for row in to_append:
+                basebot_rows.append([
+                    bm_type,  # тип
+                    row[3],   # supplier
+                    row[4],   # status
+                    "",       # geo
+                    row[8],   # data
+                    "",       # data2
+                    "",       # data3
+                    row[9],   # sync_id (J)
+                ])
+
+            basebot_append_rows(basebot_sheet, basebot_rows)
+
         invalidate_stats_cache()
 
     label = "farm BM" if target_sheet == SHEET_FARM_BMS else "BM"
@@ -4162,34 +4050,6 @@ def add_fps_from_text(text, target_sheet=SHEET_FPS):
     if to_append:
         sheet_append_rows_and_refresh(target_sheet, to_append)
         warehouse_rows_added = append_auto_warehouse_rows_for_new_fps(added_items)
-    
-        for row in to_append:
-            if target_sheet == SHEET_FPS:
-                supabase_insert("База_ФП", {
-                    "link_fp": row[0] or None,
-                    "data_pokupki": normalize_date_for_supabase(row[1]),
-                    "price": normalize_numeric_for_supabase(row[2]),
-                    "y_kogo_kypili": row[3] or None,
-                    "sklad": row[4] or None,
-                    "status": row[5] or "free",
-                    "dla_kogo": row[6] or None,
-                    "kto_vzal": row[7] or None,
-                    "data_vidachi": normalize_date_for_supabase(row[8]),
-                })
-    
-            elif target_sheet == SHEET_FARM_FPS:
-                supabase_insert("База_фарм_фп", {
-                    "link_fp": row[0] or None,
-                    "data_pokupki": normalize_date_for_supabase(row[1]),
-                    "price": normalize_numeric_for_supabase(row[2]),
-                    "y_kogo_kypili": row[3] or None,
-                    "sklad": row[4] or None,
-                    "status": row[5] or "free",
-                    "dla_kogo": row[6] or None,
-                    "kto_vzal": row[7] or None,
-                    "data_vidachi": normalize_date_for_supabase(row[8]),
-                })
-    
         invalidate_stats_cache()
 
     message = (
@@ -4308,19 +4168,6 @@ def add_pixels_from_text(file_text):
             ])
 
         basebot_append_rows(BASEBOT_SHEET_PIXELS, basebot_rows)
-
-        for row in to_append:
-            supabase_insert("База_пикселей", {
-                "data_pokupki": normalize_date_for_supabase(row[0]),
-                "price": normalize_numeric_for_supabase(row[1]),
-                "y_kogo_kypili": row[2] or None,
-                "status": row[3] or "free",
-                "komy_vidali": row[4] or None,
-                "data_vzatia": normalize_date_for_supabase(row[5]),
-                "kto_vzal": row[6] or None,
-                "dannie": row[7] or None,
-                "SYNC_ID": row[8] or None,
-            })
         invalidate_stats_cache()
 
     message = (
@@ -4424,17 +4271,6 @@ def return_fp_to_ban(fp_link, comment_text=""):
     issue_info = find_last_fp_issue_row(fp_link)
     if issue_info:
         mark_issue_row_as_ban(issue_info["row_index"], comment_text)
-        supabase_mark_issue_row_as_ban(fp_link, "FP", found["row"][8], found["row"][6], comment_text)
-
-    supabase_update(
-        "База_ФП",
-        "link_fp",
-        fp_link,
-        {
-            "status": "ban",
-            "dla_kogo": "ban",
-        }
-    )
 
     invalidate_stats_cache()
     return True, "ФП переведено в ban."
@@ -4461,25 +4297,6 @@ def return_fp_to_free(fp_link):
     )
 
     delete_last_fp_issue_row(fp_link)
-
-    supabase_delete_last_issue_row(
-        fp_link,
-        "FP",
-        found["row"][8],
-        found["row"][6]
-    )
-
-    supabase_update(
-        "База_ФП",
-        "link_fp",
-        fp_link,
-        {
-            "status": "free",
-            "dla_kogo": None,
-            "kto_vzal": None,
-            "data_vidachi": None,
-        }
-    )
 
     invalidate_stats_cache()
     return True, "ФП возвращено в free."
@@ -4926,17 +4743,6 @@ def issue_fps_bulk(chat_id, user_id, username, count_needed):
                     ]]
                 )
 
-                supabase_mark_taken(
-                    "База_ФП",
-                    "link_fp",
-                    row[0],
-                    who_took_text,
-                    {
-                        "dla_kogo": fp_for_whom,
-                        "data_vidachi": normalize_date_for_supabase(today)
-                    }
-                )
-
                 issue_rows.append([
                     row[0],
                     "FP",
@@ -4962,21 +4768,6 @@ def issue_fps_bulk(chat_id, user_id, username, count_needed):
                     issue_rows,
                     value_input_option="USER_ENTERED"
                 )
-
-                for row in issue_rows:
-                    try:
-                        supabase_insert_issue_row(
-                            name=row[0],
-                            item_type="FP",
-                            shop=row[1],
-                            purchase_date=row[2],
-                            price=row[3],
-                            issue_date=row[4],
-                            supplier=row[5],
-                            for_whom=row[6],
-                        )
-                    except Exception:
-                        logging.exception("supabase_insert_issue_row failed in issue_fps_bulk")
 
             for warehouse_name in sorted(set(warehouses_touched), key=extract_warehouse_sort_key):
                 remaining_in_warehouse = count_free_fp_in_warehouse(warehouse_name)
@@ -5074,18 +4865,6 @@ def confirm_pixel_issue(chat_id, user_id, username):
                 ]]
             )
 
-            supabase_update(
-                "База_пикселей",
-                "dannie",
-                data_text,
-                {
-                    "status": "taken",
-                    "komy_vidali": pixel_for_whom,
-                    "data_vzatia": normalize_date_for_supabase(today),
-                    "kto_vzal": who_took_text,
-                }
-            )
-
             if sync_id:
                 sync_status_to_basebot(BASEBOT_SHEET_PIXELS, sync_id, "taken")
 
@@ -5098,20 +4877,6 @@ def confirm_pixel_issue(chat_id, user_id, username):
                 row[2],
                 pixel_for_whom
             ])
-
-            try:
-                supabase_insert_issue_row(
-                    name=issue_pixel_value,
-                    item_type="PIXEL",
-                    shop="PIXEL",
-                    purchase_date=row[0],
-                    price=row[1],
-                    issue_date=today,
-                    supplier=row[2],
-                    for_whom=pixel_for_whom,
-                )
-            except Exception:
-                logging.exception("supabase_insert_issue_row failed in confirm_pixel_issue")
 
             invalidate_stats_cache()
             clear_state(user_id)
@@ -5222,18 +4987,6 @@ def issue_pixels_bulk(chat_id, user_id, username, count_needed):
                     ]]
                 )
 
-                supabase_update(
-                    "База_пикселей",
-                    "dannie",
-                    data_text,
-                    {
-                        "status": "taken",
-                        "komy_vidali": pixel_for_whom,
-                        "data_vzatia": normalize_date_for_supabase(today),
-                        "kto_vzal": who_took_text,
-                    }
-                )
-
                 row[3] = "taken"
                 row[4] = pixel_for_whom
                 row[5] = today
@@ -5258,21 +5011,6 @@ def issue_pixels_bulk(chat_id, user_id, username, count_needed):
 
             if issue_rows:
                 append_issue_rows_fixed(issue_rows)
-
-                for row in issue_rows:
-                    try:
-                        supabase_insert_issue_row(
-                            name=row[0],
-                            item_type="PIXEL",
-                            shop=row[1],
-                            purchase_date=row[2],
-                            price=row[3],
-                            issue_date=row[4],
-                            supplier=row[5],
-                            for_whom=row[6],
-                        )
-                    except Exception:
-                        logging.exception("supabase_insert_issue_row failed in issue_pixels_bulk")
 
             with table_cache_lock:
                 table_cache[SHEET_PIXELS]["rows"] = current_rows
@@ -5532,25 +5270,13 @@ def return_pixel_to_ban(pixel_query, comment_text=""):
 
     row = ensure_row_len(row, 26)
     sync_id = row[8]
-
+    
     if sync_id:
         sync_status_to_basebot(BASEBOT_SHEET_PIXELS, sync_id, "ban")
 
     issue_info = find_last_pixel_issue_row(pixel_name=pixel_name, pixel_id=pixel_id)
     if issue_info:
         mark_issue_row_as_ban(issue_info["row_index"], comment_text)
-        issue_pixel_value = pixel_id or pixel_name
-        supabase_mark_issue_row_as_ban(issue_pixel_value, "PIXEL", found["row"][5], found["row"][4], comment_text)
-
-    supabase_update(
-        "База_пикселей",
-        "dannie",
-        data_text,
-        {
-            "status": "ban",
-            "komy_vidali": "ban",
-        }
-    )
 
     invalidate_stats_cache()
     return True, "Пиксель переведён в ban."
@@ -5588,27 +5314,6 @@ def return_pixel_to_free(pixel_query):
     issue_info = find_last_pixel_issue_row(pixel_name=pixel_name, pixel_id=pixel_id)
     if issue_info:
         sheet_delete_row_and_refresh(SHEET_ISSUES, issue_info["row_index"])
-
-        issue_pixel_value = pixel_id or pixel_name
-
-        supabase_delete_last_issue_row(
-            issue_pixel_value,
-            "PIXEL",
-            row[5],
-            row[4]
-        )
-
-    supabase_update(
-        "База_пикселей",
-        "dannie",
-        data_text,
-        {
-            "status": "free",
-            "komy_vidali": None,
-            "data_vzatia": None,
-            "kto_vzal": None,
-        }
-    )
 
     invalidate_stats_cache()
     return True, "Пиксель возвращён в free."
@@ -6441,6 +6146,11 @@ def process_farm_kings_bulk_proxy_step_background(chat_id, user_id, username):
         set_state_with_custom_ttl(user_id, state, FARM_KING_BULK_PROXY_TTL)
         return
 
+        state["farm_kings_bulk_results"] = results
+        state["farm_kings_bulk_current_index"] = current_index + 1
+        set_state_with_custom_ttl(user_id, state, FARM_KING_BULK_PROXY_TTL)
+        return
+
     cookies_ok = False
     cookies_msg = ""
     try:
@@ -6478,11 +6188,9 @@ def process_farm_kings_bulk_proxy_step_background(chat_id, user_id, username):
             row[11]
         ]]
     )
-
     mark_sheet_cache_stale(SHEET_FARM_KINGS)
 
     sync_id = current_item.get("sync_id")
-
     if sync_id:
         try:
             sync_status_to_basebot(BASEBOT_SHEET_FARM_KINGS, sync_id, "taken")
@@ -6774,23 +6482,13 @@ def return_farm_king_to_ban(king_name, comment_text=""):
 
     row = ensure_row_len(row, 26)
     sync_id = row[12]
-
+    
     if sync_id:
         sync_status_to_basebot(BASEBOT_SHEET_FARM_KINGS, sync_id, "ban")
 
     issue_info = find_last_king_issue_row(king_name)
     if issue_info:
         mark_issue_row_as_ban(issue_info["row_index"], comment_text)
-
-    supabase_update(
-        "База_фарм_кинг",
-        "nazvanie",
-        king_name,
-        {
-            "status": "ban",
-            "komy_vidali": "ban",
-        }
-    )
 
     invalidate_stats_cache()
     return True, f"Кинг '{king_name}' переведён в ban."
@@ -6829,25 +6527,12 @@ def return_farm_king_to_free(king_name):
 
     row = ensure_row_len(row, 26)
     sync_id = row[12]
-
+    
     if sync_id:
         sync_status_to_basebot(BASEBOT_SHEET_FARM_KINGS, sync_id, "free")
 
     if old_king_name:
         delete_last_king_issue_row(old_king_name)
-
-    supabase_update(
-        "База_фарм_кинг",
-        "nazvanie",
-        old_king_name or king_name,
-        {
-            "nazvanie": None,
-            "status": "free",
-            "komy_vidali": None,
-            "data_vzatia": None,
-            "kto_vzal": None,
-        }
-    )
 
     invalidate_stats_cache()
     return True, f"Farm king '{king_name}' возвращён в free."
@@ -7156,24 +6841,13 @@ def return_farm_bm_to_ban(bm_id, comment_text=""):
 
     row = ensure_row_len(row, 26)
     sync_id = row[9]
-
+    
     if sync_id:
         sync_status_to_basebot(BASEBOT_SHEET_FARM_BMS, sync_id, "ban")
 
     issue_info = find_last_bm_issue_row(bm_id)
     if issue_info:
         mark_issue_row_as_ban(issue_info["row_index"], comment_text)
-        supabase_mark_issue_row_as_ban(bm_id, "BM", found["row"][6], found["row"][5], comment_text)
-
-    supabase_update(
-        "База_фарм_бм",
-        "id_bm",
-        bm_id,
-        {
-            "status": "ban",
-            "dla_kogo": "ban",
-        }
-    )
 
     invalidate_stats_cache()
     return True, f"BM '{bm_id}' переведён в ban."
@@ -7200,23 +6874,11 @@ def return_farm_bm_to_free(bm_id):
 
     row = ensure_row_len(row, 26)
     sync_id = row[9]
-
+    
     if sync_id:
         sync_status_to_basebot(BASEBOT_SHEET_FARM_BMS, sync_id, "free")
 
     delete_last_bm_issue_row(bm_id)
-
-    supabase_update(
-        "База_фарм_бм",
-        "id_bm",
-        bm_id,
-        {
-            "status": "free",
-            "dla_kogo": None,
-            "kto_vzal": None,
-            "data_vidachi": None,
-        }
-    )
 
     invalidate_stats_cache()
     return True, f"Farm BM '{bm_id}' возвращён в free."
@@ -7258,54 +6920,18 @@ def issue_farm_bm(chat_id, user_id, username):
             ]]
         )
 
-        supabase_mark_taken(
-            "База_фарм_бм",
-            "id_bm",
-            row[0],
-            who_took_text,
-            {
-                "dla_kogo": "farm",
-                "data_vidachi": normalize_date_for_supabase(today)
-            }
-        )
-
-        side_errors = []
-
         if sync_id:
-            try:
-                sync_status_to_basebot(BASEBOT_SHEET_FARM_BMS, sync_id, "taken")
-            except Exception as e:
-                logging.exception("issue_farm_bm basebot sync failed")
-                side_errors.append(f"BaseBot sync error: {e}")
+            sync_status_to_basebot(BASEBOT_SHEET_FARM_BMS, sync_id, "taken")
 
-        try:
-            append_issue_row_fixed([
-                row[0],
-                "БМ",
-                row[1],
-                normalize_numeric_for_sheet(row[2]),
-                today,
-                row[3],
-                "farm"
-            ])
-        except Exception as e:
-            logging.exception("issue_farm_bm issue row append failed")
-            side_errors.append(f"Issues append error: {e}")
-
-        try:
-            supabase_insert_issue_row(
-                name=row[0],
-                item_type="BM",
-                shop="BM",
-                purchase_date=row[1],
-                price=row[2],
-                issue_date=today,
-                supplier=row[3],
-                for_whom="farm",
-            )
-        except Exception as e:
-            logging.exception("supabase_insert_issue_row failed in issue_farm_bm")
-            side_errors.append(f"Supabase issue insert error: {e}")
+        append_issue_row_fixed([
+            row[0],
+            "БМ",
+            row[1],
+            normalize_numeric_for_sheet(row[2]),
+            today,
+            row[3],
+            "farm"
+        ])
 
         invalidate_stats_cache()
 
@@ -7320,21 +6946,6 @@ def issue_farm_bm(chat_id, user_id, username):
         tg_send_message(chat_id, row[8])
     else:
         tg_send_message(chat_id, "Данные BM не найдены.")
-
-    if side_errors:
-        # пользователю ничего не показываем
-    
-        # отправляем только тебе
-        try:
-            tg_send_long_message(
-                7573650707,
-                f"⚠️ Ошибка синхронизации FARM BM\n\n"
-                f"User: {user_id}\n"
-                f"BM: {row[0]}\n\n"
-                + "\n".join(side_errors)
-            )
-        except Exception:
-            pass
 
     send_farm_bms_menu(chat_id, "Выбери следующее действие:")
 
@@ -7411,12 +7022,16 @@ def build_farm_fp_search_text(fp_link):
 def return_farm_fp_to_ban(fp_link, comment_text=""):
     found = find_farm_fp_in_base(fp_link)
     if not found:
-        return False, "ФП не найдено."
+        return False, "Farm FP не найдено."
 
-    row = ensure_row_len(found["row"], 26)
+    row = found["row"]
+    if len(row) < 9:
+        row = row + [''] * (9 - len(row))
 
-    if str(row[5]).strip().lower() == "ban":
-        return False, "Это ФП уже в ban."
+    status = str(row[5]).strip().lower()
+
+    if status == "ban":
+        return False, "Это farm FP уже в ban."
 
     sheet_update_and_refresh(
         SHEET_FARM_FPS,
@@ -7427,17 +7042,6 @@ def return_farm_fp_to_ban(fp_link, comment_text=""):
     issue_info = find_last_fp_issue_row(fp_link)
     if issue_info:
         mark_issue_row_as_ban(issue_info["row_index"], comment_text)
-        supabase_mark_issue_row_as_ban(fp_link, "FP", found["row"][8], found["row"][6], comment_text)
-
-    supabase_update(
-        "База_фарм_фп",
-        "link_fp",
-        fp_link,
-        {
-            "status": "ban",
-            "dla_kogo": "ban",
-        }
-    )
 
     invalidate_stats_cache()
     return True, "Farm FP переведено в ban."
@@ -7446,12 +7050,16 @@ def return_farm_fp_to_ban(fp_link, comment_text=""):
 def return_farm_fp_to_free(fp_link):
     found = find_farm_fp_in_base(fp_link)
     if not found:
-        return False, "ФП не найдено."
+        return False, "Farm FP не найдено."
 
-    row = ensure_row_len(found["row"], 26)
+    row = found["row"]
+    if len(row) < 9:
+        row = row + [''] * (9 - len(row))
 
-    if str(row[5]).strip().lower() == "free":
-        return False, "Это ФП уже free."
+    status = str(row[5]).strip().lower()
+
+    if status == "free":
+        return False, "Это farm FP уже free."
 
     sheet_update_and_refresh(
         SHEET_FARM_FPS,
@@ -7460,25 +7068,6 @@ def return_farm_fp_to_free(fp_link):
     )
 
     delete_last_fp_issue_row(fp_link)
-
-    supabase_delete_last_issue_row(
-        fp_link,
-        "FP",
-        found["row"][8],
-        found["row"][6]
-    )
-
-    supabase_update(
-        "База_фарм_фп",
-        "link_fp",
-        fp_link,
-        {
-            "status": "free",
-            "dla_kogo": None,
-            "kto_vzal": None,
-            "data_vidachi": None,
-        }
-    )
 
     invalidate_stats_cache()
     return True, "Farm FP возвращено в free."
@@ -7564,17 +7153,6 @@ def issue_farm_fps(chat_id, user_id, username, count_needed):
                     ]]
                 )
 
-                supabase_mark_taken(
-                    "База_фарм_фп",
-                    "link_fp",
-                    row[0],
-                    who_took_text,
-                    {
-                        "dla_kogo": "farm",
-                        "data_vidachi": normalize_date_for_supabase(today)
-                    }
-                )
-
                 issue_rows.append([
                     row[0],
                     "FP",
@@ -7591,21 +7169,6 @@ def issue_farm_fps(chat_id, user_id, username, count_needed):
 
             if issue_rows:
                 append_issue_rows_fixed(issue_rows)
-
-                for row in issue_rows:
-                    try:
-                        supabase_insert_issue_row(
-                            name=row[0],
-                            item_type="FP",
-                            shop=row[1],
-                            purchase_date=row[2],
-                            price=row[3],
-                            issue_date=row[4],
-                            supplier=row[5],
-                            for_whom=row[6],
-                        )
-                    except Exception:
-                        logging.exception("supabase_insert_issue_row failed in issue_farm_fps")
 
             invalidate_stats_cache()
 
@@ -9345,12 +8908,6 @@ def return_account_to_ban(account_number, comment_text=""):
         [["ban"]]
     )
 
-    try:
-        fresh_row = get_sheet_row_live(SHEET_ACCOUNTS, base_info["row_index"], min_len=13)
-        supabase_upsert_account_from_google_row(fresh_row)
-    except Exception:
-        logging.exception("account mirror to supabase failed after ban")
-
     if issue_info:
         mark_issue_row_as_ban(issue_info["row_index"], comment_text)
 
@@ -9379,12 +8936,6 @@ def return_account_to_free(account_number):
         [["free", "", "", ""]]
     )
 
-    try:
-        fresh_row = get_sheet_row_live(SHEET_ACCOUNTS, base_info["row_index"], min_len=13)
-        supabase_upsert_account_from_google_row(fresh_row)
-    except Exception:
-        logging.exception("account mirror to supabase failed after return")
-
     delete_last_issue_row(account_number)
 
     invalidate_stats_cache()
@@ -9397,46 +8948,6 @@ def delete_last_issue_row(account_number):
 
     sheet_delete_row_and_refresh(SHEET_ISSUES, issue_info["row_index"])
     return True
-
-def supabase_delete_last_issue_row(name, shop, issue_date, for_whom):
-    if not supabase:
-        return False
-
-    try:
-        normalized_issue_date = normalize_date_for_supabase(issue_date)
-
-        found = (
-            supabase
-            .table("Простые лички 26")
-            .select("id")
-            .eq("name", str(name).strip())
-            .eq("shop", str(shop).strip())
-            .eq("komy", str(for_whom).strip())
-            .eq("data_pered", normalized_issue_date)
-            .order("id", desc=True)
-            .limit(1)
-            .execute()
-        )
-
-        rows = found.data or []
-        if not rows:
-            return False
-
-        row_id = rows[0]["id"]
-
-        (
-            supabase
-            .table("Простые лички 26")
-            .delete()
-            .eq("id", row_id)
-            .execute()
-        )
-
-        return True
-
-    except Exception:
-        logging.exception("supabase_delete_last_issue_row failed")
-        return False
 
 def build_account_search_text(account_number):
     base_info = find_account_in_base(account_number)
@@ -9473,290 +8984,6 @@ def build_account_search_text(account_number):
 
     if not banned:
         text += f"Для кого взял: {for_whom}\n"
-
-    return text
-
-def supabase_insert(table_name, data):
-    if not supabase:
-        logging.warning(f"supabase disabled, skip insert into {table_name}")
-        return False
-
-    try:
-        result = supabase.table(table_name).insert(data).execute()
-        logging.info(f"supabase insert ok: {table_name} data={data}")
-        return True
-    except Exception as e:
-        logging.exception(f"supabase insert failed: {table_name}, error={e}, data={data}")
-        return False
-
-def supabase_upsert_account_from_google_row(row):
-    if not supabase:
-        return False
-
-    try:
-        row = ensure_row_len(row, 13)
-
-        account_number = str(row[0]).strip()
-        if not account_number:
-            return False
-
-        payload = {
-            "nomer_lichki": account_number,
-            "data_pokupki": normalize_date_for_supabase(row[1]),
-            "price": normalize_numeric_for_supabase(row[2]),
-            "y_kogo_kypili": row[3] or None,
-            "limit": normalize_numeric_for_supabase(row[4]),
-            "threshold": row[5] or None,
-            "gmt": row[6] or None,
-            "skladi": row[7] or None,
-            "status": (row[8] or "").strip().lower() or None,
-            "dla_kogo": row[9] or None,
-            "data_vidachi": normalize_date_for_supabase(row[10]),
-            "kto_vzal": row[11] or None,
-            "currency": row[12] or None,
-        }
-
-        existing = (
-            supabase
-            .table("База_личек")
-            .select("nomer_lichki")
-            .eq("nomer_lichki", account_number)
-            .limit(1)
-            .execute()
-        )
-
-        rows = existing.data or []
-
-        if rows:
-            supabase.table("База_личек").update(payload).eq("nomer_lichki", account_number).execute()
-        else:
-            supabase.table("База_личек").insert(payload).execute()
-
-        return True
-
-    except Exception:
-        logging.exception("supabase_upsert_account_from_google_row failed")
-        return False
-
-def supabase_update_status(table, id_field, id_value, status, extra=None):
-    data = {"status": status}
-    if extra:
-        data.update(extra)
-
-    try:
-        supabase.table(table).update(data).eq(id_field, id_value).execute()
-    except Exception:
-        logging.exception(f"supabase_update_status failed: {table}")
-
-def supabase_mark_taken(table, id_field, id_value, user, extra=None):
-    data = {
-        "status": "taken",
-        "kto_vzal": user,
-    }
-    if extra:
-        data.update(extra)
-
-    try:
-        supabase.table(table).update(data).eq(id_field, id_value).execute()
-    except Exception:
-        logging.exception(f"supabase_mark_taken failed: {table}")
-
-def supabase_update(table_name, match_field, match_value, data):
-    if not supabase:
-        logging.warning(f"supabase disabled, skip update in {table_name}")
-        return False
-
-    try:
-        result = (
-            supabase
-            .table(table_name)
-            .update(data)
-            .eq(match_field, match_value)
-            .execute()
-        )
-        logging.info(
-            f"supabase update ok: {table_name} where {match_field}={match_value} data={data}"
-        )
-        return True
-    except Exception as e:
-        logging.exception(
-            f"supabase update failed: {table_name}, match_field={match_field}, match_value={match_value}, error={e}, data={data}"
-        )
-        return False
-
-def supabase_get_account_by_number(account_number):
-    if not supabase:
-        return None
-
-    try:
-        result = (
-            supabase
-            .table("База_личек")
-            .select("*")
-            .eq("nomer_lichki", str(account_number).strip())
-            .limit(1)
-            .execute()
-        )
-        rows = result.data or []
-        return rows[0] if rows else None
-    except Exception:
-        logging.exception("supabase_get_account_by_number failed")
-        return None
-
-
-def supabase_issue_account(account_number, for_whom, who_took_text, today_ddmmyyyy):
-    return supabase_update(
-        "База_личек",
-        "nomer_lichki",
-        str(account_number).strip(),
-        {
-            "status": "taken",
-            "dla_kogo": for_whom,
-            "kto_vzal": who_took_text,
-            "data_vidachi": normalize_date_for_supabase(today_ddmmyyyy),
-        }
-    )
-
-
-def supabase_return_account_to_free(account_number):
-    return supabase_update(
-        "База_личек",
-        "nomer_lichki",
-        str(account_number).strip(),
-        {
-            "status": "free",
-            "dla_kogo": None,
-            "kto_vzal": None,
-            "data_vidachi": None,
-        }
-    )
-
-
-def supabase_ban_account(account_number):
-    return supabase_update(
-        "База_личек",
-        "nomer_lichki",
-        str(account_number).strip(),
-        {
-            "status": "ban",
-            "dla_kogo": "ban",
-        }
-    )
-
-
-def normalize_account_row_from_supabase(row):
-    if not row:
-        return None
-
-    purchase_date = denormalize_date_from_supabase(row.get("data_pokupki"))
-    issue_date = denormalize_date_from_supabase(row.get("data_vidachi"))
-
-    return {
-        "account_number": str(row.get("nomer_lichki") or "").strip(),
-        "purchase_date": purchase_date or "",
-        "price": row.get("price") or "",
-        "supplier": row.get("y_kogo_kypili") or "",
-        "limit_value": row.get("limit"),
-        "threshold": row.get("threshold"),
-        "gmt": row.get("gmt"),
-        "currency": row.get("currency") or "",
-        "warehouses": row.get("skladi") or "",
-        "status": str(row.get("status") or "").strip().lower(),
-        "for_whom": row.get("dla_kogo") or "",
-        "who_took": row.get("kto_vzal") or "",
-        "date_taken": issue_date or "",
-        "raw": row,
-    }
-
-def supabase_insert_issue_row(name, item_type, shop, purchase_date, price, issue_date, supplier, for_whom):
-    return supabase_insert("Простые лички 26", {
-        "name": name or None,
-        "type": item_type or None,
-        "data_pokupki": normalize_date_for_supabase(purchase_date),
-        "price": normalize_numeric_for_sheet(price) if price not in [None, ""] else None,
-        "data_pered": normalize_date_for_supabase(issue_date),
-        "postav": supplier or None,
-        "komy": for_whom or None,
-        "shop": shop or None,
-        "komment": None,
-    })
-
-def supabase_mark_issue_row_as_ban(name, shop, issue_date, for_whom, comment_text):
-    if not supabase:
-        return False
-
-    try:
-        normalized_issue_date = normalize_date_for_supabase(issue_date)
-
-        found = (
-            supabase
-            .table("Простые лички 26")
-            .select("id")
-            .eq("name", str(name).strip())
-            .eq("shop", str(shop).strip())
-            .eq("komy", str(for_whom).strip())
-            .eq("data_pered", normalized_issue_date)
-            .order("id", desc=True)
-            .limit(1)
-            .execute()
-        )
-
-        rows = found.data or []
-        if not rows:
-            return False
-
-        row_id = rows[0]["id"]
-
-        (
-            supabase
-            .table("Простые лички 26")
-            .update({
-                "komment": comment_text or None
-            })
-            .eq("id", row_id)
-            .execute()
-        )
-
-        return True
-
-    except Exception:
-        logging.exception("supabase_mark_issue_row_as_ban failed")
-        return False
-
-def normalize_date_for_supabase(value):
-    text = str(value or "").strip()
-    if not text:
-        return None
-
-    for fmt in ("%d/%m/%Y", "%Y-%m-%d", "%d.%m.%Y"):
-        try:
-            return datetime.strptime(text, fmt).strftime("%Y-%m-%d")
-        except Exception:
-            pass
-
-    return None
-
-
-def normalize_numeric_for_supabase(value):
-    text = str(value or "").strip().replace(",", ".")
-    if not text:
-        return None
-    try:
-        return float(text)
-    except Exception:
-        return None
-
-def denormalize_date_from_supabase(value):
-    text = str(value or "").strip()
-    if not text:
-        return ""
-
-    try:
-        if re.match(r"^\d{4}-\d{2}-\d{2}$", text):
-            dt = datetime.strptime(text, "%Y-%m-%d")
-            return dt.strftime("%d/%m/%Y")
-    except Exception:
-        pass
 
     return text
 
@@ -9889,25 +9116,6 @@ def add_accounts_from_text(text):
 
     if to_append:
         sheet_append_rows_and_refresh(SHEET_ACCOUNTS, to_append)
-    
-        for row in to_append:
-            supabase_insert("База_личек", {
-                "account_number": row[0] or None,
-                "data_pokupki": normalize_date_for_supabase(row[1]),
-                "price": normalize_numeric_for_supabase(row[2]),
-                "u_kogo_kupili": row[3] or None,
-                "sklad": row[7] or None,
-                "status": row[8] or "free",
-                "limit": None,
-                "threshold": None,
-                "gmt": None,
-                "link": None,
-                "komu_vidali": None,
-                "data_vidachi": None,
-                "valuta": None,
-                "kto_vzal": None,
-            })
-    
         invalidate_stats_cache()
 
     message = (
@@ -10114,12 +9322,6 @@ def issue_accounts_bulk(account_numbers, for_whom, username):
             row[9] = for_whom
             row[10] = today
             row[11] = who_took_text
-
-            try:
-                fresh_row = get_sheet_row_live(SHEET_ACCOUNTS, row_index, min_len=13)
-                supabase_upsert_account_from_google_row(fresh_row)
-            except Exception:
-                logging.exception("account mirror to supabase failed after issue")
 
             issue_rows.append([
                 account_number,
@@ -11049,16 +10251,6 @@ def process_kings_bulk_proxy_step(chat_id, user_id, username, proxy_text):
                             who_took_text
                         ]]
                     )
-                    supabase_mark_taken(
-                        "База_кингов",
-                        "nazvanie",
-                        king_name,
-                        who_took_text,
-                        {
-                            "komy_vidali": state.get("king_for_whom", ""),
-                            "data_vzatia": normalize_date_for_supabase(today)
-                        }
-                    )
 
                     if sync_id:
                         sync_status_to_basebot(
@@ -11075,20 +10267,6 @@ def process_kings_bulk_proxy_step(chat_id, user_id, username, proxy_text):
                         supplier=row[3],
                         for_whom=state.get("king_for_whom", "")
                     )
-
-                    try:
-                        supabase_insert_issue_row(
-                            name=king_name,
-                            item_type="KING",
-                            shop="KING",
-                            purchase_date=row[1],
-                            price=row[2],
-                            issue_date=today,
-                            supplier=row[3],
-                            for_whom=state.get("king_for_whom", ""),
-                        )
-                    except Exception as e:
-                        logging.warning(f"[KING BULK] Failed to insert issue row: {e}")
 
                     invalidate_stats_cache()
                 else:
@@ -11615,24 +10793,13 @@ def return_bm_to_ban(bm_id, comment_text=""):
 
     row = ensure_row_len(row, 26)
     sync_id = row[9]
-
+    
     if sync_id:
         sync_status_to_basebot(BASEBOT_SHEET_BMS, sync_id, "ban")
 
     issue_info = find_last_bm_issue_row(bm_id)
     if issue_info:
         mark_issue_row_as_ban(issue_info["row_index"], comment_text)
-        supabase_mark_issue_row_as_ban(bm_id, "BM", found["row"][6], found["row"][5], comment_text)
-
-    supabase_update(
-        "База_БМ",
-        "id_bm",
-        bm_id,
-        {
-            "status": "ban",
-            "dla_kogo": "ban",
-        }
-    )
 
     invalidate_stats_cache()
     return True, f"БМ '{bm_id}' переведён в ban."
@@ -11664,25 +10831,6 @@ def return_bm_to_free(bm_id):
         sync_status_to_basebot(BASEBOT_SHEET_BMS, sync_id, "free")
 
     delete_last_bm_issue_row(bm_id)
-
-    supabase_delete_last_issue_row(
-        bm_id,
-        "BM",
-        found["row"][6],
-        found["row"][5]
-    )
-
-    supabase_update(
-        "База_БМ",
-        "id_bm",
-        bm_id,
-        {
-            "status": "free",
-            "dla_kogo": None,
-            "kto_vzal": None,
-            "data_vidachi": None,
-        }
-    )
 
     invalidate_stats_cache()
     return True, f"БМ '{bm_id}' возвращён в free."
@@ -11776,44 +10924,6 @@ def confirm_bm_issue(chat_id, user_id, username):
                     today
                 ]]
             )
-
-            supabase_mark_taken(
-                "База_БМ",
-                "id_bm",
-                row[0],
-               who_took_text,
-                {
-                      "dla_kogo": "account",
-                    "data_vidachi": normalize_date_for_supabase(today)
-                }
-            )
-
-            try:
-                append_issue_row_fixed([
-                    bm_id,
-                    "БМ",
-                    purchase_date,
-                    normalize_numeric_for_sheet(price),
-                    today,
-                    supplier,
-                    bm_for_whom
-                ])
-            except Exception as e:
-                logging.exception("confirm_bm_issue issue row append failed")
-
-            try:
-                supabase_insert_issue_row(
-                    name=bm_id,
-                    item_type="BM",
-                    shop="BM",
-                    purchase_date=purchase_date,
-                    price=price,
-                    issue_date=today,
-                    supplier=supplier,
-                    for_whom=bm_for_whom,
-                )
-            except Exception as e:
-                logging.exception("supabase_insert_issue_row failed in confirm_bm_issue")
 
             if sync_id:
                 sync_status_to_basebot(BASEBOT_SHEET_BMS, sync_id, "taken")
@@ -12292,33 +11402,7 @@ def issue_kings_bulk(chat_id, user_id, username, king_names):
                     supplier=item["supplier"],
                     for_whom=king_for_whom
                 )
-            
-                supabase_insert("База_кингов", {
-                    "nazvanie": item["king_name"] or None,
-                    "price": item["price"] or None,
-                    "y_kogo_kypili": item["supplier"] or None,
-                    "status": "taken",
-                    "komy_vidali": king_for_whom or None,
-                    "data_vzatia": normalize_date_for_supabase(today),
-                    "geo": item["geo"] or None,
-                    "kto_vzal": f"@{username}" if username else "без username",
-                    "dannie": item["data_text"] or None,
-                    "SYNC_ID": item["sync_id"] or None,
-                    "data_pokupki": normalize_date_for_supabase(item["purchase_date"]),
-                    "dannie_2": None,
-                    "dannie_3": None,
-                })
-            
-                supabase_insert_issue_row(
-                    name=item["king_name"],
-                    shop="KING",
-                    purchase_date=item["purchase_date"],
-                    price=item["price"],
-                    issue_date=today,
-                    supplier=item["supplier"],
-                    for_whom=king_for_whom,
-                )
-            
+
             invalidate_stats_cache()
             clear_state(user_id)
 
@@ -12640,124 +11724,22 @@ def process_crypto_bulk_proxy_step(chat_id, user_id, username, proxy_text):
     today = datetime.now(MOSCOW_TZ).strftime("%d/%m/%Y")
     who_took_text = f"@{username}" if username else "без username"
 
+    octo_ok = False
+    octo_result = None
+    error_text = ""
+
     try:
-        octo_ok = False
-        octo_result = None
-        error_text = ""
-
-        try:
-            octo_ok, octo_result = ensure_octo_profile_with_retry(
-                ensure_func=ensure_octo_profile_for_crypto_king,
-                profile_name=king_name,
-                parsed=parsed_crypto,
-                proxy_data=proxy_data
-            )
-        except Exception as e:
-            logging.exception("process_crypto_bulk_proxy_step octo failed")
-            error_text = str(e)
-
-        if not octo_ok:
-            results.append({
-                "king_name": king_name,
-                "price": price_value,
-                "geo": geo_value,
-                "supplier": supplier_value,
-                "data_text": data_text,
-                "parsed_crypto": parsed_crypto,
-                "octo_ok": False,
-                "error_text": error_text or str(octo_result or "не удалось завести в Octo")
-            })
-
-            state["crypto_bulk_results"] = results
-            state["crypto_bulk_current_index"] = current_index + 1
-            state["crypto_bulk_issue_rows"] = pending_issue_rows
-            set_state_with_custom_ttl(user_id, state, CRYPTO_BULK_PROXY_TTL)
-
-            start_crypto_kings_bulk_proxy_step(chat_id, user_id)
-            return
-
-        cookies_ok = False
-        cookies_msg = ""
-        try:
-            profile_uuid = extract_octo_profile_uuid_from_result(octo_result)
-            cookies_payload = normalize_crypto_cookies_for_import(
-                parsed_crypto.get("cookies_json", "")
-            )
-
-            if cookies_payload and profile_uuid:
-                cookies_ok, cookies_msg = try_import_crypto_king_cookies(
-                    profile_uuid=profile_uuid,
-                    cookies_payload=cookies_payload
-                )
-            else:
-                cookies_msg = "cookies не найдены или profile_uuid пустой"
-        except Exception as e:
-            logging.exception("process_crypto_bulk_proxy_step cookies failed")
-            cookies_msg = str(e)
-
-        logging.info(f"[CRYPTO BULK] before sheet_update king_name={king_name}")
-        sheet_update_raw(
-            SHEET_CRYPTO_KINGS,
-            f"A{king_row}:L{king_row}",
-            [[
-                king_name,
-                row[1],
-                row[2],
-                row[3],
-                "taken",
-                king_for_whom,
-                today,
-                geo_value,
-                who_took_text,
-                row[9],
-                row[10],
-                row[11]
-            ]]
+        octo_ok, octo_result = ensure_octo_profile_with_retry(
+            ensure_func=ensure_octo_profile_for_crypto_king,
+            profile_name=king_name,
+            parsed=parsed_crypto,
+            proxy_data=proxy_data
         )
-        mark_sheet_cache_stale(SHEET_CRYPTO_KINGS)
+    except Exception as e:
+        logging.exception("process_crypto_bulk_proxy_step octo failed")
+        error_text = str(e)
 
-        sync_id = current_item.get("sync_id")
-
-        logging.info(f"[CRYPTO BULK] before supabase_mark_taken king_name={king_name}")
-        supabase_mark_taken(
-            "База_крипта_кинги",
-            "nazvanie",
-            king_name,
-            who_took_text,
-            {
-                 "komy_vidali": king_for_whom,
-                 "data_vzatia": normalize_date_for_supabase(today)
-            }
-        )
-
-        if sync_id:
-            try:
-                sync_status_to_basebot(BASEBOT_SHEET_CRYPTO_KINGS, sync_id, "taken")
-            except Exception:
-                logging.exception("process_crypto_bulk_proxy_step basebot sync failed")
-
-        pending_issue_rows.append([
-            king_name,
-            "KING",
-            row[1],
-            normalize_numeric_for_sheet(row[2]),
-            today,
-            row[3],
-            king_for_whom
-        ])
-
-        logging.info(f"[CRYPTO BULK] before supabase_insert_issue_row king_name={king_name}")
-        supabase_insert_issue_row(
-            name=king_name,
-            item_type="KING",
-            shop="KING",
-            purchase_date=row[1],
-            price=row[2],
-            issue_date=today,
-            supplier=row[3],
-            for_whom=king_for_whom,
-        )
-
+    if not octo_ok:
         results.append({
             "king_name": king_name,
             "price": price_value,
@@ -12765,10 +11747,8 @@ def process_crypto_bulk_proxy_step(chat_id, user_id, username, proxy_text):
             "supplier": supplier_value,
             "data_text": data_text,
             "parsed_crypto": parsed_crypto,
-            "octo_ok": True,
-            "octo_result": octo_result,
-            "cookies_ok": cookies_ok,
-            "cookies_msg": cookies_msg
+            "octo_ok": False,
+            "error_text": error_text or str(octo_result or "не удалось завести в Octo")
         })
 
         state["crypto_bulk_results"] = results
@@ -12776,13 +11756,84 @@ def process_crypto_bulk_proxy_step(chat_id, user_id, username, proxy_text):
         state["crypto_bulk_issue_rows"] = pending_issue_rows
         set_state_with_custom_ttl(user_id, state, CRYPTO_BULK_PROXY_TTL)
 
-        logging.info(f"[CRYPTO BULK] before next step current_index={state['crypto_bulk_current_index']}")
         start_crypto_kings_bulk_proxy_step(chat_id, user_id)
-
-    except Exception as e:
-        logging.exception("process_crypto_bulk_proxy_step crashed AFTER proxy accepted")
-        tg_send_message(chat_id, f"Ошибка после принятия proxy:\n{e}")
         return
+
+    cookies_ok = False
+    cookies_msg = ""
+    try:
+        profile_uuid = extract_octo_profile_uuid_from_result(octo_result)
+        cookies_payload = normalize_crypto_cookies_for_import(
+            parsed_crypto.get("cookies_json", "")
+        )
+
+        if cookies_payload and profile_uuid:
+            cookies_ok, cookies_msg = try_import_crypto_king_cookies(
+                profile_uuid=profile_uuid,
+                cookies_payload=cookies_payload
+            )
+        else:
+            cookies_msg = "cookies не найдены или profile_uuid пустой"
+    except Exception as e:
+        logging.exception("process_crypto_bulk_proxy_step cookies failed")
+        cookies_msg = str(e)
+
+    sheet_update_raw(
+        SHEET_CRYPTO_KINGS,
+        f"A{king_row}:L{king_row}",
+        [[
+            king_name,
+            row[1],
+            row[2],
+            row[3],
+            "taken",
+            king_for_whom,
+            today,
+            geo_value,
+            who_took_text,
+            row[9],
+            row[10],
+            row[11]
+        ]]
+    )
+    mark_sheet_cache_stale(SHEET_CRYPTO_KINGS)
+
+    sync_id = current_item.get("sync_id")
+    if sync_id:
+        try:
+            sync_status_to_basebot(BASEBOT_SHEET_CRYPTO_KINGS, sync_id, "taken")
+        except Exception:
+            logging.exception("process_crypto_bulk_proxy_step basebot sync failed")
+
+    pending_issue_rows.append([
+        king_name,
+        "KING",
+        row[1],
+        normalize_numeric_for_sheet(row[2]),
+        today,
+        row[3],
+        king_for_whom
+    ])
+
+    results.append({
+        "king_name": king_name,
+        "price": price_value,
+        "geo": geo_value,
+        "supplier": supplier_value,
+        "data_text": data_text,
+        "parsed_crypto": parsed_crypto,
+        "octo_ok": True,
+        "octo_result": octo_result,
+        "cookies_ok": cookies_ok,
+        "cookies_msg": cookies_msg
+    })
+
+    state["crypto_bulk_results"] = results
+    state["crypto_bulk_current_index"] = current_index + 1
+    state["crypto_bulk_issue_rows"] = pending_issue_rows
+    set_state_with_custom_ttl(user_id, state, CRYPTO_BULK_PROXY_TTL)
+
+    start_crypto_kings_bulk_proxy_step(chat_id, user_id)
 
 def append_king_to_issues_sheet(king_name, purchase_date, price, transfer_date, supplier, for_whom):
     append_issue_row_fixed([
@@ -12906,123 +11957,90 @@ def find_king_in_base_by_name(king_name):
 
 
 def return_king_to_ban(king_name, comment_text=""):
-    found = find_king_in_base_by_name(king_name)
-    if not found:
-        return False, "Кинг не найден."
+    base_info = find_king_in_base_by_name(king_name)
+    if not base_info:
+        return False, "Кинг не найден в базах."
 
-    row = ensure_row_len(found["row"], 26)
+    row = base_info["row"]
+    sheet_name = base_info["sheet_name"]
 
-    if str(row[4]).strip().lower() == "ban":
+    if len(row) < 12:
+        row = row + [''] * (12 - len(row))
+
+    status = str(row[4]).strip().lower()
+
+    if status == "ban":
         return False, "Этот кинг уже в ban."
 
     sheet_update_and_refresh(
-        SHEET_KINGS,
-        f"E{found['row_index']}:F{found['row_index']}",
+        sheet_name,
+        f"E{base_info['row_index']}:F{base_info['row_index']}",
         [["ban", "ban"]]
     )
 
+    row = ensure_row_len(row, 26)
     sync_id = row[12]
+    
     if sync_id:
-        sync_status_to_basebot(BASEBOT_SHEET_KINGS, sync_id, "ban")
+        if sheet_name == SHEET_KINGS:
+            sync_status_to_basebot(BASEBOT_SHEET_KINGS, sync_id, "ban")
+        elif sheet_name == SHEET_CRYPTO_KINGS:
+            sync_status_to_basebot(BASEBOT_SHEET_CRYPTO_KINGS, sync_id, "ban")
 
     issue_info = find_last_king_issue_row(king_name)
     if issue_info:
         mark_issue_row_as_ban(issue_info["row_index"], comment_text)
-        supabase_mark_issue_row_as_ban(king_name, "KING", found["row"][6], found["row"][5], comment_text)
-
-    supabase_update(
-        "База_кингов",
-        "nazvanie",
-        king_name,
-        {
-            "status": "ban",
-            "komy_vidali": "ban",
-        }
-    )
 
     invalidate_stats_cache()
     return True, f"Кинг '{king_name}' переведён в ban."
 
 def return_king_to_free(king_name):
+    base_info = find_king_in_base_by_name(king_name)
+    if not base_info:
+        return False, "Кинг не найден в базах."
 
-    found = find_king_in_base_by_name(king_name)
+    row = base_info["row"]
+    sheet_name = base_info["sheet_name"]
 
-    if not found:
-
-        return False, "Кинг не найден."
-
-    row = ensure_row_len(found["row"], 26)
+    if len(row) < 12:
+        row = row + [''] * (12 - len(row))
 
     status = str(row[4]).strip().lower()
 
     if status == "free":
-
         return False, "Этот кинг уже free."
 
-    old_name = str(row[0]).strip()
+    old_king_name = str(row[0]).strip()
 
     sheet_update_and_refresh(
-
-        SHEET_KINGS,
-
-        f"A{found['row_index']}:I{found['row_index']}",
-
+        sheet_name,
+        f"A{base_info['row_index']}:I{base_info['row_index']}",
         [[
-
-            "",
-
-            row[1],
-
-            row[2],
-
-            row[3],
-
-            "free",
-
-            "",
-
-            "",
-
-            row[7],
-
-            ""
-
+            "",          # A название очищаем
+            row[1],      # B дата покупки
+            row[2],      # C цена
+            row[3],      # D поставщик
+            "free",      # E статус
+            "",          # F для кого
+            "",          # G дата взятия
+            row[7],      # H geo
+            ""           # I кто взял
         ]]
-
     )
 
+    row = ensure_row_len(row, 26)
     sync_id = row[12]
-
+    
     if sync_id:
+        if sheet_name == SHEET_KINGS:
+            sync_status_to_basebot(BASEBOT_SHEET_KINGS, sync_id, "free")
+        elif sheet_name == SHEET_CRYPTO_KINGS:
+            sync_status_to_basebot(BASEBOT_SHEET_CRYPTO_KINGS, sync_id, "free")
 
-        sync_status_to_basebot(BASEBOT_SHEET_KINGS, sync_id, "free")
-
-    if old_name:
-
-        delete_last_king_issue_row(old_name)
-
-        supabase_delete_last_issue_row(
-            king_name,
-            "KING",
-            found["row"][6],
-            found["row"][5]
-        )
-
-    supabase_update(
-        "База_кингов",
-        "nazvanie",
-        old_name or king_name,
-        {
-            "nazvanie": None,
-            "status": "free",
-            "komy_vidali": None,
-            "data_vzatia": None,
-            "kto_vzal": None,
-        }
-    )
+    if old_king_name:
+        delete_last_king_issue_row(old_king_name)
 
     invalidate_stats_cache()
-
     return True, f"Кинг '{king_name}' возвращён в free."
 
 def find_crypto_king_in_base_by_name(king_name):
@@ -17973,22 +16991,6 @@ def handle_message(msg):
                 )
                 mark_sheet_cache_stale(SHEET_FARM_KINGS)
 
-                supabase_insert("База_фарм_кинги", {
-                    "nazvanie": king_name or None,
-                    "price": row[2] or None,
-                    "y_kogo_kypili": row[3] or None,
-                    "status": "taken",
-                    "komy_vidali": "farm",
-                    "data_vzatia": normalize_date_for_supabase(today),
-                    "geo": geo_value or None,
-                    "kto_vzal": who_took_text or None,
-                    "dannie": row[9] or None,
-                    "dannie_2": row[10] or None,
-                    "dannie_3": row[11] or None,
-                    "SYNC_ID": sync_id or None,
-                    "data_pokupki": normalize_date_for_supabase(row[1]),
-                })
-
                 if sync_id:
                     sync_status_to_basebot(BASEBOT_SHEET_FARM_KINGS, sync_id, "taken")
 
@@ -18002,16 +17004,6 @@ def handle_message(msg):
                 )
 
                 invalidate_stats_cache()
-
-                supabase_insert_issue_row(
-                    name=king_name,
-                    shop="KING",
-                    purchase_date=row[1],
-                    price=row[2],
-                    issue_date=today,
-                    supplier=row[3],
-                    for_whom="farm",
-                )
 
                 preview_message_id = state.get("farm_king_preview_message_id")
 
@@ -18087,13 +17079,9 @@ def handle_message(msg):
 
                 return
 
-            except Exception as e:
-                logging.exception("farm king follow-up crashed")
-                tg_send_message(
-                    chat_id,
-                    f"Farm king выдан, но произошла ошибка в доп. сообщениях:\n{e}"
-                )
-                return
+            except Exception:
+                logging.exception("farm king issue crashed")
+                tg_send_message(chat_id, "Ошибка выдачи farm king")
 
         if state.get("mode") == FARM_KING_OCTO_MODE_COUNT:
             try:
@@ -18791,22 +17779,6 @@ def handle_message(msg):
                 )
                 mark_sheet_cache_stale(SHEET_CRYPTO_KINGS)
 
-                supabase_insert("База_крипта_кинги", {
-                    "nazvanie": king_name or None,
-                    "price": row[2] or None,
-                    "postavshik": row[3] or None,
-                    "status": "taken",
-                    "komy_vidali": king_for_whom or None,
-                    "data_vzatia": normalize_date_for_supabase(today),
-                    "geo": geo_value or None,
-                    "kto_vzal": who_took_text or None,
-                    "dannie": row[9] or None,
-                    "dannie_2": row[10] or None,
-                    "dannie_3": row[11] or None,
-                    "SYNC_ID": sync_id or None,
-                    "data_pokupki": normalize_date_for_supabase(row[1]),
-                })
-
                 if sync_id:
                     sync_status_to_basebot(BASEBOT_SHEET_CRYPTO_KINGS, sync_id, "taken")
 
@@ -18820,16 +17792,6 @@ def handle_message(msg):
                 )
 
                 invalidate_stats_cache()
-
-                supabase_insert_issue_row(
-                    name=king_name,
-                    shop="KING",
-                    purchase_date=row[1],
-                    price=row[2],
-                    issue_date=today,
-                    supplier=row[3],
-                    for_whom=king_for_whom,
-                )
 
                 preview_message_id = state.get("crypto_preview_message_id")
 
