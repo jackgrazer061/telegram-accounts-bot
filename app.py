@@ -128,9 +128,16 @@ FARMERS_USERS = {
 MISC_HIDDEN_USERS = {
     7851493919,  # CateBlanchettAccountManager
     8797795819,  # markzuckerberg_farm
-    8435159019,  # Robert_Pattinson_Account_Manager
     7426931469,  # JimCarrey_AccountManager
     8589105033,  # owenwilson_farmer
+}
+
+BROADCAST_INCLUDED_USERS = {
+    8435159019: "Robert_Pattinson_Account_Manager",
+}
+
+BROADCAST_EXCLUDED_USERS = {
+    8797795819,  # markzuckerberg_farm
 }
 
 def is_admin(user_id):
@@ -209,6 +216,7 @@ STICKER_BROADCAST_USERS = [
     7953116439,
     8334712952,
     8035275476,
+    8435159019,
     8482380951,
     8389730381,
     8503147017,
@@ -1487,13 +1495,19 @@ def notify_admin_about_error(source, error_text, extra_text=""):
 
 def get_poll_target_users(scope):
     if scope == POLL_SCOPE_ACCOUNTS:
-        return dict(ACCOUNTS_USERS)
-    if scope == POLL_SCOPE_FARMERS:
-        return dict(FARMERS_USERS)
+        result = dict(ACCOUNTS_USERS)
+    elif scope == POLL_SCOPE_FARMERS:
+        result = dict(FARMERS_USERS)
+    else:
+        result = {}
+        result.update(ACCOUNTS_USERS)
+        result.update(FARMERS_USERS)
 
-    result = {}
-    result.update(ACCOUNTS_USERS)
-    result.update(FARMERS_USERS)
+    result.update(BROADCAST_INCLUDED_USERS)
+
+    for excluded_uid in BROADCAST_EXCLUDED_USERS:
+        result.pop(excluded_uid, None)
+
     return result
 
 def get_poll_admin_viewers():
@@ -1691,7 +1705,10 @@ def get_message_targets(scope):
         users.update(ADMINS)
         users.update(ADMIN_FARM_USERS)
 
-    users.pop(8797795819, None)
+    users.update(BROADCAST_INCLUDED_USERS)
+
+    for excluded_uid in BROADCAST_EXCLUDED_USERS:
+        users.pop(excluded_uid, None)
 
     return users
 
