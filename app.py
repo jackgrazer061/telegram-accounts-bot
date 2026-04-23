@@ -4905,6 +4905,17 @@ def issue_fps_bulk(chat_id, user_id, username, count_needed):
                     ]]
                 )
 
+                supabase_mark_taken(
+                    "База_ФП",
+                    "link_fp",
+                    row[0],
+                    who_took_text,
+                    {
+                        "dla_kogo": fp_for_whom,
+                        "data_vidachi": normalize_date_for_supabase(today)
+                    }
+                )
+
                 issue_rows.append([
                     row[0],
                     "FP",
@@ -4930,6 +4941,21 @@ def issue_fps_bulk(chat_id, user_id, username, count_needed):
                     issue_rows,
                     value_input_option="USER_ENTERED"
                 )
+
+                for row in issue_rows:
+                    try:
+                        supabase_insert_issue_row(
+                            name=row[0],
+                            item_type="FP",
+                            shop=row[1],
+                            purchase_date=row[2],
+                            price=row[3],
+                            issue_date=row[4],
+                            supplier=row[5],
+                            for_whom=row[6],
+                        )
+                    except Exception:
+                        logging.exception("supabase_insert_issue_row failed in issue_fps_bulk")
 
             for warehouse_name in sorted(set(warehouses_touched), key=extract_warehouse_sort_key):
                 remaining_in_warehouse = count_free_fp_in_warehouse(warehouse_name)
@@ -5027,6 +5053,18 @@ def confirm_pixel_issue(chat_id, user_id, username):
                 ]]
             )
 
+            supabase_update(
+                "База_пикселей",
+                "dannie",
+                data_text,
+                {
+                    "status": "taken",
+                    "komy_vidali": pixel_for_whom,
+                    "data_vzatia": normalize_date_for_supabase(today),
+                    "kto_vzal": who_took_text,
+                }
+            )
+
             if sync_id:
                 sync_status_to_basebot(BASEBOT_SHEET_PIXELS, sync_id, "taken")
 
@@ -5039,6 +5077,20 @@ def confirm_pixel_issue(chat_id, user_id, username):
                 row[2],
                 pixel_for_whom
             ])
+
+            try:
+                supabase_insert_issue_row(
+                    name=issue_pixel_value,
+                    item_type="PIXEL",
+                    shop="PIXEL",
+                    purchase_date=row[0],
+                    price=row[1],
+                    issue_date=today,
+                    supplier=row[2],
+                    for_whom=pixel_for_whom,
+                )
+            except Exception:
+                logging.exception("supabase_insert_issue_row failed in confirm_pixel_issue")
 
             invalidate_stats_cache()
             clear_state(user_id)
@@ -5149,6 +5201,18 @@ def issue_pixels_bulk(chat_id, user_id, username, count_needed):
                     ]]
                 )
 
+                supabase_update(
+                    "База_пикселей",
+                    "dannie",
+                    data_text,
+                    {
+                        "status": "taken",
+                        "komy_vidali": pixel_for_whom,
+                        "data_vzatia": normalize_date_for_supabase(today),
+                        "kto_vzal": who_took_text,
+                    }
+                )
+
                 row[3] = "taken"
                 row[4] = pixel_for_whom
                 row[5] = today
@@ -5173,6 +5237,21 @@ def issue_pixels_bulk(chat_id, user_id, username, count_needed):
 
             if issue_rows:
                 append_issue_rows_fixed(issue_rows)
+
+                for row in issue_rows:
+                    try:
+                        supabase_insert_issue_row(
+                            name=row[0],
+                            item_type="PIXEL",
+                            shop=row[1],
+                            purchase_date=row[2],
+                            price=row[3],
+                            issue_date=row[4],
+                            supplier=row[5],
+                            for_whom=row[6],
+                        )
+                    except Exception:
+                        logging.exception("supabase_insert_issue_row failed in issue_pixels_bulk")
 
             with table_cache_lock:
                 table_cache[SHEET_PIXELS]["rows"] = current_rows
@@ -6381,21 +6460,6 @@ def process_farm_kings_bulk_proxy_step_background(chat_id, user_id, username):
 
     sync_id = current_item.get("sync_id")
 
-    supabase_insert("База_фарм_кинги", {
-        "nazvanie": king_name or None,
-        "data_pokupki": normalize_date_for_supabase(row[1]),
-        "price": row[2] or None,
-        "y_kogo_kypili": row[3] or None,
-        "status": "taken",
-        "komy_vidali": "farm",
-        "data_vzatia": normalize_date_for_supabase(today),
-        "geo": geo_value or None,
-        "kto_vzal": who_took_text or None,
-        "dannie": row[9] or None,
-        "dannie_2": row[10] or None,
-        "dannie_3": row[11] or None,
-        "SYNC_ID": sync_id or None,
-    })
     if sync_id:
         try:
             sync_status_to_basebot(BASEBOT_SHEET_FARM_KINGS, sync_id, "taken")
@@ -6414,6 +6478,7 @@ def process_farm_kings_bulk_proxy_step_background(chat_id, user_id, username):
 
     supabase_insert_issue_row(
         name=king_name,
+        item_type="KING",
         shop="KING",
         purchase_date=row[1],
         price=row[2],
@@ -7215,21 +7280,19 @@ def issue_farm_bm(chat_id, user_id, username):
             side_errors.append(f"Issues append error: {e}")
 
         try:
-            supabase_insert("База_фарм_бм", {
-                "id_bm": row[0] or None,
-                "data_pokypki": normalize_date_for_supabase(row[1]),
-                "price": normalize_numeric_for_supabase(row[2]),
-                "y_kogo_kypili": row[3] or None,
-                "status": "taken",
-                "dla_kogo": "farm",
-                "kto_vzal": who_took_text,
-                "data_vidachi": normalize_date_for_supabase(today),
-                "dannie": row[8] or None,
-                "SYNC_ID": sync_id or None,
-            })
+            supabase_insert_issue_row(
+                name=row[0],
+                item_type="BM",
+                shop="BM",
+                purchase_date=row[1],
+                price=row[2],
+                issue_date=today,
+                supplier=row[3],
+                for_whom="farm",
+            )
         except Exception as e:
-            logging.exception("issue_farm_bm supabase insert failed")
-            side_errors.append(f"Supabase insert error: {e}")
+            logging.exception("supabase_insert_issue_row failed in issue_farm_bm")
+            side_errors.append(f"Supabase issue insert error: {e}")
 
         invalidate_stats_cache()
 
@@ -7343,7 +7406,7 @@ def return_farm_fp_to_ban(fp_link, comment_text=""):
         return False, "Это ФП уже в ban."
 
     sheet_update_and_refresh(
-        SHEET_FARM_FP,
+        SHEET_FARM_FPS,
         f"F{found['row_index']}:G{found['row_index']}",
         [["ban", "ban"]]
     )
@@ -7479,6 +7542,7 @@ def issue_farm_fps(chat_id, user_id, username, count_needed):
                         today
                     ]]
                 )
+
                 supabase_mark_taken(
                     "База_фарм_фп",
                     "link_fp",
@@ -7506,6 +7570,21 @@ def issue_farm_fps(chat_id, user_id, username, count_needed):
 
             if issue_rows:
                 append_issue_rows_fixed(issue_rows)
+
+                for row in issue_rows:
+                    try:
+                        supabase_insert_issue_row(
+                            name=row[0],
+                            item_type="FP",
+                            shop=row[1],
+                            purchase_date=row[2],
+                            price=row[3],
+                            issue_date=row[4],
+                            supplier=row[5],
+                            for_whom=row[6],
+                        )
+                    except Exception:
+                        logging.exception("supabase_insert_issue_row failed in issue_farm_fps")
 
             invalidate_stats_cache()
 
@@ -10874,7 +10953,7 @@ def process_kings_bulk_proxy_step(chat_id, user_id, username, proxy_text):
                         king_name,
                         who_took_text,
                         {
-                            "komy_vidali": username,
+                            "komy_vidali": state.get("king_for_whom", ""),
                             "data_vzatia": normalize_date_for_supabase(today)
                         }
                     )
@@ -10894,6 +10973,20 @@ def process_kings_bulk_proxy_step(chat_id, user_id, username, proxy_text):
                         supplier=row[3],
                         for_whom=state.get("king_for_whom", "")
                     )
+
+                    try:
+                        supabase_insert_issue_row(
+                            name=king_name,
+                            item_type="KING",
+                            shop="KING",
+                            purchase_date=row[1],
+                            price=row[2],
+                            issue_date=today,
+                            supplier=row[3],
+                            for_whom=state.get("king_for_whom", ""),
+                        )
+                    except Exception as e:
+                        logging.warning(f"[KING BULK] Failed to insert issue row: {e}")
 
                     invalidate_stats_cache()
                 else:
@@ -11584,6 +11677,33 @@ def confirm_bm_issue(chat_id, user_id, username):
                     "data_vidachi": normalize_date_for_supabase(today)
                 }
             )
+
+            try:
+                append_issue_row_fixed([
+                    bm_id,
+                    "БМ",
+                    purchase_date,
+                    normalize_numeric_for_sheet(price),
+                    today,
+                    supplier,
+                    bm_for_whom
+                ])
+            except Exception as e:
+                logging.exception("confirm_bm_issue issue row append failed")
+
+            try:
+                supabase_insert_issue_row(
+                    name=bm_id,
+                    item_type="BM",
+                    shop="BM",
+                    purchase_date=purchase_date,
+                    price=price,
+                    issue_date=today,
+                    supplier=supplier,
+                    for_whom=bm_for_whom,
+                )
+            except Exception as e:
+                logging.exception("supabase_insert_issue_row failed in confirm_bm_issue")
 
             if sync_id:
                 sync_status_to_basebot(BASEBOT_SHEET_BMS, sync_id, "taken")
@@ -12486,21 +12606,16 @@ def process_crypto_bulk_proxy_step(chat_id, user_id, username, proxy_text):
 
     sync_id = current_item.get("sync_id")
 
-    supabase_insert("База_крипта_кинги", {
-        "nazvanie": king_name or None,
-        "price": row[2] or None,
-        "postavshik": row[3] or None,
-        "status": "taken",
-        "komy_vidali": king_for_whom or None,
-        "data_vzatia": normalize_date_for_supabase(today),
-        "geo": geo_value or None,
-        "kto_vzal": who_took_text or None,
-        "dannie": row[9] or None,
-        "dannie_2": row[10] or None,
-        "dannie_3": row[11] or None,
-        "SYNC_ID": current_item.get("sync_id") or None,
-        "data_pokupki": normalize_date_for_supabase(row[1]),
-    })
+    supabase_mark_taken(
+        "База_крипта_кинги",
+        "nazvanie",
+        king_name,
+        who_took_text,
+        {
+             "komy_vidali": king_for_whom,
+             "data_vzatia": normalize_date_for_supabase(today)
+        }
+    )
     
     if sync_id:
         try:
@@ -12520,6 +12635,7 @@ def process_crypto_bulk_proxy_step(chat_id, user_id, username, proxy_text):
 
     supabase_insert_issue_row(
         name=king_name,
+        item_type="KING",
         shop="KING",
         purchase_date=row[1],
         price=row[2],
