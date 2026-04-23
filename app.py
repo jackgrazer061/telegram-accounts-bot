@@ -6465,16 +6465,7 @@ def process_farm_kings_bulk_proxy_step_background(chat_id, user_id, username):
             row[11]
         ]]
     )
-    supabase_mark_taken(
-        "База_фарм_кинги",
-        "nazvanie",
-        king_name,
-        who_took_text,
-        {
-            "komy_vidali": "farm",
-            "data_vzatia": normalize_date_for_supabase(today)
-        }
-    )
+
     mark_sheet_cache_stale(SHEET_FARM_KINGS)
 
     sync_id = current_item.get("sync_id")
@@ -6494,17 +6485,6 @@ def process_farm_kings_bulk_proxy_step_background(chat_id, user_id, username):
         row[3],
         "farm"
     ])
-
-    supabase_insert_issue_row(
-        name=king_name,
-        item_type="KING",
-        shop="KING",
-        purchase_date=row[1],
-        price=row[2],
-        issue_date=today,
-        supplier=row[3],
-        for_whom="farm",
-    )
 
     results.append({
         "king_name": king_name,
