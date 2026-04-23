@@ -12647,22 +12647,124 @@ def process_crypto_bulk_proxy_step(chat_id, user_id, username, proxy_text):
     today = datetime.now(MOSCOW_TZ).strftime("%d/%m/%Y")
     who_took_text = f"@{username}" if username else "без username"
 
-    octo_ok = False
-    octo_result = None
-    error_text = ""
-
     try:
-        octo_ok, octo_result = ensure_octo_profile_with_retry(
-            ensure_func=ensure_octo_profile_for_crypto_king,
-            profile_name=king_name,
-            parsed=parsed_crypto,
-            proxy_data=proxy_data
-        )
-    except Exception as e:
-        logging.exception("process_crypto_bulk_proxy_step octo failed")
-        error_text = str(e)
+        octo_ok = False
+        octo_result = None
+        error_text = ""
 
-    if not octo_ok:
+        try:
+            octo_ok, octo_result = ensure_octo_profile_with_retry(
+                ensure_func=ensure_octo_profile_for_crypto_king,
+                profile_name=king_name,
+                parsed=parsed_crypto,
+                proxy_data=proxy_data
+            )
+        except Exception as e:
+            logging.exception("process_crypto_bulk_proxy_step octo failed")
+            error_text = str(e)
+
+        if not octo_ok:
+            results.append({
+                "king_name": king_name,
+                "price": price_value,
+                "geo": geo_value,
+                "supplier": supplier_value,
+                "data_text": data_text,
+                "parsed_crypto": parsed_crypto,
+                "octo_ok": False,
+                "error_text": error_text or str(octo_result or "не удалось завести в Octo")
+            })
+
+            state["crypto_bulk_results"] = results
+            state["crypto_bulk_current_index"] = current_index + 1
+            state["crypto_bulk_issue_rows"] = pending_issue_rows
+            set_state_with_custom_ttl(user_id, state, CRYPTO_BULK_PROXY_TTL)
+
+            start_crypto_kings_bulk_proxy_step(chat_id, user_id)
+            return
+
+        cookies_ok = False
+        cookies_msg = ""
+        try:
+            profile_uuid = extract_octo_profile_uuid_from_result(octo_result)
+            cookies_payload = normalize_crypto_cookies_for_import(
+                parsed_crypto.get("cookies_json", "")
+            )
+
+            if cookies_payload and profile_uuid:
+                cookies_ok, cookies_msg = try_import_crypto_king_cookies(
+                    profile_uuid=profile_uuid,
+                    cookies_payload=cookies_payload
+                )
+            else:
+                cookies_msg = "cookies не найдены или profile_uuid пустой"
+        except Exception as e:
+            logging.exception("process_crypto_bulk_proxy_step cookies failed")
+            cookies_msg = str(e)
+
+        logging.info(f"[CRYPTO BULK] before sheet_update king_name={king_name}")
+        sheet_update_raw(
+            SHEET_CRYPTO_KINGS,
+            f"A{king_row}:L{king_row}",
+            [[
+                king_name,
+                row[1],
+                row[2],
+                row[3],
+                "taken",
+                king_for_whom,
+                today,
+                geo_value,
+                who_took_text,
+                row[9],
+                row[10],
+                row[11]
+            ]]
+        )
+        mark_sheet_cache_stale(SHEET_CRYPTO_KINGS)
+
+        sync_id = current_item.get("sync_id")
+
+        logging.info(f"[CRYPTO BULK] before supabase_mark_taken king_name={king_name}")
+        supabase_mark_taken(
+            "База_крипта_кинги",
+            "nazvanie",
+            king_name,
+            who_took_text,
+            {
+                 "komy_vidali": king_for_whom,
+                 "data_vzatia": normalize_date_for_supabase(today)
+            }
+        )
+
+        if sync_id:
+            try:
+                sync_status_to_basebot(BASEBOT_SHEET_CRYPTO_KINGS, sync_id, "taken")
+            except Exception:
+                logging.exception("process_crypto_bulk_proxy_step basebot sync failed")
+
+        pending_issue_rows.append([
+            king_name,
+            "KING",
+            row[1],
+            normalize_numeric_for_sheet(row[2]),
+            today,
+            row[3],
+            king_for_whom
+        ])
+
+        logging.info(f"[CRYPTO BULK] before supabase_insert_issue_row king_name={king_name}")
+        supabase_insert_issue_row(
+            name=king_name,
+            item_type="KING",
+            shop="KING",
+            purchase_date=row[1],
+            price=row[2],
+            issue_date=today,
+            supplier=row[3],
+            for_whom=king_for_whom,
+        )
+
         results.append({
             "king_name": king_name,
             "price": price_value,
@@ -12670,8 +12772,10 @@ def process_crypto_bulk_proxy_step(chat_id, user_id, username, proxy_text):
             "supplier": supplier_value,
             "data_text": data_text,
             "parsed_crypto": parsed_crypto,
-            "octo_ok": False,
-            "error_text": error_text or str(octo_result or "не удалось завести в Octo")
+            "octo_ok": True,
+            "octo_result": octo_result,
+            "cookies_ok": cookies_ok,
+            "cookies_msg": cookies_msg
         })
 
         state["crypto_bulk_results"] = results
@@ -12679,107 +12783,13 @@ def process_crypto_bulk_proxy_step(chat_id, user_id, username, proxy_text):
         state["crypto_bulk_issue_rows"] = pending_issue_rows
         set_state_with_custom_ttl(user_id, state, CRYPTO_BULK_PROXY_TTL)
 
+        logging.info(f"[CRYPTO BULK] before next step current_index={state['crypto_bulk_current_index']}")
         start_crypto_kings_bulk_proxy_step(chat_id, user_id)
-        return
 
-    cookies_ok = False
-    cookies_msg = ""
-    try:
-        profile_uuid = extract_octo_profile_uuid_from_result(octo_result)
-        cookies_payload = normalize_crypto_cookies_for_import(
-            parsed_crypto.get("cookies_json", "")
-        )
-
-        if cookies_payload and profile_uuid:
-            cookies_ok, cookies_msg = try_import_crypto_king_cookies(
-                profile_uuid=profile_uuid,
-                cookies_payload=cookies_payload
-            )
-        else:
-            cookies_msg = "cookies не найдены или profile_uuid пустой"
     except Exception as e:
-        logging.exception("process_crypto_bulk_proxy_step cookies failed")
-        cookies_msg = str(e)
-
-    sheet_update_raw(
-        SHEET_CRYPTO_KINGS,
-        f"A{king_row}:L{king_row}",
-        [[
-            king_name,
-            row[1],
-            row[2],
-            row[3],
-            "taken",
-            king_for_whom,
-            today,
-            geo_value,
-            who_took_text,
-            row[9],
-            row[10],
-            row[11]
-        ]]
-    )
-    mark_sheet_cache_stale(SHEET_CRYPTO_KINGS)
-
-    sync_id = current_item.get("sync_id")
-
-    supabase_mark_taken(
-        "База_крипта_кинги",
-        "nazvanie",
-        king_name,
-        who_took_text,
-        {
-             "komy_vidali": king_for_whom,
-             "data_vzatia": normalize_date_for_supabase(today)
-        }
-    )
-    
-    if sync_id:
-        try:
-            sync_status_to_basebot(BASEBOT_SHEET_CRYPTO_KINGS, sync_id, "taken")
-        except Exception:
-            logging.exception("process_crypto_bulk_proxy_step basebot sync failed")
-
-    pending_issue_rows.append([
-        king_name,
-        "KING",
-        row[1],
-        normalize_numeric_for_sheet(row[2]),
-        today,
-        row[3],
-        king_for_whom
-    ])
-
-    supabase_insert_issue_row(
-        name=king_name,
-        item_type="KING",
-        shop="KING",
-        purchase_date=row[1],
-        price=row[2],
-        issue_date=today,
-        supplier=row[3],
-        for_whom=king_for_whom,
-    )
-
-    results.append({
-        "king_name": king_name,
-        "price": price_value,
-        "geo": geo_value,
-        "supplier": supplier_value,
-        "data_text": data_text,
-        "parsed_crypto": parsed_crypto,
-        "octo_ok": True,
-        "octo_result": octo_result,
-        "cookies_ok": cookies_ok,
-        "cookies_msg": cookies_msg
-    })
-
-    state["crypto_bulk_results"] = results
-    state["crypto_bulk_current_index"] = current_index + 1
-    state["crypto_bulk_issue_rows"] = pending_issue_rows
-    set_state_with_custom_ttl(user_id, state, CRYPTO_BULK_PROXY_TTL)
-
-    start_crypto_kings_bulk_proxy_step(chat_id, user_id)
+        logging.exception("process_crypto_bulk_proxy_step crashed AFTER proxy accepted")
+        tg_send_message(chat_id, f"Ошибка после принятия proxy:\n{e}")
+        return
 
 def append_king_to_issues_sheet(king_name, purchase_date, price, transfer_date, supplier, for_whom):
     append_issue_row_fixed([
