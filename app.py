@@ -35,8 +35,6 @@ OCTO_TAG_SIDO = "Sido"
 OCTO_TAG_CORBY = "corby"
 OCTO_TAG_ACCOUNT_MANAGERS = "AccountManagers"
 OCTO_TAG_FARMERS = "Farmers"
-SUPABASE_URL = os.environ.get("SUPABASE_URL", "").strip()
-SUPABASE_SERVICE_ROLE_KEY = os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "").strip()
 
 OCTO_CRYPTO_EXTENSIONS = [
     "jdiljjjlnmciheackloanmdcnkoknpji@1.6",       # Access Token Extractor by FBTOOL.PRO
@@ -76,9 +74,24 @@ if not BASEBOT_SPREADSHEET_ID:
     raise RuntimeError("BASEBOT_SPREADSHEET_ID не задан")
 
 supabase = None
-if SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY:
-    supabase = create_client(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
-    
+
+def supabase_insert(*args, **kwargs):
+    return None
+
+def supabase_update(*args, **kwargs):
+    return None
+
+def supabase_mark_taken(*args, **kwargs):
+    return None
+
+def supabase_insert_issue_row(*args, **kwargs):
+    return None
+
+def supabase_mark_issue_row_as_ban(*args, **kwargs):
+    return None
+
+def supabase_delete_last_issue_row(*args, **kwargs):
+    return None
 
 # =========================
 # ACCESS CONTROL
