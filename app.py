@@ -9675,10 +9675,10 @@ def normalize_account_row_from_supabase(row):
         "raw": row,
     }
 
-def supabase_insert_issue_row(name, shop, purchase_date, price, issue_date, supplier, for_whom):
+def supabase_insert_issue_row(name, item_type, shop, purchase_date, price, issue_date, supplier, for_whom):
     return supabase_insert("Простые лички 26", {
         "name": name or None,
-        "type": "KING",
+        "type": item_type or None,
         "data_pokupki": normalize_date_for_supabase(purchase_date),
         "price": normalize_numeric_for_sheet(price) if price not in [None, ""] else None,
         "data_pered": normalize_date_for_supabase(issue_date),
