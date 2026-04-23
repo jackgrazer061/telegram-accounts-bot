@@ -4411,6 +4411,7 @@ def return_fp_to_ban(fp_link, comment_text=""):
     issue_info = find_last_fp_issue_row(fp_link)
     if issue_info:
         mark_issue_row_as_ban(issue_info["row_index"], comment_text)
+        supabase_mark_issue_row_as_ban(fp_link, "FP", found["row"][8], found["row"][6], comment_text)
 
     supabase_update(
         "База_ФП",
@@ -4447,6 +4448,13 @@ def return_fp_to_free(fp_link):
     )
 
     delete_last_fp_issue_row(fp_link)
+
+    supabase_delete_last_issue_row(
+        fp_link,
+        "FP",
+        found["row"][8],
+        found["row"][6]
+    )
 
     supabase_update(
         "База_ФП",
@@ -5518,6 +5526,8 @@ def return_pixel_to_ban(pixel_query, comment_text=""):
     issue_info = find_last_pixel_issue_row(pixel_name=pixel_name, pixel_id=pixel_id)
     if issue_info:
         mark_issue_row_as_ban(issue_info["row_index"], comment_text)
+        issue_pixel_value = pixel_id or pixel_name
+        supabase_mark_issue_row_as_ban(issue_pixel_value, "PIXEL", found["row"][5], found["row"][4], comment_text)
 
     supabase_update(
         "База_пикселей",
@@ -5565,6 +5575,15 @@ def return_pixel_to_free(pixel_query):
     issue_info = find_last_pixel_issue_row(pixel_name=pixel_name, pixel_id=pixel_id)
     if issue_info:
         sheet_delete_row_and_refresh(SHEET_ISSUES, issue_info["row_index"])
+
+        issue_pixel_value = pixel_id or pixel_name
+
+        supabase_delete_last_issue_row(
+            issue_pixel_value,
+            "PIXEL",
+            row[5],
+            row[4]
+        )
 
     supabase_update(
         "База_пикселей",
@@ -7151,6 +7170,7 @@ def return_farm_bm_to_ban(bm_id, comment_text=""):
     issue_info = find_last_bm_issue_row(bm_id)
     if issue_info:
         mark_issue_row_as_ban(issue_info["row_index"], comment_text)
+        supabase_mark_issue_row_as_ban(bm_id, "BM", found["row"][6], found["row"][5], comment_text)
 
     supabase_update(
         "База_фарм_бм",
@@ -7414,6 +7434,7 @@ def return_farm_fp_to_ban(fp_link, comment_text=""):
     issue_info = find_last_fp_issue_row(fp_link)
     if issue_info:
         mark_issue_row_as_ban(issue_info["row_index"], comment_text)
+        supabase_mark_issue_row_as_ban(fp_link, "FP", found["row"][8], found["row"][6], comment_text)
 
     supabase_update(
         "База_фарм_фп",
@@ -7446,6 +7467,13 @@ def return_farm_fp_to_free(fp_link):
     )
 
     delete_last_fp_issue_row(fp_link)
+
+    supabase_delete_last_issue_row(
+        fp_link,
+        "FP",
+        found["row"][8],
+        found["row"][6]
+    )
 
     supabase_update(
         "База_фарм_фп",
@@ -9377,6 +9405,46 @@ def delete_last_issue_row(account_number):
     sheet_delete_row_and_refresh(SHEET_ISSUES, issue_info["row_index"])
     return True
 
+def supabase_delete_last_issue_row(name, shop, issue_date, for_whom):
+    if not supabase:
+        return False
+
+    try:
+        normalized_issue_date = normalize_date_for_supabase(issue_date)
+
+        found = (
+            supabase
+            .table("Простые лички 26")
+            .select("id")
+            .eq("name", str(name).strip())
+            .eq("shop", str(shop).strip())
+            .eq("komy", str(for_whom).strip())
+            .eq("data_pered", normalized_issue_date)
+            .order("id", desc=True)
+            .limit(1)
+            .execute()
+        )
+
+        rows = found.data or []
+        if not rows:
+            return False
+
+        row_id = rows[0]["id"]
+
+        (
+            supabase
+            .table("Простые лички 26")
+            .delete()
+            .eq("id", row_id)
+            .execute()
+        )
+
+        return True
+
+    except Exception:
+        logging.exception("supabase_delete_last_issue_row failed")
+        return False
+
 def build_account_search_text(account_number):
     base_info = find_account_in_base(account_number)
     if not base_info:
@@ -9620,6 +9688,47 @@ def supabase_insert_issue_row(name, shop, purchase_date, price, issue_date, supp
         "komment": None,
     })
 
+def supabase_mark_issue_row_as_ban(name, shop, issue_date, for_whom, comment_text):
+    if not supabase:
+        return False
+
+    try:
+        normalized_issue_date = normalize_date_for_supabase(issue_date)
+
+        found = (
+            supabase
+            .table("Простые лички 26")
+            .select("id")
+            .eq("name", str(name).strip())
+            .eq("shop", str(shop).strip())
+            .eq("komy", str(for_whom).strip())
+            .eq("data_pered", normalized_issue_date)
+            .order("id", desc=True)
+            .limit(1)
+            .execute()
+        )
+
+        rows = found.data or []
+        if not rows:
+            return False
+
+        row_id = rows[0]["id"]
+
+        (
+            supabase
+            .table("Простые лички 26")
+            .update({
+                "komment": comment_text or None
+            })
+            .eq("id", row_id)
+            .execute()
+        )
+
+        return True
+
+    except Exception:
+        logging.exception("supabase_mark_issue_row_as_ban failed")
+        return False
 
 def normalize_date_for_supabase(value):
     text = str(value or "").strip()
@@ -11520,6 +11629,7 @@ def return_bm_to_ban(bm_id, comment_text=""):
     issue_info = find_last_bm_issue_row(bm_id)
     if issue_info:
         mark_issue_row_as_ban(issue_info["row_index"], comment_text)
+        supabase_mark_issue_row_as_ban(bm_id, "BM", found["row"][6], found["row"][5], comment_text)
 
     supabase_update(
         "База_БМ",
@@ -11561,6 +11671,13 @@ def return_bm_to_free(bm_id):
         sync_status_to_basebot(BASEBOT_SHEET_BMS, sync_id, "free")
 
     delete_last_bm_issue_row(bm_id)
+
+    supabase_delete_last_issue_row(
+        bm_id,
+        "BM",
+        found["row"][6],
+        found["row"][5]
+    )
 
     supabase_update(
         "База_БМ",
@@ -12808,6 +12925,7 @@ def return_king_to_ban(king_name, comment_text=""):
     issue_info = find_last_king_issue_row(king_name)
     if issue_info:
         mark_issue_row_as_ban(issue_info["row_index"], comment_text)
+        supabase_mark_issue_row_as_ban(king_name, "KING", found["row"][6], found["row"][5], comment_text)
 
     supabase_update(
         "База_кингов",
@@ -12879,6 +12997,13 @@ def return_king_to_free(king_name):
     if old_name:
 
         delete_last_king_issue_row(old_name)
+
+        supabase_delete_last_issue_row(
+            king_name,
+            "KING",
+            found["row"][6],
+            found["row"][5]
+        )
 
     supabase_update(
         "База_кингов",
