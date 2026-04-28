@@ -236,8 +236,8 @@ BASEBOT_SHEET_FARM_KINGS = "BaseBot Farm Kings"
 BASEBOT_SHEET_FARM_BMS = "BaseBot Farm BM"
 
 BASEBOT_SYNC_COL_KINGS = 7
-BASEBOT_SYNC_COL_BMS = 5
-BASEBOT_SYNC_COL_PIXELS = 4
+BASEBOT_SYNC_COL_BMS = 7
+BASEBOT_SYNC_COL_PIXELS = 7
 
 LIMIT_OPTIONS = ['-250', '250-500', '500-1200', '1200-1500', 'unlim']
 THRESHOLD_OPTIONS = ['0-49', '50-99', '100-199', '200-499', '500+']
@@ -13009,27 +13009,39 @@ def sync_status_to_basebot(basebot_sheet_name, sync_id, new_status):
         sync_col_index = BASEBOT_SYNC_COL_KINGS   # H
         status_col = "C"
     elif basebot_sheet_name in [BASEBOT_SHEET_BMS, BASEBOT_SHEET_FARM_BMS]:
-        sync_col_index = BASEBOT_SYNC_COL_BMS     # F
-        status_col = "D"
+        sync_col_index = BASEBOT_SYNC_COL_BMS     # H
+        status_col = "C"
     elif basebot_sheet_name == BASEBOT_SHEET_PIXELS:
-        sync_col_index = BASEBOT_SYNC_COL_PIXELS  # E
+        sync_col_index = BASEBOT_SYNC_COL_PIXELS  # H
         status_col = "C"
     else:
         return False
 
-    found = find_row_in_sheet_by_sync_id(
-        sheet_name=basebot_sheet_name,
-        sync_id=sync_id,
-        sync_col_index=sync_col_index,
-        basebot=True
-    )
+    try:
+        found = find_row_in_sheet_by_sync_id(
+            sheet_name=basebot_sheet_name,
+            sync_id=sync_id,
+            sync_col_index=sync_col_index,
+            basebot=True
+        )
 
-    if not found:
+        if not found:
+            logging.warning(
+                f"BaseBot sync target not found: sheet={basebot_sheet_name}, "
+                f"sync_id={sync_id}, status={new_status}"
+            )
+            return False
+
+        row_index = found["row_index"]
+        basebot_update_range(basebot_sheet_name, f"{status_col}{row_index}", [[new_status]])
+        return True
+
+    except Exception as e:
+        logging.exception(
+            f"sync_status_to_basebot failed: sheet={basebot_sheet_name}, "
+            f"sync_id={sync_id}, status={new_status}, error={e}"
+        )
         return False
-
-    row_index = found["row_index"]
-    basebot_update_range(basebot_sheet_name, f"{status_col}{row_index}", [[new_status]])
-    return True
 
 def tg_send_inline_message_parts(chat_id, message_parts, inline_buttons=None):
     parts = [str(x).strip() for x in (message_parts or []) if str(x).strip()]
