@@ -35,6 +35,8 @@ OCTO_TAG_CORBY = "corby"
 OCTO_TAG_ACCOUNT_MANAGERS = "AccountManagers"
 OCTO_TAG_FARMERS = "Farmers"
 
+ENABLE_SCHEDULED_STICKER_BROADCAST = os.environ.get("ENABLE_SCHEDULED_STICKER_BROADCAST", "0").strip().lower() in {"1", "true", "yes", "on"}
+
 OCTO_CRYPTO_EXTENSIONS = [
     "jdiljjjlnmciheackloanmdcnkoknpji@1.6",       # Access Token Extractor by FBTOOL.PRO
     "lanhjpladilgmdkepgeggnllpiofkefi@0.6",       # Ads Trust
@@ -233,8 +235,8 @@ BASEBOT_SHEET_FARM_KINGS = "BaseBot Farm Kings"
 BASEBOT_SHEET_FARM_BMS = "BaseBot Farm BM"
 
 BASEBOT_SYNC_COL_KINGS = 7
-BASEBOT_SYNC_COL_BMS = 7
-BASEBOT_SYNC_COL_PIXELS = 7
+BASEBOT_SYNC_COL_BMS = 5
+BASEBOT_SYNC_COL_PIXELS = 4
 
 LIMIT_OPTIONS = ['-250', '250-500', '500-1200', '1200-1500', 'unlim']
 THRESHOLD_OPTIONS = ['0-49', '50-99', '100-199', '200-499', '500+']
@@ -1165,6 +1167,9 @@ def add_sticker_to_sheet(file_id, sticker_type="", emoji="", set_name=""):
 
 
 def maybe_send_scheduled_sticker_broadcast():
+    if not ENABLE_SCHEDULED_STICKER_BROADCAST:
+        return
+
     now = datetime.now(MOSCOW_TZ)
 
     # 5 = суббота, 6 = воскресенье
@@ -12999,51 +13004,31 @@ def find_row_in_sheet_by_sync_id(sheet_name, sync_id, sync_col_index=0, basebot=
     return None
 
 def sync_status_to_basebot(basebot_sheet_name, sync_id, new_status):
-    try:
-        if basebot_sheet_name in [BASEBOT_SHEET_KINGS, BASEBOT_SHEET_CRYPTO_KINGS, BASEBOT_SHEET_FARM_KINGS]:
-            sync_col_index = BASEBOT_SYNC_COL_KINGS   # H
-            status_col = "C"
-        elif basebot_sheet_name in [BASEBOT_SHEET_BMS, BASEBOT_SHEET_FARM_BMS]:
-            sync_col_index = BASEBOT_SYNC_COL_BMS     # H
-            status_col = "C"
-        elif basebot_sheet_name == BASEBOT_SHEET_PIXELS:
-            sync_col_index = BASEBOT_SYNC_COL_PIXELS  # H
-            status_col = "C"
-        else:
-            return False
-
-        found = find_row_in_sheet_by_sync_id(
-            sheet_name=basebot_sheet_name,
-            sync_id=sync_id,
-            sync_col_index=sync_col_index,
-            basebot=True
-        )
-
-        if not found:
-            logging.warning(
-                f"sync_status_to_basebot: sync_id={sync_id} not found in '{basebot_sheet_name}'"
-            )
-            return False
-
-        row_index = found["row_index"]
-        basebot_update_range(basebot_sheet_name, f"{status_col}{row_index}", [[new_status]])
-        return True
-
-    except Exception as e:
-        logging.exception(
-            f"sync_status_to_basebot crashed for sheet='{basebot_sheet_name}', "
-            f"sync_id='{sync_id}', new_status='{new_status}'"
-        )
-        notify_admin_about_error(
-            "sync_status_to_basebot",
-            str(e),
-            extra_text=(
-                f"sheet={basebot_sheet_name}, "
-                f"sync_id={sync_id}, "
-                f"new_status={new_status}"
-            )
-        )
+    if basebot_sheet_name in [BASEBOT_SHEET_KINGS, BASEBOT_SHEET_CRYPTO_KINGS, BASEBOT_SHEET_FARM_KINGS]:
+        sync_col_index = BASEBOT_SYNC_COL_KINGS   # H
+        status_col = "C"
+    elif basebot_sheet_name in [BASEBOT_SHEET_BMS, BASEBOT_SHEET_FARM_BMS]:
+        sync_col_index = BASEBOT_SYNC_COL_BMS     # F
+        status_col = "D"
+    elif basebot_sheet_name == BASEBOT_SHEET_PIXELS:
+        sync_col_index = BASEBOT_SYNC_COL_PIXELS  # E
+        status_col = "C"
+    else:
         return False
+
+    found = find_row_in_sheet_by_sync_id(
+        sheet_name=basebot_sheet_name,
+        sync_id=sync_id,
+        sync_col_index=sync_col_index,
+        basebot=True
+    )
+
+    if not found:
+        return False
+
+    row_index = found["row_index"]
+    basebot_update_range(basebot_sheet_name, f"{status_col}{row_index}", [[new_status]])
+    return True
 
 def tg_send_inline_message_parts(chat_id, message_parts, inline_buttons=None):
     parts = [str(x).strip() for x in (message_parts or []) if str(x).strip()]
@@ -19256,8 +19241,11 @@ def start_background_threads_once():
         auto_health_thread = threading.Thread(target=auto_healthcheck_loop, daemon=True)
         auto_health_thread.start()
 
-        sticker_thread = threading.Thread(target=sticker_broadcast_loop, daemon=True)
-        sticker_thread.start()
+        if ENABLE_SCHEDULED_STICKER_BROADCAST:
+            sticker_thread = threading.Thread(target=sticker_broadcast_loop, daemon=True)
+            sticker_thread.start()
+        else:
+            logging.info("Scheduled sticker broadcast disabled")
 
         background_threads_started = True
 
