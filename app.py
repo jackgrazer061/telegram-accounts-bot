@@ -8994,6 +8994,129 @@ def build_account_search_text(account_number):
     return text
 
 
+def extract_account_numbers_from_text(text):
+    cleaned_text = clean_text_for_parsing(text)
+    lines = cleaned_text.splitlines()
+
+    if not lines:
+        lines = [cleaned_text]
+
+    return extract_account_ids_from_lines(lines)
+
+def find_accounts_in_base_bulk(account_numbers):
+    ordered = []
+    seen = set()
+
+    for account_number in (account_numbers or []):
+        value = str(account_number).strip()
+        if not value or value in seen:
+            continue
+        seen.add(value)
+        ordered.append(value)
+
+    if not ordered:
+        return {}
+
+    target_numbers = set(ordered)
+    rows = get_sheet_rows_cached(SHEET_ACCOUNTS)
+
+    found = {}
+    for idx, row in enumerate(rows[1:], start=2):
+        row = ensure_row_len(row, 14)
+        current_number = str(row[0]).strip()
+
+        if current_number in target_numbers and current_number not in found:
+            found[current_number] = {
+                "row_index": idx,
+                "row": row
+            }
+
+    return found
+
+def build_account_numbers_preview(account_numbers, max_items=12):
+    items = [str(x).strip() for x in (account_numbers or []) if str(x).strip()]
+    if not items:
+        return "нет номеров"
+
+    preview = items[:max_items]
+    if len(items) > max_items:
+        preview.append(f"... и ещё {len(items) - max_items}")
+
+    return "\n".join(preview)
+
+def build_account_ban_confirm_text(account_numbers, missing_numbers=None):
+    account_numbers = [str(x).strip() for x in (account_numbers or []) if str(x).strip()]
+    missing_numbers = [str(x).strip() for x in (missing_numbers or []) if str(x).strip()]
+
+    if len(account_numbers) <= 1:
+        account_number = account_numbers[0] if account_numbers else ""
+        text = f"Внимание: личка {account_number} будет перемещена в ban."
+    else:
+        text = (
+            f"Внимание: {len(account_numbers)} личек будут перемещены в ban.\n\n"
+            f"{build_account_numbers_preview(account_numbers)}"
+        )
+
+    if missing_numbers:
+        text += (
+            f"\n\nНе найдены и не будут обработаны: {len(missing_numbers)}\n"
+            f"{build_account_numbers_preview(missing_numbers)}"
+        )
+
+    text += "\n\nПодтвердить?"
+    return text
+
+def build_account_bulk_result_text(action_title, success_items, failed_items, missing_items=None):
+    lines = [str(action_title or "Готово").strip(), ""]
+
+    lines.append(f"✅ Успешно: {len(success_items)}")
+    if success_items:
+        for account_number, message in success_items:
+            lines.append(f"{account_number} — {message}")
+    else:
+        lines.append("нет")
+
+    if failed_items:
+        lines.extend(["", f"⚠️ С ошибкой: {len(failed_items)}"])
+        for account_number, message in failed_items:
+            lines.append(f"{account_number} — {message}")
+
+    missing_items = [str(x).strip() for x in (missing_items or []) if str(x).strip()]
+    if missing_items:
+        lines.extend(["", f"❌ Не найдены: {len(missing_items)}"])
+        lines.extend(missing_items)
+
+    return "\n".join(lines)
+
+def process_bulk_account_return_to_free(account_numbers):
+    success_items = []
+    failed_items = []
+
+    for account_number in (account_numbers or []):
+        ok, message = return_account_to_free(account_number)
+
+        if ok:
+            success_items.append((account_number, message))
+        else:
+            failed_items.append((account_number, message))
+
+    return success_items, failed_items
+
+def process_bulk_account_return_to_ban(account_numbers, comment_text=""):
+    success_items = []
+    failed_items = []
+
+    for account_number in (account_numbers or []):
+        ok, message = return_account_to_ban(account_number, comment_text)
+
+        if ok:
+            success_items.append((account_number, message))
+        else:
+            failed_items.append((account_number, message))
+
+    return success_items, failed_items
+
+
 # =========================
 # FREE ACCOUNTS
 # =========================
@@ -14177,6 +14300,41 @@ def handle_message(msg):
                 send_person_menu(chat_id, prev_state.get("issue_department"))
                 return
 
+            if mode == "awaiting_account_return_action":
+                send_return_action_menu(chat_id, "личкой")
+                return
+
+            if mode == "awaiting_return_account":
+                send_text_input_prompt(
+                    chat_id,
+                    "Впиши номер лички или несколько номеров, каждый с новой строки, чтобы отправить в ban."
+                )
+                return
+
+            if mode == "awaiting_return_account_free":
+                send_text_input_prompt(
+                    chat_id,
+                    "Впиши номер лички или несколько номеров, каждый с новой строки, чтобы вернуть в free."
+                )
+                return
+
+            if mode == "awaiting_return_confirm":
+                account_numbers = list(prev_state.get("return_account_numbers") or [])
+                single_account = str(prev_state.get("return_account_number", "")).strip()
+
+                if not account_numbers and single_account:
+                    account_numbers = [single_account]
+
+                tg_send_message(
+                    chat_id,
+                    build_account_ban_confirm_text(
+                        account_numbers,
+                        prev_state.get("return_account_missing_numbers", [])
+                    ),
+                    [[{"text": BTN_RETURN_CONFIRM}, {"text": MENU_CANCEL}]]
+                )
+                return
+
             if mode == "awaiting_king_geo":
                 send_king_geo_options(chat_id)
                 return
@@ -14852,11 +15010,25 @@ def handle_message(msg):
 
         if text == BTN_RETURN_CONFIRM:
             if state.get("mode") == "awaiting_return_confirm":
-                set_state(user_id, {
+                account_numbers = list(state.get("return_account_numbers") or [])
+                single_account = str(state.get("return_account_number", "")).strip()
+
+                if not account_numbers and single_account:
+                    account_numbers = [single_account]
+
+                next_state = {
                     "mode": "awaiting_ban_reason_account",
-                    "return_account_number": state.get("return_account_number", "")
-                })
-                send_text_input_prompt(chat_id, "Напиши причину бана для лички.")
+                    "return_account_numbers": account_numbers,
+                    "return_account_number": single_account,
+                    "return_account_missing_numbers": list(state.get("return_account_missing_numbers") or [])
+                }
+
+                set_state(user_id, next_state)
+
+                if len(account_numbers) > 1:
+                    send_text_input_prompt(chat_id, "Напиши причину бана для личек.")
+                else:
+                    send_text_input_prompt(chat_id, "Напиши причину бана для лички.")
                 return
 
             if state.get("mode") == "awaiting_return_king_confirm":
@@ -15546,12 +15718,18 @@ def handle_message(msg):
         if state.get("mode") == "awaiting_account_return_action":
             if text == BTN_RETURN_TO_BAN:
                 update_state(user_id, mode="awaiting_return_account")
-                send_text_input_prompt(chat_id, "Впиши номер лички, которую нужно отправить в ban.")
+                send_text_input_prompt(
+                    chat_id,
+                    "Впиши номер лички или несколько номеров, каждый с новой строки, чтобы отправить в ban."
+                )
                 return
 
             if text == BTN_RETURN_TO_FREE:
                 update_state(user_id, mode="awaiting_return_account_free")
-                send_text_input_prompt(chat_id, "Впиши номер лички, которую нужно вернуть.")
+                send_text_input_prompt(
+                    chat_id,
+                    "Впиши номер лички или несколько номеров, каждый с новой строки, чтобы вернуть в free."
+                )
                 return
 
             send_return_action_menu(chat_id, "личкой")
@@ -15677,22 +15855,36 @@ def handle_message(msg):
             return
 
         if state.get("mode") == "awaiting_return_account":
-            account_number = text.strip()
+            account_numbers = extract_account_numbers_from_text(text)
 
-            if not account_number:
-                tg_send_message(chat_id, "Впиши номер лички.")
+            if not account_numbers:
+                tg_send_message(
+                    chat_id,
+                    "Впиши номер лички или несколько номеров, каждый с новой строки."
+                )
                 return
 
-            found = find_account_in_base(account_number)
-            if not found:
+            found_map = find_accounts_in_base_bulk(account_numbers)
+            found_numbers = [x for x in account_numbers if x in found_map]
+            missing_numbers = [x for x in account_numbers if x not in found_map]
+
+            if not found_numbers:
                 clear_state(user_id)
-                send_accounts_menu(chat_id, "Личка не найдена.")
+                send_accounts_menu(chat_id, "Лички не найдены.")
                 return
 
-            set_state(user_id, {
+            next_state = {
                 "mode": "awaiting_return_confirm",
-                "return_account_number": account_number
-            })
+                "return_account_numbers": found_numbers
+            }
+
+            if len(found_numbers) == 1:
+                next_state["return_account_number"] = found_numbers[0]
+
+            if missing_numbers:
+                next_state["return_account_missing_numbers"] = missing_numbers
+
+            set_state(user_id, next_state)
 
             keyboard = [
                 [{"text": BTN_RETURN_CONFIRM}, {"text": MENU_CANCEL}]
@@ -15700,7 +15892,7 @@ def handle_message(msg):
 
             tg_send_message(
                 chat_id,
-                f"Внимание: личка {account_number} будет перемещена в ban.\nПодтвердить?",
+                build_account_ban_confirm_text(found_numbers, missing_numbers),
                 keyboard
             )
             return
@@ -15825,21 +16017,43 @@ def handle_message(msg):
             return
 
         if state.get("mode") == "awaiting_return_account_free":
-            account_number = text.strip()
+            account_numbers = extract_account_numbers_from_text(text)
 
-            if not account_number:
-                tg_send_message(chat_id, "Впиши номер лички.")
+            if not account_numbers:
+                tg_send_message(
+                    chat_id,
+                    "Впиши номер лички или несколько номеров, каждый с новой строки."
+                )
                 return
 
-            found = find_account_in_base(account_number)
-            if not found:
+            found_map = find_accounts_in_base_bulk(account_numbers)
+            found_numbers = [x for x in account_numbers if x in found_map]
+            missing_numbers = [x for x in account_numbers if x not in found_map]
+
+            if not found_numbers:
                 clear_state(user_id)
-                send_accounts_menu(chat_id, "Личка не найдена.")
+                send_accounts_menu(chat_id, "Лички не найдены.")
                 return
 
-            ok, message = return_account_to_free(account_number)
+            if len(found_numbers) == 1 and not missing_numbers:
+                ok, message = return_account_to_free(found_numbers[0])
+                clear_state(user_id)
+                send_accounts_main_menu(chat_id, message)
+                return
+
+            success_items, failed_items = process_bulk_account_return_to_free(found_numbers)
+
             clear_state(user_id)
-            send_accounts_main_menu(chat_id, message)
+            tg_send_long_message(
+                chat_id,
+                build_account_bulk_result_text(
+                    "Возврат личек в free завершён.",
+                    success_items,
+                    failed_items,
+                    missing_numbers
+                )
+            )
+            send_accounts_main_menu(chat_id, "Меню Accounts:")
             return
 
         # ========= СОСТОЯНИЯ: ВЫДАЧА ЛИЧЕК =========
@@ -17581,14 +17795,45 @@ def handle_message(msg):
 
         if state.get("mode") == "awaiting_ban_reason_account":
             comment_text = text.strip()
+            account_numbers = list(state.get("return_account_numbers") or [])
+
             if not comment_text:
-                send_text_input_prompt(chat_id, "Напиши причину бана для лички.")
+                if len(account_numbers) > 1:
+                    send_text_input_prompt(chat_id, "Напиши причину бана для личек.")
+                else:
+                    send_text_input_prompt(chat_id, "Напиши причину бана для лички.")
                 return
 
-            account_number = state.get("return_account_number", "")
-            ok, message = return_account_to_ban(account_number, comment_text)
+            if not account_numbers:
+                account_number = str(state.get("return_account_number", "")).strip()
+                if account_number:
+                    account_numbers = [account_number]
+
+            if not account_numbers:
+                clear_state(user_id)
+                send_accounts_main_menu(chat_id, "Не найдены лички для возврата.")
+                return
+
+            if len(account_numbers) == 1:
+                ok, message = return_account_to_ban(account_numbers[0], comment_text)
+                clear_state(user_id)
+                send_accounts_main_menu(chat_id, message)
+                return
+
+            success_items, failed_items = process_bulk_account_return_to_ban(account_numbers, comment_text)
+            missing_numbers = list(state.get("return_account_missing_numbers") or [])
+
             clear_state(user_id)
-            send_accounts_main_menu(chat_id, message)
+            tg_send_long_message(
+                chat_id,
+                build_account_bulk_result_text(
+                    "Перевод личек в ban завершён.",
+                    success_items,
+                    failed_items,
+                    missing_numbers
+                )
+            )
+            send_accounts_main_menu(chat_id, "Меню Accounts:")
             return
 
 
