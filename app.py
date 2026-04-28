@@ -116,6 +116,7 @@ ACCOUNTS_USERS = {
     7426931469: "JimCarrey_AccountManager",
     8035275476: "SeanConneryManager",
     8435159019: "Robert_Pattinson_Account_Manager",
+    7045494795: "TessaYang_Accmanager",
 }
 
 FARMERS_USERS = {
