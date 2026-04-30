@@ -2687,7 +2687,7 @@ def tg_download_photo_content(photo_list):
 
     return tg_download_file_content(file_id)
 
-def tg_send_document_bytes(chat_id, filename, content_bytes, caption=None):
+def tg_send_document_bytes(chat_id, filename, content_bytes, caption=None, inline_buttons=None):
     try:
         data = {
             "chat_id": str(chat_id)
@@ -2695,6 +2695,12 @@ def tg_send_document_bytes(chat_id, filename, content_bytes, caption=None):
 
         if caption:
             data["caption"] = str(caption)
+
+        if inline_buttons is not None:
+            data["reply_markup"] = json.dumps(
+                {"inline_keyboard": inline_buttons},
+                ensure_ascii=False
+            )
 
         files = {
             "document": (filename, content_bytes, "text/plain")
@@ -2709,9 +2715,18 @@ def tg_send_document_bytes(chat_id, filename, content_bytes, caption=None):
 
         if resp.status_code != 200:
             logging.warning(f"Telegram sendDocument failed: {resp.status_code} {resp.text}")
+            return None
+
+        result = resp.json()
+        if not result.get("ok"):
+            logging.warning(f"Telegram sendDocument api error: {result}")
+            return None
+
+        return result
 
     except Exception as e:
         logging.error(f"tg_send_document_bytes error: {e}")
+        return None
 
 def make_safe_txt_filename(name, default_name="king"):
     raw = str(name or "").strip()
@@ -2959,22 +2974,34 @@ def finish_crypto_kings_bulk(chat_id, user_id):
 
     send_kings_menu(chat_id, "Выбери следующее действие:")
 
-def tg_send_king_data_as_txt(chat_id, king_name, data_text, caption=None):
+def tg_send_king_data_as_txt(chat_id, king_name, data_text, caption=None, inline_buttons=None):
     text = str(data_text or "").strip()
 
     if not text:
         tg_send_message(chat_id, "Данные кинга не найдены.")
-        return
+        return None
 
     filename = make_safe_txt_filename(king_name or "king", default_name="king")
-    tg_send_document_bytes(
+
+    return tg_send_document_bytes(
         chat_id=chat_id,
         filename=filename,
         content_bytes=text.encode("utf-8"),
-        caption=caption
+        caption=caption,
+        inline_buttons=inline_buttons
     )
 
-def tg_send_king_search_result_as_txt(chat_id, title, king_name, meta_text, data_text):
+def tg_send_king_search_result_as_txt(
+    chat_id,
+    title,
+    king_name,
+    meta_text,
+    data_text,
+    owner_user_id=None,
+    sheet_name=None,
+    sheet_row_index=None,
+    issue_row_index=None
+):
     meta_text = str(meta_text or "").strip()
     data_text = str(data_text or "").strip()
 
@@ -2982,10 +3009,22 @@ def tg_send_king_search_result_as_txt(chat_id, title, king_name, meta_text, data
     if data_text:
         full_text += f"\n\nДанные:\n{data_text}"
 
-    tg_send_king_data_as_txt(
+    inline_buttons = None
+
+    if owner_user_id and sheet_name and sheet_row_index:
+        sheet_code = "c" if sheet_name == SHEET_CRYPTO_KINGS else "k"
+        issue_idx = int(issue_row_index or 0)
+
+        inline_buttons = [[{
+            "text": "Изменить данные",
+            "callback_data": f"king_edit:{owner_user_id}:{sheet_code}:{int(sheet_row_index)}:{issue_idx}"
+        }]]
+
+    return tg_send_king_data_as_txt(
         chat_id=chat_id,
         king_name=king_name or title or "king_search",
-        data_text=full_text
+        data_text=full_text,
+        inline_buttons=inline_buttons
     )
 
 def extract_digits(text):
@@ -12222,6 +12261,118 @@ def return_crypto_king_to_ban(king_name, comment_text=""):
 
     invalidate_stats_cache()
     return True, f"Crypto king '{king_name}' переведён в ban."
+
+def resolve_king_sheet_name_from_code(sheet_code):
+    if sheet_code == "k":
+        return SHEET_KINGS
+    if sheet_code == "c":
+        return SHEET_CRYPTO_KINGS
+    return ""
+
+
+def build_king_edit_person_buttons(user_id, dept_code):
+    names = CRYPTO_NAMES if dept_code == "c" else GAMBLA_NAMES
+
+    keyboard = []
+    row = []
+
+    for idx, name in enumerate(names):
+        row.append({
+            "text": name,
+            "callback_data": f"king_edit_pick:{user_id}:{dept_code}:{idx}"
+        })
+
+        if len(row) == 2:
+            keyboard.append(row)
+            row = []
+
+    if row:
+        keyboard.append(row)
+
+    return keyboard
+
+
+def update_king_name_in_sheets(sheet_name, sheet_row_index, old_king_name, new_king_name, issue_row_index=None):
+    sheet_name = str(sheet_name or "").strip()
+    old_king_name = str(old_king_name or "").strip()
+    new_king_name = str(new_king_name or "").strip()
+
+    if sheet_name not in [SHEET_KINGS, SHEET_CRYPTO_KINGS]:
+        return False, "Неизвестный лист кинга."
+
+    if not sheet_row_index:
+        return False, "Не найдена строка кинга."
+
+    if not new_king_name:
+        return False, "Новое название пустое."
+
+    existing = find_king_in_base_by_name(new_king_name)
+    if existing:
+        same_row = (
+            str(existing.get("sheet_name", "")).strip() == sheet_name
+            and int(existing.get("row_index", 0) or 0) == int(sheet_row_index)
+        )
+        if not same_row:
+            return False, f"Название '{new_king_name}' уже существует."
+
+    sheet_update_and_refresh(sheet_name, f"A{sheet_row_index}", [[new_king_name]])
+
+    target_issue_row = int(issue_row_index or 0)
+    if not target_issue_row:
+        issue_info = find_last_king_issue_row(old_king_name)
+        if issue_info:
+            target_issue_row = issue_info["row_index"]
+
+    if target_issue_row:
+        sheet_update_and_refresh(SHEET_ISSUES, f"A{target_issue_row}", [[new_king_name]])
+        invalidate_stats_cache()
+        return True, f"Название изменено.\n\nБыло: {old_king_name}\nСтало: {new_king_name}"
+
+    invalidate_stats_cache()
+    return True, (
+        f"Название изменено в базе king.\n\n"
+        f"Было: {old_king_name}\n"
+        f"Стало: {new_king_name}\n\n"
+        f"Но запись в '{SHEET_ISSUES}' не найдена."
+    )
+
+
+def update_king_buyer_in_sheets(sheet_name, sheet_row_index, king_name, new_for_whom, issue_row_index=None):
+    sheet_name = str(sheet_name or "").strip()
+    king_name = str(king_name or "").strip()
+    new_for_whom = str(new_for_whom or "").strip()
+
+    if sheet_name not in [SHEET_KINGS, SHEET_CRYPTO_KINGS]:
+        return False, "Неизвестный лист кинга."
+
+    if not sheet_row_index:
+        return False, "Не найдена строка кинга."
+
+    if not new_for_whom:
+        return False, "Новый байер пустой."
+
+    # В листе king buyer / for_whom = колонка F
+    sheet_update_and_refresh(sheet_name, f"F{sheet_row_index}", [[new_for_whom]])
+
+    target_issue_row = int(issue_row_index or 0)
+    if not target_issue_row:
+        issue_info = find_last_king_issue_row(king_name)
+        if issue_info:
+            target_issue_row = issue_info["row_index"]
+
+    if target_issue_row:
+        # В Простые лички 26 buyer / for_whom = колонка G
+        sheet_update_and_refresh(SHEET_ISSUES, f"G{target_issue_row}", [[new_for_whom]])
+        invalidate_stats_cache()
+        return True, f"Байер изменён.\n\nКинг: {king_name}\nНовый байер: {new_for_whom}"
+
+    invalidate_stats_cache()
+    return True, (
+        f"Байер изменён в базе king.\n\n"
+        f"Кинг: {king_name}\n"
+        f"Новый байер: {new_for_whom}\n\n"
+        f"Но запись в '{SHEET_ISSUES}' не найдена."
+    )
     
 def build_king_search_text(king_name):
     target = str(king_name).strip().lower()
@@ -12249,6 +12400,8 @@ def build_king_search_text(king_name):
     who_took = row[8] or "не указано"
     data_text = get_full_king_data_from_row(row) or ""
 
+    issue_info = find_last_king_issue_row(name)
+
     meta_text = (
         f"{source_title}:\n"
         f"Название: {name}\n"
@@ -12264,7 +12417,10 @@ def build_king_search_text(king_name):
         "title": source_title,
         "king_name": name,
         "meta_text": meta_text,
-        "data_text": data_text
+        "data_text": data_text,
+        "sheet_name": sheet_name,
+        "sheet_row_index": found["row_index"],
+        "issue_row_index": issue_info["row_index"] if issue_info else None,
     }
     
 def build_stats_text():
@@ -16670,10 +16826,42 @@ def handle_message(msg):
                 title=result["title"],
                 king_name=result["king_name"],
                 meta_text=result["meta_text"],
-                data_text=result["data_text"]
+                data_text=result["data_text"],
+                owner_user_id=user_id,
+                sheet_name=result["sheet_name"],
+                sheet_row_index=result["sheet_row_index"],
+                issue_row_index=result.get("issue_row_index"),
             )
 
             send_kings_menu(chat_id, "Меню кингов:")
+            return
+
+        if state.get("mode") == "awaiting_search_king_new_name":
+            new_king_name = text.strip()
+
+            if not new_king_name:
+                send_text_input_prompt(chat_id, "Впиши новое название для кинга.")
+                return
+
+            sheet_name = str(state.get("edit_king_sheet_name", "")).strip()
+            sheet_row_index = int(state.get("edit_king_sheet_row_index", 0) or 0)
+            issue_row_index = int(state.get("edit_king_issue_row_index", 0) or 0)
+            old_king_name = str(state.get("edit_king_old_name", "")).strip()
+
+            ok, message = update_king_name_in_sheets(
+                sheet_name=sheet_name,
+                sheet_row_index=sheet_row_index,
+                old_king_name=old_king_name,
+                new_king_name=new_king_name,
+                issue_row_index=issue_row_index
+            )
+
+            if ok:
+                state["mode"] = "king_search_edit_menu"
+                state["edit_king_old_name"] = new_king_name
+                set_state(user_id, state)
+
+            tg_send_message(chat_id, message)
             return
             
         if state.get("mode") == "awaiting_return_king_name":
@@ -18481,6 +18669,186 @@ def handle_callback_query(callback_query):
             except Exception:
                 logging.exception("update_poll_admin_message failed")
 
+            return jsonify({"ok": True})
+
+        if data.startswith("king_edit:"):
+            parts = data.split(":")
+            if len(parts) != 5:
+                tg_answer_callback_query(callback_id, "Некорректная кнопка")
+                return jsonify({"ok": True})
+
+            target_user_id = parts[1]
+            sheet_code = parts[2]
+            sheet_row_index = int(parts[3])
+            issue_row_index = int(parts[4] or 0)
+
+            if str(user_id) != str(target_user_id):
+                tg_answer_callback_query(callback_id, "Это не ваша кнопка")
+                return jsonify({"ok": True})
+
+            sheet_name = resolve_king_sheet_name_from_code(sheet_code)
+            if not sheet_name:
+                tg_answer_callback_query(callback_id, "Неизвестный источник king")
+                return jsonify({"ok": True})
+
+            row = get_sheet_row_live(sheet_name, sheet_row_index, 13)
+            if not row or not any(str(x).strip() for x in row):
+                tg_answer_callback_query(callback_id, "Кинг не найден")
+                return jsonify({"ok": True})
+
+            row = ensure_row_len(row, 13)
+            king_name = str(row[0]).strip()
+
+            if not king_name:
+                tg_answer_callback_query(callback_id, "У кинга пустое название")
+                return jsonify({"ok": True})
+
+            set_state(user_id, {
+                "mode": "king_search_edit_menu",
+                "edit_king_sheet_name": sheet_name,
+                "edit_king_sheet_row_index": sheet_row_index,
+                "edit_king_issue_row_index": issue_row_index,
+                "edit_king_old_name": king_name,
+            })
+
+            tg_answer_callback_query(callback_id)
+
+            tg_send_inline_message(
+                chat_id,
+                f"Что изменить у king '{king_name}'?",
+                [
+                    [{"text": "Поменять название", "callback_data": f"king_edit_name:{user_id}"}],
+                    [{"text": "Поменять байера", "callback_data": f"king_edit_buyer:{user_id}"}],
+                ]
+            )
+            return jsonify({"ok": True})
+
+
+        if data.startswith("king_edit_name:"):
+            target_user_id = data.split(":", 1)[1]
+
+            if str(user_id) != str(target_user_id):
+                tg_answer_callback_query(callback_id, "Это не ваша кнопка")
+                return jsonify({"ok": True})
+
+            state = get_state(user_id)
+            if not state.get("edit_king_sheet_name"):
+                tg_answer_callback_query(callback_id, "Сначала снова открой king из поиска")
+                return jsonify({"ok": True})
+
+            update_state(user_id, mode="awaiting_search_king_new_name")
+
+            tg_answer_callback_query(callback_id)
+            send_text_input_prompt(chat_id, "Впиши новое название для кинга.")
+            return jsonify({"ok": True})
+
+
+        if data.startswith("king_edit_buyer:"):
+            target_user_id = data.split(":", 1)[1]
+
+            if str(user_id) != str(target_user_id):
+                tg_answer_callback_query(callback_id, "Это не ваша кнопка")
+                return jsonify({"ok": True})
+
+            state = get_state(user_id)
+            if not state.get("edit_king_sheet_name"):
+                tg_answer_callback_query(callback_id, "Сначала снова открой king из поиска")
+                return jsonify({"ok": True})
+
+            tg_answer_callback_query(callback_id)
+
+            tg_send_inline_message(
+                chat_id,
+                "Выбери отдел для нового байера:",
+                [
+                    [{"text": DEPT_CRYPTO, "callback_data": f"king_edit_dept:{user_id}:c"}],
+                    [{"text": DEPT_GAMBLA, "callback_data": f"king_edit_dept:{user_id}:g"}],
+                ]
+            )
+            return jsonify({"ok": True})
+
+
+        if data.startswith("king_edit_dept:"):
+            parts = data.split(":")
+            if len(parts) != 3:
+                tg_answer_callback_query(callback_id, "Некорректная кнопка")
+                return jsonify({"ok": True})
+
+            target_user_id = parts[1]
+            dept_code = parts[2]
+
+            if str(user_id) != str(target_user_id):
+                tg_answer_callback_query(callback_id, "Это не ваша кнопка")
+                return jsonify({"ok": True})
+
+            if dept_code not in ["c", "g"]:
+                tg_answer_callback_query(callback_id, "Неизвестный отдел")
+                return jsonify({"ok": True})
+
+            state = get_state(user_id)
+            if not state.get("edit_king_sheet_name"):
+                tg_answer_callback_query(callback_id, "Сначала снова открой king из поиска")
+                return jsonify({"ok": True})
+
+            update_state(user_id, edit_king_department=dept_code)
+
+            tg_answer_callback_query(callback_id)
+
+            tg_send_inline_message(
+                chat_id,
+                "Выбери нового байера:",
+                build_king_edit_person_buttons(user_id, dept_code)
+            )
+            return jsonify({"ok": True})
+
+
+        if data.startswith("king_edit_pick:"):
+            parts = data.split(":")
+            if len(parts) != 4:
+                tg_answer_callback_query(callback_id, "Некорректная кнопка")
+                return jsonify({"ok": True})
+
+            target_user_id = parts[1]
+            dept_code = parts[2]
+
+            try:
+                person_idx = int(parts[3])
+            except Exception:
+                tg_answer_callback_query(callback_id, "Некорректный пользователь")
+                return jsonify({"ok": True})
+
+            if str(user_id) != str(target_user_id):
+                tg_answer_callback_query(callback_id, "Это не ваша кнопка")
+                return jsonify({"ok": True})
+
+            names = CRYPTO_NAMES if dept_code == "c" else GAMBLA_NAMES
+
+            if person_idx < 0 or person_idx >= len(names):
+                tg_answer_callback_query(callback_id, "Пользователь не найден")
+                return jsonify({"ok": True})
+
+            new_for_whom = normalize_person_name(names[person_idx])
+
+            state = get_state(user_id)
+            sheet_name = str(state.get("edit_king_sheet_name", "")).strip()
+            sheet_row_index = int(state.get("edit_king_sheet_row_index", 0) or 0)
+            issue_row_index = int(state.get("edit_king_issue_row_index", 0) or 0)
+            king_name = str(state.get("edit_king_old_name", "")).strip()
+
+            if not sheet_name or not sheet_row_index or not king_name:
+                tg_answer_callback_query(callback_id, "Потеряны данные для редактирования")
+                return jsonify({"ok": True})
+
+            ok, message = update_king_buyer_in_sheets(
+                sheet_name=sheet_name,
+                sheet_row_index=sheet_row_index,
+                king_name=king_name,
+                new_for_whom=new_for_whom,
+                issue_row_index=issue_row_index
+            )
+
+            tg_answer_callback_query(callback_id, "Готово" if ok else "Ошибка")
+            tg_send_message(chat_id, message)
             return jsonify({"ok": True})
 
         if data.startswith("poll_answers:"):
