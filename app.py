@@ -290,17 +290,17 @@ DEPT_CRYPTO = '🪙Крипта'
 DEPT_GAMBLA = '🎰Гембла'
 
 CRYPTO_NAMES = [
-    '№3 dasha', '№5 mark', '№20 misha',
-    '№32 alex', '№34 anton', '№37 vladimir2',
-    '№4 nikita', '№57 VD3', '№60 MSH5', '№62 IA14'
+    '№3 DS78', '№5 MCH79', '№20 MS77',
+    '№32 alex', '№34 AK81', '№37 VK82',
+    '№4 NH25', '№57 VD22', '№60 MSH5', '№62 IA14'
 ]
 
 GAMBLA_NAMES = [
-    '№8 artem', '№13 ivan', '№16 sergei', '№19 ilya', '№26 maksim1',
-    '№27 denis', '№29 ivansh', '№14 evgen', '№777 asim',
-    '№30 maksim2', '№39 alex_gambl', '№47 daniil', '№48 semen', '№49 ivan2',
-    '№50 andrey2', '№51 vitaliy', '№21 vladimir1', '№22 andrey', '№52 gleb', '№53 dasha2', '№54 vladimir3',
-    '№000 richard', '№55 artem2', '№56 IC1', '№58 KM2', '№59 AH6', '№43 maksim3', '№45 anton2', '№61 SN1',
+    '№8 AK91', '№13 IJ90', '№16 SV89', '№19 IK92', '№26 MD94',
+    '№27 DD93', '№29 ISH95', '№14 ES86', '№777 AM87',
+    '№30 MG88', '№39 AA96', '№47 DK99', '№49 IE97',
+    '№51 VG98', '№21 VK84', '№22 AU85', '№53 DR100', '№54 VP101',
+    '№000 richard', '№55 AL102', '№56 IC1', '№58 KM2', '№59 AH6', '№43 MD9', '№45 AA8', '№61 SN11',
     '№63 ED123', '№64 SA122'
 ]
 
