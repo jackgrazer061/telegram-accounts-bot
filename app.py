@@ -414,6 +414,54 @@ last_backup_date = None
 MOSCOW_TZ = ZoneInfo("Europe/Moscow")
 farm_bulk_worker_lock = threading.Lock()
 farm_bulk_workers_running = set()
+
+# Резервирование farm king строк — защита от race condition при параллельных выдачах
+farm_kings_reserve_lock = threading.Lock()
+farm_kings_reserved_rows = {}  # row_index -> user_id, кто зарезервировал
+FARM_KINGS_RESERVE_TTL = 1800  # 30 минут максимум держим резерв
+_farm_kings_reserve_timestamps = {}  # row_index -> timestamp
+
+def reserve_farm_king_rows(user_id, row_indices):
+    """Зарезервировать список строк за пользователем. Возвращает True если все свободны."""
+    now = time.time()
+    with farm_kings_reserve_lock:
+        # Сначала очистим протухшие резервы
+        stale = [r for r, ts in _farm_kings_reserve_timestamps.items()
+                 if now - ts > FARM_KINGS_RESERVE_TTL]
+        for r in stale:
+            farm_kings_reserved_rows.pop(r, None)
+            _farm_kings_reserve_timestamps.pop(r, None)
+
+        # Проверяем, не занят ли кто-то другой
+        for idx in row_indices:
+            owner = farm_kings_reserved_rows.get(idx)
+            if owner is not None and owner != user_id:
+                return False  # Уже занято другим
+
+        # Резервируем
+        for idx in row_indices:
+            farm_kings_reserved_rows[idx] = user_id
+            _farm_kings_reserve_timestamps[idx] = now
+        return True
+
+def release_farm_king_rows(user_id):
+    """Снять все резервы пользователя (при отмене или завершении)."""
+    with farm_kings_reserve_lock:
+        to_release = [r for r, uid in farm_kings_reserved_rows.items() if uid == user_id]
+        for r in to_release:
+            farm_kings_reserved_rows.pop(r, None)
+            _farm_kings_reserve_timestamps.pop(r, None)
+
+def get_reserved_rows_set():
+    """Вернуть множество всех зарезервированных row_index (для фильтрации)."""
+    now = time.time()
+    with farm_kings_reserve_lock:
+        stale = [r for r, ts in _farm_kings_reserve_timestamps.items()
+                 if now - ts > FARM_KINGS_RESERVE_TTL]
+        for r in stale:
+            farm_kings_reserved_rows.pop(r, None)
+            _farm_kings_reserve_timestamps.pop(r, None)
+        return set(farm_kings_reserved_rows.keys())
 polls_lock = threading.Lock()
 polls_data = {}
 next_poll_id = 1
@@ -5766,12 +5814,17 @@ def find_free_farm_kings(count_needed, geo=None, supplier=None):
     candidates = []
     geo = str(geo or "").strip()
     supplier = str(supplier or "").strip()
+    reserved = get_reserved_rows_set()
 
     for idx, row in enumerate(rows[1:], start=2):
         if len(row) < 12:
             row = row + [''] * (12 - len(row))
 
         if str(row[4]).strip().lower() != "free":
+            continue
+
+        # Пропускаем строки, уже зарезервированные другим пользователем
+        if idx in reserved:
             continue
 
         row_geo = str(row[7]).strip()
@@ -5907,6 +5960,7 @@ def find_free_farm_kings_by_geo_and_price(count_needed, geo, price):
     candidates = []
     geo = str(geo or "").strip()
     price = normalize_price_key(price)
+    reserved = get_reserved_rows_set()
 
     for idx, row in enumerate(rows[1:], start=2):
         row = ensure_row_len(row, 13)
@@ -5923,6 +5977,10 @@ def find_free_farm_kings_by_geo_and_price(count_needed, geo, price):
         if row_price != price:
             continue
         if current_name:
+            continue
+
+        # Пропускаем строки, уже зарезервированные другим пользователем
+        if idx in reserved:
             continue
 
         purchase_date = parse_date(row[1]) or datetime.max
@@ -6638,6 +6696,8 @@ def send_farm_kings_bulk_followup_messages(chat_id, results):
 
 def finish_farm_kings_bulk(chat_id, user_id):
     state = get_state(user_id)
+
+    release_farm_king_rows(user_id)  # Снять резерв — выдача завершена
 
     progress_message_id = state.get("farm_kings_bulk_progress_message_id")
     if progress_message_id:
@@ -19532,6 +19592,20 @@ def handle_callback_query(callback_query):
 
             state = get_state(user_id)
 
+            # === РЕЗЕРВИРОВАНИЕ: сразу занять все строки за этим пользователем ===
+            queue = state.get("farm_kings_bulk_queue", [])
+            row_indices = [item["row_index"] for item in queue if item.get("row_index")]
+            if row_indices and not reserve_farm_king_rows(user_id, row_indices):
+                tg_send_message(
+                    chat_id,
+                    "⚠️ Часть farm king уже была взята другим пользователем.\n"
+                    "Пожалуйста, начни выдачу заново."
+                )
+                clear_state(user_id)
+                send_farm_kings_menu(chat_id, "Меню Farm King:")
+                return jsonify({"ok": True})
+            # ====================================================================
+
             if message_id:
                 state["farm_kings_bulk_confirm_message_id"] = message_id
                 set_state_with_custom_ttl(user_id, state, FARM_KING_BULK_PROXY_TTL)
@@ -19554,6 +19628,7 @@ def handle_callback_query(callback_query):
                 return
 
             tg_answer_callback_query(callback_id, "Выдача отменена")
+            release_farm_king_rows(user_id)  # Снять резерв
             clear_state(user_id)
 
             if message_id:
