@@ -399,7 +399,7 @@ user_states = {}
 user_state_history = {}
 state_lock = threading.Lock()
 user_action_lock = threading.Lock()
-issue_lock = threading.RLock()
+issue_lock = threading.Lock()
 accounts_lock = threading.Lock()
 processed_updates = {}
 processed_updates_lock = threading.Lock()
@@ -433,6 +433,7 @@ CRYPTO_BULK_MODE_PRICE = "awaiting_crypto_kings_price_bulk"
 CRYPTO_BULK_MODE_CONFIRM = "awaiting_crypto_kings_confirm_bulk"
 
 FARM_KING_BULK_PROXY_TTL = CRYPTO_BULK_PROXY_TTL
+FARM_KING_BULK_RESERVE_TTL = 60 * 30  # 30 минут держим резерв до ввода названий
 
 FARM_KING_OCTO_MODE_SUPPLIER = "awaiting_farm_king_supplier_octo"
 
@@ -472,6 +473,7 @@ google_error_count = 0
 def make_farm_king_reserve_stamp():
     return f"reserved:{datetime.now(MOSCOW_TZ).strftime('%Y%m%d_%H%M%S')}:{uuid.uuid4().hex[:8]}"
 
+
 def build_reserved_farm_king_row_values(row, king_name, reserve_stamp, reserved_by):
     row = ensure_row_len(row, 13)
     return [[
@@ -488,6 +490,7 @@ def build_reserved_farm_king_row_values(row, king_name, reserve_stamp, reserved_
         row[10],
         row[11]
     ]]
+
 
 def build_free_farm_king_row_values(row):
     row = ensure_row_len(row, 13)
@@ -506,29 +509,27 @@ def build_free_farm_king_row_values(row):
         row[11]
     ]]
 
-def reserve_farm_kings_bulk_rows(user_id, username, geo, supplier, king_names):
-    cleanup_stale_farm_king_reservations(force=True)
+
+def reserve_farm_kings_bulk_slots(user_id, username, geo, supplier, count_needed):
     geo = str(geo or "").strip()
     supplier = str(supplier or "").strip()
-    king_names = [str(x).strip() for x in (king_names or []) if str(x).strip()]
 
-    if not king_names:
-        return False, "Не переданы названия farm king.", []
+    try:
+        count_needed = int(count_needed or 0)
+    except Exception:
+        count_needed = 0
+
+    if count_needed <= 0:
+        return False, "Некорректное количество farm king.", []
 
     reserved_by = f"@{username}" if username else f"user:{user_id}"
 
     with issue_lock:
         rows = get_sheet_rows_cached(SHEET_FARM_KINGS, force=True)
-
-        existing_names = set()
         candidates = []
 
         for idx, raw_row in enumerate(rows[1:], start=2):
             row = ensure_row_len(raw_row, 13)
-
-            existing_name = str(row[0]).strip().lower()
-            if existing_name:
-                existing_names.add(existing_name)
 
             if str(row[4]).strip().lower() != "free":
                 continue
@@ -544,14 +545,10 @@ def reserve_farm_kings_bulk_rows(user_id, username, geo, supplier, king_names):
                 "purchase_date_obj": purchase_date
             })
 
-        duplicates = [name for name in king_names if name.lower() in existing_names]
-        if duplicates:
-            return False, "Эти названия уже существуют:\n" + "\n".join(duplicates[:20]), []
-
         candidates.sort(key=lambda x: x["purchase_date_obj"])
-        selected = candidates[:len(king_names)]
+        selected = candidates[:count_needed]
 
-        if len(selected) < len(king_names):
+        if len(selected) < count_needed:
             return False, (
                 f"Недостаточно свободных farm king.\n"
                 f"GEO: {geo}\n"
@@ -560,25 +557,25 @@ def reserve_farm_kings_bulk_rows(user_id, username, geo, supplier, king_names):
             ), []
 
         updates = []
-        queue = []
+        reserved_items = []
 
-        for item, king_name in zip(selected, king_names):
+        for item in selected:
             row = ensure_row_len(item["row"], 13)
             row_index = item["row_index"]
             reserve_stamp = make_farm_king_reserve_stamp()
 
             updates.append({
                 "range": f"A{row_index}:L{row_index}",
-                "values": build_reserved_farm_king_row_values(row, king_name, reserve_stamp, reserved_by)
+                "values": build_reserved_farm_king_row_values(row, "", reserve_stamp, reserved_by)
             })
 
-            queue.append({
+            reserved_items.append({
                 "row_index": row_index,
                 "purchase_date": row[1],
                 "price": row[2],
                 "supplier": row[3],
                 "geo": row[7],
-                "king_name": king_name,
+                "king_name": "",
                 "data_text": get_full_king_data_from_row(row),
                 "sync_id": row[12],
                 "reserve_stamp": reserve_stamp,
@@ -589,7 +586,84 @@ def reserve_farm_kings_bulk_rows(user_id, username, geo, supplier, king_names):
             sheet_batch_update_raw(SHEET_FARM_KINGS, updates)
             refresh_sheet_cache(SHEET_FARM_KINGS)
 
+        return True, "", reserved_items
+
+
+def apply_farm_kings_bulk_names_to_reserved_items(items, king_names):
+    items = [dict(x or {}) for x in (items or []) if x]
+    king_names = [str(x).strip() for x in (king_names or []) if str(x).strip()]
+
+    if not items:
+        return False, "Резерв farm king не найден. Начни выдачу заново.", []
+
+    if len(items) != len(king_names):
+        return False, f"Нужно прислать ровно {len(items)} названий.", []
+
+    reserved_row_indexes = set()
+    for item in items:
+        try:
+            row_index = int(item.get("row_index") or 0)
+        except Exception:
+            row_index = 0
+
+        if row_index >= 2:
+            reserved_row_indexes.add(row_index)
+
+    with issue_lock:
+        rows = get_sheet_rows_cached(SHEET_FARM_KINGS, force=True)
+        existing_names = set()
+
+        for idx, raw_row in enumerate(rows[1:], start=2):
+            row = ensure_row_len(raw_row, 13)
+            existing_name = str(row[0]).strip().lower()
+
+            if not existing_name:
+                continue
+            if idx in reserved_row_indexes:
+                continue
+
+            existing_names.add(existing_name)
+
+        duplicates = [name for name in king_names if name.lower() in existing_names]
+        if duplicates:
+            return False, "Эти названия уже существуют:\n" + "\n".join(duplicates[:20]), []
+
+        updates = []
+        queue = []
+
+        for item, king_name in zip(items, king_names):
+            try:
+                row_index = int(item.get("row_index") or 0)
+            except Exception:
+                row_index = 0
+
+            if row_index < 2 or row_index - 1 >= len(rows):
+                return False, "Резерв farm king потерян. Начни выдачу заново.", []
+
+            row = ensure_row_len(rows[row_index - 1], 13)
+
+            if not farm_kings_bulk_row_is_reserved_for_item(row, item):
+                return False, "Резерв farm king потерян. Начни выдачу заново.", []
+
+            reserve_stamp = str(item.get("reserve_stamp", "")).strip()
+            reserved_by = str(item.get("reserved_by", "")).strip()
+
+            updates.append({
+                "range": f"A{row_index}:L{row_index}",
+                "values": build_reserved_farm_king_row_values(row, king_name, reserve_stamp, reserved_by)
+            })
+
+            queue_item = dict(item)
+            queue_item["king_name"] = king_name
+            queue_item["data_text"] = get_full_king_data_from_row(row)
+            queue.append(queue_item)
+
+        if updates:
+            sheet_batch_update_raw(SHEET_FARM_KINGS, updates)
+            refresh_sheet_cache(SHEET_FARM_KINGS)
+
         return True, "", queue
+
 
 def release_farm_kings_bulk_reservations_from_items(items):
     items = [dict(x or {}) for x in (items or []) if x]
@@ -641,6 +715,7 @@ def release_farm_kings_bulk_reservations_from_items(items):
         refresh_sheet_cache(SHEET_FARM_KINGS)
         return len(updates)
 
+
 def release_farm_kings_bulk_reservations_from_state(state):
     state = dict(state or {})
     items = state.get("farm_kings_bulk_queue", []) or state.get("farm_kings_bulk_reserved_items", [])
@@ -650,6 +725,7 @@ def release_farm_kings_bulk_reservations_from_state(state):
     except Exception:
         logging.exception("release_farm_kings_bulk_reservations_from_state failed")
         return 0
+
 
 def farm_kings_bulk_row_is_reserved_for_item(row, item):
     row = ensure_row_len(row, 13)
@@ -668,67 +744,6 @@ def farm_kings_bulk_row_is_reserved_for_item(row, item):
         return False
 
     return True
-
-FARM_KING_RESERVE_TTL = FARM_KING_BULK_PROXY_TTL
-FARM_KING_RESERVE_CLEANUP_INTERVAL = 60
-last_farm_king_reserve_cleanup = 0.0
-farm_king_reserve_cleanup_lock = threading.Lock()
-
-
-def parse_farm_king_reserve_stamp(reserve_stamp):
-    stamp = str(reserve_stamp or "").strip()
-    if not stamp.startswith("reserved:"):
-        return None
-
-    parts = stamp.split(":", 2)
-    if len(parts) < 2:
-        return None
-
-    try:
-        return datetime.strptime(parts[1], "%Y%m%d_%H%M%S").replace(tzinfo=MOSCOW_TZ)
-    except Exception:
-        return None
-
-
-def cleanup_stale_farm_king_reservations(force=False):
-    global last_farm_king_reserve_cleanup
-
-    now = time.time()
-    if not force and now - last_farm_king_reserve_cleanup < FARM_KING_RESERVE_CLEANUP_INTERVAL:
-        return 0
-
-    with farm_king_reserve_cleanup_lock:
-        now = time.time()
-        if not force and now - last_farm_king_reserve_cleanup < FARM_KING_RESERVE_CLEANUP_INTERVAL:
-            return 0
-
-        rows = get_sheet_rows_cached(SHEET_FARM_KINGS, force=True)
-        updates = []
-
-        for idx, raw_row in enumerate(rows[1:], start=2):
-            row = ensure_row_len(raw_row, 13)
-            if str(row[4]).strip().lower() != "reserved":
-                continue
-
-            reserve_dt = parse_farm_king_reserve_stamp(row[6])
-            if not reserve_dt:
-                continue
-
-            if now - reserve_dt.timestamp() <= FARM_KING_RESERVE_TTL:
-                continue
-
-            updates.append({
-                "range": f"A{idx}:L{idx}",
-                "values": build_free_farm_king_row_values(row)
-            })
-
-        if updates:
-            sheet_batch_update_raw(SHEET_FARM_KINGS, updates)
-            refresh_sheet_cache(SHEET_FARM_KINGS)
-            invalidate_stats_cache()
-
-        last_farm_king_reserve_cleanup = time.time()
-        return len(updates)
 
 
 def reset_google_cache():
@@ -5628,7 +5643,6 @@ def return_pixel_to_free(pixel_query):
     return True, "Пиксель возвращён в free."
 
 def get_free_farm_king_geos():
-    cleanup_stale_farm_king_reservations()
     rows = get_sheet_rows_cached(SHEET_FARM_KINGS)
 
     geos = []
@@ -5664,7 +5678,6 @@ def send_farm_king_geo_options(chat_id):
     tg_send_message(chat_id, "Какое GEO нужно?", keyboard)
 
 def get_free_farm_king_suppliers_by_geo(geo):
-    cleanup_stale_farm_king_reservations()
     rows = get_sheet_rows_cached(SHEET_FARM_KINGS)
 
     geo = str(geo or "").strip()
@@ -5777,7 +5790,6 @@ def send_free_farm_kings(chat_id):
     tg_send_message(chat_id, text)
 
 def find_free_farm_kings(count_needed, geo=None, supplier=None):
-    cleanup_stale_farm_king_reservations()
     rows = get_sheet_rows_cached(SHEET_FARM_KINGS)
 
     candidates = []
@@ -5811,7 +5823,6 @@ def find_free_farm_kings(count_needed, geo=None, supplier=None):
     return candidates[:count_needed]
 
 def get_free_farm_king_prices_by_geo(geo):
-    cleanup_stale_farm_king_reservations()
     rows = get_sheet_rows_cached(SHEET_FARM_KINGS)
 
     prices = []
@@ -5874,7 +5885,6 @@ def send_farm_king_price_options(chat_id, geo):
 
 
 def find_free_farm_king_by_geo_and_price(geo, price, exclude_row=None):
-    cleanup_stale_farm_king_reservations()
     rows = get_sheet_rows_cached(SHEET_FARM_KINGS)
 
     candidates = []
@@ -5921,7 +5931,6 @@ def find_free_farm_king_by_geo_and_price(geo, price, exclude_row=None):
 
 
 def find_free_farm_kings_by_geo_and_price(count_needed, geo, price):
-    cleanup_stale_farm_king_reservations()
     rows = get_sheet_rows_cached(SHEET_FARM_KINGS)
 
     candidates = []
@@ -6277,6 +6286,7 @@ def run_farm_bulk_worker(chat_id, user_id):
         with farm_bulk_worker_lock:
             farm_bulk_workers_running.discard(user_id)
 
+
 def process_farm_kings_bulk_proxy_step_background(chat_id, user_id, username):
     state = get_state(user_id)
 
@@ -6480,6 +6490,7 @@ def process_farm_kings_bulk_proxy_step_background(chat_id, user_id, username):
 
     set_state_with_custom_ttl(user_id, state, FARM_KING_BULK_PROXY_TTL)
 
+
 def build_farm_kings_bulk_result_messages(results, max_len=3500):
     success_items = [x for x in results if x.get("octo_ok")]
     failed_items = [x for x in results if not x.get("octo_ok")]
@@ -6659,6 +6670,7 @@ def finish_farm_kings_bulk(chat_id, user_id):
     })
 
     send_farm_kings_menu(chat_id, "Выбери следующее действие:")
+
 
 def farm_king_name_exists(king_name):
     rows = get_sheet_rows_cached(SHEET_FARM_KINGS)
@@ -8920,6 +8932,7 @@ def get_state(user_id):
 
     return dict(state)
 
+
 def set_state_with_custom_ttl(user_id, state, ttl_seconds):
     state = dict(state or {})
     state["_time"] = time.time()
@@ -8927,7 +8940,8 @@ def set_state_with_custom_ttl(user_id, state, ttl_seconds):
 
     with state_lock:
         user_states[str(user_id)] = state
-        user_states.pop(user_id, None)
+        user_states[user_id] = state
+
 
 def cleanup_states():
     now = time.time()
@@ -8961,6 +8975,7 @@ def cleanup_states():
     for user_id in to_delete:
         clear_state(user_id)
 
+
 def cleanup_processed_updates():
     now = time.time()
     to_delete = []
@@ -8972,6 +8987,7 @@ def cleanup_processed_updates():
 
         for update_id in to_delete:
             processed_updates.pop(update_id, None)
+
 
 def is_duplicate_update(update_id):
     if update_id is None:
@@ -8987,6 +9003,7 @@ def is_duplicate_update(update_id):
         processed_updates[update_id] = now
         return False
 
+
 def set_state(user_id, data):
     data = dict(data)
     data["_time"] = time.time()
@@ -8999,7 +9016,7 @@ def set_state(user_id, data):
             user_state_history[str(user_id)] = history[-30:]
 
         user_states[str(user_id)] = data
-        user_states.pop(user_id, None)
+
 
 def push_state_to_history(user_id, state):
     with state_lock:
@@ -9007,29 +9024,32 @@ def push_state_to_history(user_id, state):
         history.append(dict(state))
         user_state_history[str(user_id)] = history[-30:]  # храним последние 30 шагов
 
+
 def go_back_state(user_id):
     current_state = {}
 
     with state_lock:
-        history = user_state_history.get(str(user_id), [])
-        if not history:
-            return None
-
         current_state = dict(
             user_states.get(str(user_id))
             or user_states.get(user_id)
             or {}
         )
+
+        history = user_state_history.get(str(user_id), [])
+        if not history:
+            return None
+
         prev_state = dict(history.pop())
         user_state_history[str(user_id)] = history
         user_states[str(user_id)] = dict(prev_state)
         user_states[str(user_id)]["_time"] = time.time()
-        user_states.pop(user_id, None)
 
-    current_items = current_state.get("farm_kings_bulk_reserved_items") or current_state.get("farm_kings_bulk_queue") or []
-    prev_items = prev_state.get("farm_kings_bulk_reserved_items") or prev_state.get("farm_kings_bulk_queue") or []
+    should_release_farm_reserve = (
+        (current_state.get("farm_kings_bulk_queue") or current_state.get("farm_kings_bulk_reserved_items"))
+        and not (prev_state.get("farm_kings_bulk_queue") or prev_state.get("farm_kings_bulk_reserved_items"))
+    )
 
-    if current_items and current_items != prev_items:
+    if should_release_farm_reserve:
         try:
             release_farm_kings_bulk_reservations_from_state(current_state)
         except Exception:
@@ -9042,6 +9062,7 @@ def update_state(user_id, **kwargs):
     state = get_state(user_id)
     state.update(kwargs)
     set_state(user_id, state)
+
 
 def clear_state(user_id):
     with state_lock:
@@ -9060,6 +9081,7 @@ def clear_state(user_id):
             release_farm_kings_bulk_reservations_from_state(state_snapshot)
         except Exception:
             logging.exception("clear_state failed to release reserved farm kings")
+
 
 def set_last_accounts_section(user_id, section_name):
     state = get_state(user_id)
@@ -17856,28 +17878,34 @@ def handle_message(msg):
                 send_text_input_prompt(chat_id, "Какое название будет у farm king?")
                 return
 
-            free_items = find_free_farm_kings(
-                count_needed,
+            ok, reserve_message, reserved_items = reserve_farm_kings_bulk_slots(
+                user_id=user_id,
+                username=username,
                 geo=geo_value,
-                supplier=text
+                supplier=text,
+                count_needed=count_needed
             )
 
-            if len(free_items) < count_needed:
-                tg_send_message(
-                    chat_id,
-                    f"Недостаточно свободных farm king.\n"
-                    f"GEO: {geo_value}\n"
-                    f"Поставщик: {text}\n"
-                    f"Доступно: {len(free_items)}"
-                )
+            if not ok:
+                tg_send_message(chat_id, reserve_message or "Не удалось зарезервировать farm king.")
                 return
 
             state["mode"] = FARM_KING_OCTO_MODE_BULK_NAMES
-            set_state(user_id, state)
+            state["farm_kings_bulk_queue"] = []
+            state["farm_kings_bulk_results"] = []
+            state["farm_kings_bulk_current_index"] = 0
+            state["farm_kings_bulk_proxy_collect_index"] = 0
+            state["farm_kings_bulk_username"] = username
+            state["farm_kings_bulk_issue_rows"] = []
+            state["farm_kings_bulk_reserved_items"] = [dict(x) for x in reserved_items]
+
+            set_state_with_custom_ttl(user_id, state, FARM_KING_BULK_RESERVE_TTL)
 
             send_text_input_prompt(
                 chat_id,
-                f"Пришли {count_needed} названий для farm king.\nКаждое название с новой строки."
+                f"Пришли {count_needed} названий для farm king.\n"
+                f"Каждое название с новой строки.\n\n"
+                f"Эти {count_needed} farm king уже зарезервированы за тобой."
             )
             return
 
@@ -17943,15 +17971,62 @@ def handle_message(msg):
                 tg_send_message(chat_id, "Названия не должны повторяться.")
                 return
 
-            ok, reserve_message, queue = reserve_farm_kings_bulk_rows(
-                user_id=user_id,
-                username=username,
-                geo=state.get("farm_king_geo", ""),
-                supplier=state.get("farm_king_supplier", ""),
-                king_names=names
-            )
+            reserved_items = state.get("farm_kings_bulk_reserved_items", [])
+
+            if reserved_items:
+                ok, reserve_message, queue = apply_farm_kings_bulk_names_to_reserved_items(
+                    reserved_items,
+                    names
+                )
+            else:
+                duplicates = []
+                for name in names:
+                    if farm_king_name_exists(name):
+                        duplicates.append(name)
+
+                if duplicates:
+                    tg_send_message(
+                        chat_id,
+                        "Эти названия уже существуют:\n" + "\n".join(duplicates[:20])
+                    )
+                    return
+
+                selected_rows = find_free_farm_kings(
+                    count_needed,
+                    geo=state.get("farm_king_geo", ""),
+                    supplier=state.get("farm_king_supplier", "")
+                )
+
+                if len(selected_rows) < count_needed:
+                    tg_send_message(
+                        chat_id,
+                        f"Недостаточно свободных farm king.\n"
+                        f"GEO: {state.get('farm_king_geo', '')}\n"
+                        f"Поставщик: {state.get('farm_king_supplier', '')}\n"
+                        f"Доступно: {len(selected_rows)}"
+                    )
+                    return
+
+                queue = []
+                for item, king_name in zip(selected_rows, names):
+                    queue.append({
+                        "row_index": item["row_index"],
+                        "purchase_date": item["row"][1],
+                        "price": item["row"][2],
+                        "supplier": item["row"][3],
+                        "geo": item["row"][7],
+                        "king_name": king_name,
+                        "data_text": get_full_king_data_from_row(item["row"])
+                    })
+                ok = True
+                reserve_message = ""
 
             if not ok:
+                if "Резерв farm king потерян" in str(reserve_message):
+                    clear_state(user_id)
+                    send_farm_kings_menu(chat_id, reserve_message)
+                    return
+
                 tg_send_message(chat_id, reserve_message or "Не удалось зарезервировать farm king.")
                 return
 
