@@ -290,18 +290,17 @@ DEPT_CRYPTO = '🪙Крипта'
 DEPT_GAMBLA = '🎰Гембла'
 
 CRYPTO_NAMES = [
-    '№3 DS78', '№5 MCH79', '№20 MS77',
-    '№32 alex', '№34 AK81', '№37 VK82',
-    '№4 NH25', '№57 VD22', '№60 MSH5', '№62 IA14'
+    '№3 dasha', '№5 mark', '№20 misha',
+    '№32 alex', '№34 anton', '№37 vladimir2',
+    '№4 nikita', '№57 VD3', '№60 MSH5', '№62 IA14'
 ]
 
 GAMBLA_NAMES = [
-    '№8 AK91', '№13 IJ90', '№16 SV89', '№19 IK92', '№26 MD94',
-    '№27 DD93', '№29 ISH95', '№14 ES86', '№777 AM87',
-    '№30 MG88', '№39 AA96', '№47 DK99', '№49 IE97',
-    '№51 VG98', '№21 VK84', '№22 AU85', '№53 DR100', '№54 VP101',
-    '№000 richard', '№55 AL102', '№56 IC1', '№58 KM2', '№59 AH6', '№43 MD9', '№45 AA8', '№61 SN11',
-    '№63 ED123', '№64 SA122'
+    '№8 artem', '№13 ivan', '№16 sergei', '№19 ilya', '№26 maksim1',
+    '№27 denis', '№29 ivansh', '№14 evgen', '№777 asim',
+    '№30 maksim2', '№39 alex_gambl', '№47 daniil', '№48 semen', '№49 ivan2',
+    '№50 andrey2', '№51 vitaliy', '№21 vladimir1', '№22 andrey', '№52 gleb', '№53 dasha2', '№54 vladimir3',
+    '№000 richard', '№55 artem2', '№56 IC1', '№58 KM2', '№59 AH6', '№43 maksim3', '№45 anton2', '№61 SN1'
 ]
 
 SUBMENU_GET = '➡️Выдать лички'
@@ -444,6 +443,19 @@ FARM_KING_OCTO_MODE_SINGLE_PROXY = "awaiting_farm_king_octo_proxy"
 FARM_KING_OCTO_MODE_BULK_NAMES = "awaiting_farm_king_names_bulk_octo"
 FARM_KING_OCTO_MODE_BULK_CONFIRM = "awaiting_farm_kings_confirm_bulk_octo"
 FARM_KING_OCTO_MODE_BULK_PROXY = "awaiting_farm_kings_proxy_bulk_octo"
+
+KING_BULK_PROXY_TTL = CRYPTO_BULK_PROXY_TTL
+KING_OCTO_MODE_COUNT = "awaiting_kings_count_octo"
+KING_OCTO_MODE_GEO = "awaiting_king_geo_octo"
+KING_OCTO_MODE_PRICE = "awaiting_king_price_octo"
+KING_OCTO_MODE_DEPARTMENT = "awaiting_king_department_octo"
+KING_OCTO_MODE_PERSON = "awaiting_king_person_octo"
+KING_OCTO_MODE_NAME = "awaiting_king_name_octo"
+KING_OCTO_MODE_FOUND = "king_found_octo"
+KING_OCTO_MODE_SINGLE_PROXY = "awaiting_king_octo_proxy"
+KING_OCTO_MODE_BULK_NAMES = "awaiting_king_names_bulk_octo"
+KING_OCTO_MODE_BULK_CONFIRM = "awaiting_kings_confirm_bulk_octo"
+KING_OCTO_MODE_BULK_PROXY = "awaiting_kings_proxy_bulk_octo"
 
 last_request_time = time.time()
 last_background_time = time.time()
@@ -2051,6 +2063,26 @@ def normalize_price_key(value):
         return text
 
 
+def format_issue_price(value):
+    price_text = str(value or "").strip()
+    return price_text or "не указана"
+
+
+def build_issue_prices_line(items, price_key="price"):
+    values = []
+    for item in items or []:
+        if isinstance(item, dict):
+            values.append(format_issue_price(item.get(price_key, "")))
+
+    if not values:
+        return "Цена: не указана"
+
+    if len(values) == 1:
+        return f"Цена: {values[0]}"
+
+    return "Цены: " + ", ".join(values)
+
+
 def get_free_crypto_king_prices_by_geo(geo):
     rows = get_sheet_rows_cached(SHEET_CRYPTO_KINGS)
 
@@ -2687,7 +2719,7 @@ def tg_download_photo_content(photo_list):
 
     return tg_download_file_content(file_id)
 
-def tg_send_document_bytes(chat_id, filename, content_bytes, caption=None, inline_buttons=None):
+def tg_send_document_bytes(chat_id, filename, content_bytes, caption=None):
     try:
         data = {
             "chat_id": str(chat_id)
@@ -2695,12 +2727,6 @@ def tg_send_document_bytes(chat_id, filename, content_bytes, caption=None, inlin
 
         if caption:
             data["caption"] = str(caption)
-
-        if inline_buttons is not None:
-            data["reply_markup"] = json.dumps(
-                {"inline_keyboard": inline_buttons},
-                ensure_ascii=False
-            )
 
         files = {
             "document": (filename, content_bytes, "text/plain")
@@ -2715,18 +2741,9 @@ def tg_send_document_bytes(chat_id, filename, content_bytes, caption=None, inlin
 
         if resp.status_code != 200:
             logging.warning(f"Telegram sendDocument failed: {resp.status_code} {resp.text}")
-            return None
-
-        result = resp.json()
-        if not result.get("ok"):
-            logging.warning(f"Telegram sendDocument api error: {result}")
-            return None
-
-        return result
 
     except Exception as e:
         logging.error(f"tg_send_document_bytes error: {e}")
-        return None
 
 def make_safe_txt_filename(name, default_name="king"):
     raw = str(name or "").strip()
@@ -2974,34 +2991,22 @@ def finish_crypto_kings_bulk(chat_id, user_id):
 
     send_kings_menu(chat_id, "Выбери следующее действие:")
 
-def tg_send_king_data_as_txt(chat_id, king_name, data_text, caption=None, inline_buttons=None):
+def tg_send_king_data_as_txt(chat_id, king_name, data_text, caption=None):
     text = str(data_text or "").strip()
 
     if not text:
         tg_send_message(chat_id, "Данные кинга не найдены.")
-        return None
+        return
 
     filename = make_safe_txt_filename(king_name or "king", default_name="king")
-
-    return tg_send_document_bytes(
+    tg_send_document_bytes(
         chat_id=chat_id,
         filename=filename,
         content_bytes=text.encode("utf-8"),
-        caption=caption,
-        inline_buttons=inline_buttons
+        caption=caption
     )
 
-def tg_send_king_search_result_as_txt(
-    chat_id,
-    title,
-    king_name,
-    meta_text,
-    data_text,
-    owner_user_id=None,
-    sheet_name=None,
-    sheet_row_index=None,
-    issue_row_index=None
-):
+def tg_send_king_search_result_as_txt(chat_id, title, king_name, meta_text, data_text):
     meta_text = str(meta_text or "").strip()
     data_text = str(data_text or "").strip()
 
@@ -3009,22 +3014,10 @@ def tg_send_king_search_result_as_txt(
     if data_text:
         full_text += f"\n\nДанные:\n{data_text}"
 
-    inline_buttons = None
-
-    if owner_user_id and sheet_name and sheet_row_index:
-        sheet_code = "c" if sheet_name == SHEET_CRYPTO_KINGS else "k"
-        issue_idx = int(issue_row_index or 0)
-
-        inline_buttons = [[{
-            "text": "Изменить данные",
-            "callback_data": f"king_edit:{owner_user_id}:{sheet_code}:{int(sheet_row_index)}:{issue_idx}"
-        }]]
-
-    return tg_send_king_data_as_txt(
+    tg_send_king_data_as_txt(
         chat_id=chat_id,
         king_name=king_name or title or "king_search",
-        data_text=full_text,
-        inline_buttons=inline_buttons
+        data_text=full_text
     )
 
 def extract_digits(text):
@@ -4698,6 +4691,7 @@ def confirm_fp_issue(chat_id, user_id, username):
             f"Готово ✅\n\n"
             f"ФП выдано.\n"
             f"🔗Ссылка: {fp_link}\n"
+            f"💵Цена: {format_issue_price(price)}\n"
             f"🗃Склад: {warehouse_name}\n"
             f"👨‍💻Для кого: {fp_for_whom}"
         )
@@ -4801,6 +4795,7 @@ def issue_fps_bulk(chat_id, user_id, username, count_needed):
 
                 issued_items.append({
                     "fp_link": row[0],
+                    "price": row[2],
                     "warehouse": warehouse_name
                 })
 
@@ -4833,6 +4828,7 @@ def issue_fps_bulk(chat_id, user_id, username, count_needed):
                 f"Готово ✅\n\n"
                 f"ФП выдано.\n"
                 f"🔗Ссылка: {item['fp_link']}\n"
+                f"💵Цена: {format_issue_price(item.get('price', ''))}\n"
                 f"🗃Склад: {item['warehouse']}\n"
                 f"👨‍💻Для кого: {fp_for_whom}"
             )
@@ -4932,6 +4928,7 @@ def confirm_pixel_issue(chat_id, user_id, username):
             f"Готово ✅\n\n"
             f"Пиксель выдан.\n"
             f"🔥id Пикселя: {pixel_id}\n"
+            f"💵Цена: {format_issue_price(row[1])}\n"
             f"👨‍💻Для кого: {pixel_for_whom}"
         )
 
@@ -5051,6 +5048,7 @@ def issue_pixels_bulk(chat_id, user_id, username, count_needed):
                 issued_messages.append({
                     "pixel_name": pixel_name,
                     "pixel_id": pixel_id,
+                    "price": row[1],
                     "data_text": data_text,
                     "sync_id": sync_id
                 })
@@ -5074,13 +5072,15 @@ def issue_pixels_bulk(chat_id, user_id, username, count_needed):
             chat_id,
             f"Готово ✅\n\n"
             f"🔢Выдано Пикселей: {len(issued_messages)}\n"
+            f"{build_issue_prices_line(issued_messages)}\n"
             f"👨‍💻Для кого: {pixel_for_whom}"
         )
 
         for i, item in enumerate(issued_messages, start=1):
             text_to_send = (
                 f"Пиксель {i}: {item['pixel_name']}\n"
-                f"🔥id Пикселя: {item['pixel_id']}\n\n"
+                f"🔥id Пикселя: {item['pixel_id']}\n"
+                f"💵Цена: {format_issue_price(item.get('price', ''))}\n\n"
                 f"{item['data_text']}"
             )
             tg_send_long_message(chat_id, text_to_send)
@@ -9643,6 +9643,7 @@ def confirm_issue(chat_id, user_id, username):
                 chat_id,
                 f"Готово ✅\n\n"
                 f"Выдана личка: {item['account_number']}\n"
+                f"Цена: {format_issue_price(item.get('price', ''))}\n"
                 f"Кому передали: {for_whom}\n"
                 f"Кто взял в боте: {who_took_text}"
             )
@@ -9666,6 +9667,7 @@ def confirm_issue(chat_id, user_id, username):
             chat_id,
             f"Готово ✅\n\n"
             f"Выдана личка: {item['account_number']}\n"
+            f"Цена: {format_issue_price(item.get('price', ''))}\n"
             f"Кому передали: {for_whom}\n"
             f"Кто взял в боте: {who_took_text}"
         )
@@ -11115,6 +11117,7 @@ def confirm_bm_issue(chat_id, user_id, username):
             f"Готово ✅\n\n"
             f"БМ выдан.\n"
             f"🔥ID БМа: {bm_id}\n"
+            f"💵Цена: {format_issue_price(price)}\n"
             f"👨‍💻Для кого: {bm_for_whom}"
         )
 
@@ -11217,6 +11220,7 @@ def issue_bms_bulk(chat_id, user_id, username, count_needed):
 
                 issued_items.append({
                     "bm_id": row[0],
+                    "price": row[2],
                     "data_text": row[8] if len(row) > 8 else "",
                     "sync_id": sync_id
                 })
@@ -11244,6 +11248,7 @@ def issue_bms_bulk(chat_id, user_id, username, count_needed):
                 f"Готово ✅\n\n"
                 f"БМ выдан.\n"
                 f"ID БМа: {item['bm_id']}\n"
+                f"Цена: {format_issue_price(item.get('price', ''))}\n"
                 f"Для кого: {bm_for_whom}\n"
                 f"Кто взял в боте: {who_took_text}"
             )
@@ -11580,6 +11585,7 @@ def issue_kings_bulk(chat_id, user_id, username, king_names):
                 chat_id,
                 f"Готово ✅\n\n"
                 f"Выдано кингов: {len(issued_items)}\n"
+                f"{build_issue_prices_line(issued_items)}\n"
                 f"Для кого: {king_for_whom}"
             )
         except Exception:
@@ -12261,118 +12267,6 @@ def return_crypto_king_to_ban(king_name, comment_text=""):
 
     invalidate_stats_cache()
     return True, f"Crypto king '{king_name}' переведён в ban."
-
-def resolve_king_sheet_name_from_code(sheet_code):
-    if sheet_code == "k":
-        return SHEET_KINGS
-    if sheet_code == "c":
-        return SHEET_CRYPTO_KINGS
-    return ""
-
-
-def build_king_edit_person_buttons(user_id, dept_code):
-    names = CRYPTO_NAMES if dept_code == "c" else GAMBLA_NAMES
-
-    keyboard = []
-    row = []
-
-    for idx, name in enumerate(names):
-        row.append({
-            "text": name,
-            "callback_data": f"king_edit_pick:{user_id}:{dept_code}:{idx}"
-        })
-
-        if len(row) == 2:
-            keyboard.append(row)
-            row = []
-
-    if row:
-        keyboard.append(row)
-
-    return keyboard
-
-
-def update_king_name_in_sheets(sheet_name, sheet_row_index, old_king_name, new_king_name, issue_row_index=None):
-    sheet_name = str(sheet_name or "").strip()
-    old_king_name = str(old_king_name or "").strip()
-    new_king_name = str(new_king_name or "").strip()
-
-    if sheet_name not in [SHEET_KINGS, SHEET_CRYPTO_KINGS]:
-        return False, "Неизвестный лист кинга."
-
-    if not sheet_row_index:
-        return False, "Не найдена строка кинга."
-
-    if not new_king_name:
-        return False, "Новое название пустое."
-
-    existing = find_king_in_base_by_name(new_king_name)
-    if existing:
-        same_row = (
-            str(existing.get("sheet_name", "")).strip() == sheet_name
-            and int(existing.get("row_index", 0) or 0) == int(sheet_row_index)
-        )
-        if not same_row:
-            return False, f"Название '{new_king_name}' уже существует."
-
-    sheet_update_and_refresh(sheet_name, f"A{sheet_row_index}", [[new_king_name]])
-
-    target_issue_row = int(issue_row_index or 0)
-    if not target_issue_row:
-        issue_info = find_last_king_issue_row(old_king_name)
-        if issue_info:
-            target_issue_row = issue_info["row_index"]
-
-    if target_issue_row:
-        sheet_update_and_refresh(SHEET_ISSUES, f"A{target_issue_row}", [[new_king_name]])
-        invalidate_stats_cache()
-        return True, f"Название изменено.\n\nБыло: {old_king_name}\nСтало: {new_king_name}"
-
-    invalidate_stats_cache()
-    return True, (
-        f"Название изменено в базе king.\n\n"
-        f"Было: {old_king_name}\n"
-        f"Стало: {new_king_name}\n\n"
-        f"Но запись в '{SHEET_ISSUES}' не найдена."
-    )
-
-
-def update_king_buyer_in_sheets(sheet_name, sheet_row_index, king_name, new_for_whom, issue_row_index=None):
-    sheet_name = str(sheet_name or "").strip()
-    king_name = str(king_name or "").strip()
-    new_for_whom = str(new_for_whom or "").strip()
-
-    if sheet_name not in [SHEET_KINGS, SHEET_CRYPTO_KINGS]:
-        return False, "Неизвестный лист кинга."
-
-    if not sheet_row_index:
-        return False, "Не найдена строка кинга."
-
-    if not new_for_whom:
-        return False, "Новый байер пустой."
-
-    # В листе king buyer / for_whom = колонка F
-    sheet_update_and_refresh(sheet_name, f"F{sheet_row_index}", [[new_for_whom]])
-
-    target_issue_row = int(issue_row_index or 0)
-    if not target_issue_row:
-        issue_info = find_last_king_issue_row(king_name)
-        if issue_info:
-            target_issue_row = issue_info["row_index"]
-
-    if target_issue_row:
-        # В Простые лички 26 buyer / for_whom = колонка G
-        sheet_update_and_refresh(SHEET_ISSUES, f"G{target_issue_row}", [[new_for_whom]])
-        invalidate_stats_cache()
-        return True, f"Байер изменён.\n\nКинг: {king_name}\nНовый байер: {new_for_whom}"
-
-    invalidate_stats_cache()
-    return True, (
-        f"Байер изменён в базе king.\n\n"
-        f"Кинг: {king_name}\n"
-        f"Новый байер: {new_for_whom}\n\n"
-        f"Но запись в '{SHEET_ISSUES}' не найдена."
-    )
     
 def build_king_search_text(king_name):
     target = str(king_name).strip().lower()
@@ -12400,8 +12294,6 @@ def build_king_search_text(king_name):
     who_took = row[8] or "не указано"
     data_text = get_full_king_data_from_row(row) or ""
 
-    issue_info = find_last_king_issue_row(name)
-
     meta_text = (
         f"{source_title}:\n"
         f"Название: {name}\n"
@@ -12417,10 +12309,7 @@ def build_king_search_text(king_name):
         "title": source_title,
         "king_name": name,
         "meta_text": meta_text,
-        "data_text": data_text,
-        "sheet_name": sheet_name,
-        "sheet_row_index": found["row_index"],
-        "issue_row_index": issue_info["row_index"] if issue_info else None,
+        "data_text": data_text
     }
     
 def build_stats_text():
@@ -14492,6 +14381,40 @@ def handle_message(msg):
                 )
                 return
 
+            if mode == KING_OCTO_MODE_COUNT:
+                tg_send_message(chat_id, "Сколько king нужно?", [
+                    [{"text": BTN_BACK_STEP}, {"text": MENU_CANCEL}]
+                ])
+                return
+
+            if mode == KING_OCTO_MODE_GEO:
+                send_king_geo_options(chat_id)
+                return
+
+            if mode == KING_OCTO_MODE_PRICE:
+                send_king_price_options(chat_id, prev_state.get("king_geo", ""))
+                return
+
+            if mode == KING_OCTO_MODE_DEPARTMENT:
+                send_department_menu(chat_id, "Выбери для кого king:")
+                return
+
+            if mode == KING_OCTO_MODE_PERSON:
+                send_person_menu(chat_id, prev_state.get("king_department"))
+                return
+
+            if mode == KING_OCTO_MODE_BULK_NAMES:
+                tg_send_message(
+                    chat_id,
+                    f"Пришли {len(prev_state.get('king_selected_rows', []))} названий для king.\n"
+                    f"Каждое название с новой строки."
+                )
+                return
+
+            if mode == KING_OCTO_MODE_BULK_PROXY:
+                start_kings_bulk_proxy_step(chat_id, user_id)
+                return
+
             if mode == "awaiting_king_geo":
                 send_king_geo_options(chat_id)
                 return
@@ -15115,6 +15038,7 @@ def handle_message(msg):
                 chat_id,
                 f"Готово ✅\n\n"
                 f"Выдана личка: {result['account_number']}\n"
+                f"Цена: {format_issue_price(result.get('price', ''))}\n"
                 f"Кому передали: {result['for_whom']}\n"
                 f"Кто взял в боте: {result['who_took_text']}"
             )
@@ -15274,9 +15198,16 @@ def handle_message(msg):
         if text == SUBMENU_GET_KINGS:
             clear_state(user_id)
             set_state(user_id, {
-                "mode": "awaiting_king_geo"
+                "mode": KING_OCTO_MODE_COUNT
             })
-            send_king_geo_options(chat_id)
+
+            tg_send_message(
+                chat_id,
+                "Сколько king нужно?",
+                keyboard=[
+                    [{"text": BTN_BACK_STEP}, {"text": MENU_CANCEL}]
+                ]
+            )
             return
 
         if text == SUBMENU_CRYPTO_KINGS:
@@ -16328,6 +16259,7 @@ def handle_message(msg):
                 chat_id,
                 f"Готово ✅\n\n"
                 f"Выдано личек: {len(issued)}\n"
+                f"{build_issue_prices_line(issued)}\n"
                 f"Кому передали: {state['for_whom']}\n"
                 f"Кто взял в боте: {who_took_text}"
             )
@@ -16409,6 +16341,159 @@ def handle_message(msg):
             return
 
         # ========= СОСТОЯНИЯ: КИНГИ =========
+        if state.get("mode") == KING_OCTO_MODE_COUNT:
+            count_text = str(text).strip()
+
+            if not count_text.isdigit():
+                tg_send_message(chat_id, "Пришли количество числом.")
+                return
+
+            count_needed = int(count_text)
+            if count_needed <= 0:
+                tg_send_message(chat_id, "Количество должно быть больше нуля.")
+                return
+
+            state["kings_count"] = count_needed
+            state["mode"] = KING_OCTO_MODE_GEO
+            set_state(user_id, state)
+
+            send_king_geo_options(chat_id)
+            return
+
+        if state.get("mode") == KING_OCTO_MODE_GEO:
+            geo = str(text).strip()
+            geos = get_free_king_geos()
+
+            if geo not in geos:
+                send_king_geo_options(chat_id)
+                return
+
+            state["king_geo"] = geo
+            state["mode"] = KING_OCTO_MODE_PRICE
+            set_state(user_id, state)
+
+            send_king_price_options(chat_id, geo)
+            return
+
+        if state.get("mode") == KING_OCTO_MODE_PRICE:
+            geo = str(state.get("king_geo", "")).strip()
+            prices = get_free_king_prices_by_geo(geo)
+            selected_price = normalize_price_key(text)
+
+            if selected_price not in prices:
+                send_king_price_options(chat_id, geo)
+                return
+
+            state["king_price"] = selected_price
+            state["mode"] = KING_OCTO_MODE_DEPARTMENT
+            set_state(user_id, state)
+
+            send_department_menu(chat_id, "Выбери для кого king:")
+            return
+
+        if state.get("mode") == KING_OCTO_MODE_DEPARTMENT:
+            if text not in [DEPT_CRYPTO, DEPT_GAMBLA]:
+                send_department_menu(chat_id, "Нужно выбрать отдел кнопкой:")
+                return
+
+            state["mode"] = KING_OCTO_MODE_PERSON
+            state["king_department"] = text
+            set_state(user_id, state)
+
+            send_person_menu(chat_id, text)
+            return
+
+        if state.get("mode") == KING_OCTO_MODE_PERSON:
+            department = state.get("king_department")
+
+            allowed_names = []
+            if department == DEPT_CRYPTO:
+                allowed_names = CRYPTO_NAMES
+            elif department == DEPT_GAMBLA:
+                allowed_names = GAMBLA_NAMES
+
+            if text not in allowed_names:
+                send_person_menu(chat_id, department)
+                return
+
+            count_needed = int(state.get("kings_count", 0) or 0)
+            geo_value = str(state.get("king_geo", "")).strip()
+            price_value = str(state.get("king_price", "")).strip()
+
+            selected = find_free_kings_by_geo_and_price(
+                count_needed,
+                geo_value,
+                price_value
+            )
+
+            if len(selected) < count_needed:
+                clear_state(user_id)
+                send_kings_menu(
+                    chat_id,
+                    f"Недостаточно свободных king по GEO {geo_value} и цене {price_value}.\n"
+                    f"Доступно: {len(selected)}"
+                )
+                return
+
+            state["king_for_whom"] = normalize_person_name(text)
+            state["king_selected_rows"] = selected
+            state["mode"] = KING_OCTO_MODE_BULK_NAMES
+            set_state(user_id, state)
+
+            tg_send_message(
+                chat_id,
+                f"Пришли {count_needed} названий для king.\n"
+                f"Каждое название с новой строки."
+            )
+            return
+
+        if state.get("mode") in [KING_OCTO_MODE_BULK_NAMES, "awaiting_king_names_bulk"]:
+            names = [x.strip() for x in text.splitlines() if x.strip()]
+            selected_rows = state.get("king_selected_rows", [])
+            count_needed = len(selected_rows)
+
+            if len(names) != count_needed:
+                tg_send_message(chat_id, f"Нужно прислать ровно {count_needed} названий, каждое с новой строки.")
+                return
+
+            lower_names = [x.lower() for x in names]
+            if len(lower_names) != len(set(lower_names)):
+                tg_send_message(chat_id, "Названия не должны повторяться.")
+                return
+
+            duplicates = []
+            for name in names:
+                if king_name_exists(name):
+                    duplicates.append(name)
+
+            if duplicates:
+                tg_send_message(
+                    chat_id,
+                    "Эти названия уже существуют:\n" + "\n".join(duplicates[:20])
+                )
+                return
+
+            queue = []
+            for item, king_name in zip(selected_rows, names):
+                queue.append({
+                    "row_index": item["row_index"],
+                    "purchase_date": item["purchase_date"],
+                    "price": item["price"],
+                    "supplier": item["supplier"],
+                    "geo": item["geo"],
+                    "king_name": king_name,
+                    "data_text": item.get("data_text", "")
+                })
+
+            state["kings_bulk_queue"] = queue
+            state["kings_bulk_results"] = []
+            state["kings_bulk_current_index"] = 0
+            state["kings_bulk_username"] = username
+            set_state_with_custom_ttl(user_id, state, KING_BULK_PROXY_TTL)
+
+            send_kings_bulk_found_preview_once(chat_id, user_id)
+            return
+
         if state.get("mode") == "awaiting_crypto_king_geo":
             geos = get_free_crypto_king_geos()
 
@@ -16593,6 +16678,15 @@ def handle_message(msg):
             )
             return
 
+        if state.get("mode") == KING_OCTO_MODE_BULK_PROXY:
+            process_kings_bulk_proxy_step(
+                chat_id=chat_id,
+                user_id=user_id,
+                username=username,
+                proxy_text=text
+            )
+            return
+
         if state.get("mode") == "awaiting_crypto_king_department":
             keyboard = [[{"text": DEPT_CRYPTO}], [{"text": MENU_CANCEL}]]
 
@@ -16724,40 +16818,32 @@ def handle_message(msg):
                 tg_send_message(chat_id, "Количество должно быть больше нуля.")
                 return
 
-            rows = get_sheet_rows_cached(SHEET_KINGS)
-            candidates = []
+            geo_value = str(state.get("king_geo", "")).strip()
+            price_value = str(state.get("king_price", "")).strip()
 
-            for idx, row in enumerate(rows[1:], start=2):
-                if len(row) < 10:
-                    row = row + [''] * (10 - len(row))
-
-                if str(row[4]).strip().lower() != "free":
-                    continue
-                if str(row[7]).strip() != state.get("king_geo"):
-                    continue
-
-                purchase_date = parse_date(row[1]) or datetime.max
-                candidates.append({
-                    "row_index": idx,
-                    "purchase_date_obj": purchase_date
-                })
-
-            candidates.sort(key=lambda x: x["purchase_date_obj"])
-            selected = candidates[:count_needed]
+            selected = find_free_kings_by_geo_and_price(
+                count_needed,
+                geo_value,
+                price_value
+            )
 
             if len(selected) < count_needed:
                 clear_state(user_id)
-                send_kings_menu(chat_id, f"Недостаточно свободных кингов с таким GEO. Доступно: {len(selected)}")
+                send_kings_menu(
+                    chat_id,
+                    f"Недостаточно свободных king по GEO {geo_value} и цене {price_value}.\n"
+                    f"Доступно: {len(selected)}"
+                )
                 return
 
             state["mode"] = "awaiting_king_names_bulk"
             state["kings_count"] = count_needed
-            state["king_rows"] = selected
+            state["king_selected_rows"] = selected
             set_state(user_id, state)
 
             tg_send_message(
                 chat_id,
-                f"Пришли {count_needed} названий для кингов.\nКаждое название с новой строки."
+                f"Пришли {count_needed} названий для king.\nКаждое название с новой строки."
             )
             return
 
@@ -16826,42 +16912,10 @@ def handle_message(msg):
                 title=result["title"],
                 king_name=result["king_name"],
                 meta_text=result["meta_text"],
-                data_text=result["data_text"],
-                owner_user_id=user_id,
-                sheet_name=result["sheet_name"],
-                sheet_row_index=result["sheet_row_index"],
-                issue_row_index=result.get("issue_row_index"),
+                data_text=result["data_text"]
             )
 
             send_kings_menu(chat_id, "Меню кингов:")
-            return
-
-        if state.get("mode") == "awaiting_search_king_new_name":
-            new_king_name = text.strip()
-
-            if not new_king_name:
-                send_text_input_prompt(chat_id, "Впиши новое название для кинга.")
-                return
-
-            sheet_name = str(state.get("edit_king_sheet_name", "")).strip()
-            sheet_row_index = int(state.get("edit_king_sheet_row_index", 0) or 0)
-            issue_row_index = int(state.get("edit_king_issue_row_index", 0) or 0)
-            old_king_name = str(state.get("edit_king_old_name", "")).strip()
-
-            ok, message = update_king_name_in_sheets(
-                sheet_name=sheet_name,
-                sheet_row_index=sheet_row_index,
-                old_king_name=old_king_name,
-                new_king_name=new_king_name,
-                issue_row_index=issue_row_index
-            )
-
-            if ok:
-                state["mode"] = "king_search_edit_menu"
-                state["edit_king_old_name"] = new_king_name
-                set_state(user_id, state)
-
-            tg_send_message(chat_id, message)
             return
             
         if state.get("mode") == "awaiting_return_king_name":
@@ -18671,186 +18725,6 @@ def handle_callback_query(callback_query):
 
             return jsonify({"ok": True})
 
-        if data.startswith("king_edit:"):
-            parts = data.split(":")
-            if len(parts) != 5:
-                tg_answer_callback_query(callback_id, "Некорректная кнопка")
-                return jsonify({"ok": True})
-
-            target_user_id = parts[1]
-            sheet_code = parts[2]
-            sheet_row_index = int(parts[3])
-            issue_row_index = int(parts[4] or 0)
-
-            if str(user_id) != str(target_user_id):
-                tg_answer_callback_query(callback_id, "Это не ваша кнопка")
-                return jsonify({"ok": True})
-
-            sheet_name = resolve_king_sheet_name_from_code(sheet_code)
-            if not sheet_name:
-                tg_answer_callback_query(callback_id, "Неизвестный источник king")
-                return jsonify({"ok": True})
-
-            row = get_sheet_row_live(sheet_name, sheet_row_index, 13)
-            if not row or not any(str(x).strip() for x in row):
-                tg_answer_callback_query(callback_id, "Кинг не найден")
-                return jsonify({"ok": True})
-
-            row = ensure_row_len(row, 13)
-            king_name = str(row[0]).strip()
-
-            if not king_name:
-                tg_answer_callback_query(callback_id, "У кинга пустое название")
-                return jsonify({"ok": True})
-
-            set_state(user_id, {
-                "mode": "king_search_edit_menu",
-                "edit_king_sheet_name": sheet_name,
-                "edit_king_sheet_row_index": sheet_row_index,
-                "edit_king_issue_row_index": issue_row_index,
-                "edit_king_old_name": king_name,
-            })
-
-            tg_answer_callback_query(callback_id)
-
-            tg_send_inline_message(
-                chat_id,
-                f"Что изменить у king '{king_name}'?",
-                [
-                    [{"text": "Поменять название", "callback_data": f"king_edit_name:{user_id}"}],
-                    [{"text": "Поменять байера", "callback_data": f"king_edit_buyer:{user_id}"}],
-                ]
-            )
-            return jsonify({"ok": True})
-
-
-        if data.startswith("king_edit_name:"):
-            target_user_id = data.split(":", 1)[1]
-
-            if str(user_id) != str(target_user_id):
-                tg_answer_callback_query(callback_id, "Это не ваша кнопка")
-                return jsonify({"ok": True})
-
-            state = get_state(user_id)
-            if not state.get("edit_king_sheet_name"):
-                tg_answer_callback_query(callback_id, "Сначала снова открой king из поиска")
-                return jsonify({"ok": True})
-
-            update_state(user_id, mode="awaiting_search_king_new_name")
-
-            tg_answer_callback_query(callback_id)
-            send_text_input_prompt(chat_id, "Впиши новое название для кинга.")
-            return jsonify({"ok": True})
-
-
-        if data.startswith("king_edit_buyer:"):
-            target_user_id = data.split(":", 1)[1]
-
-            if str(user_id) != str(target_user_id):
-                tg_answer_callback_query(callback_id, "Это не ваша кнопка")
-                return jsonify({"ok": True})
-
-            state = get_state(user_id)
-            if not state.get("edit_king_sheet_name"):
-                tg_answer_callback_query(callback_id, "Сначала снова открой king из поиска")
-                return jsonify({"ok": True})
-
-            tg_answer_callback_query(callback_id)
-
-            tg_send_inline_message(
-                chat_id,
-                "Выбери отдел для нового байера:",
-                [
-                    [{"text": DEPT_CRYPTO, "callback_data": f"king_edit_dept:{user_id}:c"}],
-                    [{"text": DEPT_GAMBLA, "callback_data": f"king_edit_dept:{user_id}:g"}],
-                ]
-            )
-            return jsonify({"ok": True})
-
-
-        if data.startswith("king_edit_dept:"):
-            parts = data.split(":")
-            if len(parts) != 3:
-                tg_answer_callback_query(callback_id, "Некорректная кнопка")
-                return jsonify({"ok": True})
-
-            target_user_id = parts[1]
-            dept_code = parts[2]
-
-            if str(user_id) != str(target_user_id):
-                tg_answer_callback_query(callback_id, "Это не ваша кнопка")
-                return jsonify({"ok": True})
-
-            if dept_code not in ["c", "g"]:
-                tg_answer_callback_query(callback_id, "Неизвестный отдел")
-                return jsonify({"ok": True})
-
-            state = get_state(user_id)
-            if not state.get("edit_king_sheet_name"):
-                tg_answer_callback_query(callback_id, "Сначала снова открой king из поиска")
-                return jsonify({"ok": True})
-
-            update_state(user_id, edit_king_department=dept_code)
-
-            tg_answer_callback_query(callback_id)
-
-            tg_send_inline_message(
-                chat_id,
-                "Выбери нового байера:",
-                build_king_edit_person_buttons(user_id, dept_code)
-            )
-            return jsonify({"ok": True})
-
-
-        if data.startswith("king_edit_pick:"):
-            parts = data.split(":")
-            if len(parts) != 4:
-                tg_answer_callback_query(callback_id, "Некорректная кнопка")
-                return jsonify({"ok": True})
-
-            target_user_id = parts[1]
-            dept_code = parts[2]
-
-            try:
-                person_idx = int(parts[3])
-            except Exception:
-                tg_answer_callback_query(callback_id, "Некорректный пользователь")
-                return jsonify({"ok": True})
-
-            if str(user_id) != str(target_user_id):
-                tg_answer_callback_query(callback_id, "Это не ваша кнопка")
-                return jsonify({"ok": True})
-
-            names = CRYPTO_NAMES if dept_code == "c" else GAMBLA_NAMES
-
-            if person_idx < 0 or person_idx >= len(names):
-                tg_answer_callback_query(callback_id, "Пользователь не найден")
-                return jsonify({"ok": True})
-
-            new_for_whom = normalize_person_name(names[person_idx])
-
-            state = get_state(user_id)
-            sheet_name = str(state.get("edit_king_sheet_name", "")).strip()
-            sheet_row_index = int(state.get("edit_king_sheet_row_index", 0) or 0)
-            issue_row_index = int(state.get("edit_king_issue_row_index", 0) or 0)
-            king_name = str(state.get("edit_king_old_name", "")).strip()
-
-            if not sheet_name or not sheet_row_index or not king_name:
-                tg_answer_callback_query(callback_id, "Потеряны данные для редактирования")
-                return jsonify({"ok": True})
-
-            ok, message = update_king_buyer_in_sheets(
-                sheet_name=sheet_name,
-                sheet_row_index=sheet_row_index,
-                king_name=king_name,
-                new_for_whom=new_for_whom,
-                issue_row_index=issue_row_index
-            )
-
-            tg_answer_callback_query(callback_id, "Готово" if ok else "Ошибка")
-            tg_send_message(chat_id, message)
-            return jsonify({"ok": True})
-
         if data.startswith("poll_answers:"):
             poll_id = data.split(":", 1)[1]
 
@@ -18987,6 +18861,125 @@ def handle_callback_query(callback_query):
                 king_name=king_name,
                 data_text=data_text
             )
+            return jsonify({"ok": True})
+
+        if data == f"download_king_bulk_zip:{user_id}":
+            state = get_state(user_id)
+            results = state.get("kings_bulk_results", [])
+
+            success_items = [x for x in results if x.get("octo_ok")]
+            if not success_items:
+                tg_answer_callback_query(callback_id, "Нет файлов для скачивания")
+                return jsonify({"ok": True})
+
+            try:
+                archive_name = f"kings_{datetime.now(MOSCOW_TZ).strftime('%Y%m%d_%H%M%S')}.zip"
+                tg_send_kings_as_zip(
+                    chat_id=chat_id,
+                    issued_items=success_items,
+                    archive_name=archive_name
+                )
+                tg_answer_callback_query(callback_id, "Zip отправлен")
+            except Exception:
+                logging.exception("download_king_bulk_zip failed")
+                tg_answer_callback_query(callback_id, "Не удалось отправить zip")
+
+            return jsonify({"ok": True})
+
+        if data.startswith(f"download_king_bulk_txt:{user_id}:"):
+            state = get_state(user_id)
+            results = state.get("kings_bulk_results", [])
+
+            success_items = [x for x in results if x.get("octo_ok")]
+            if not success_items:
+                tg_answer_callback_query(callback_id, "Нет txt для скачивания")
+                return jsonify({"ok": True})
+
+            try:
+                item = success_items[0]
+                tg_send_king_data_as_txt(
+                    chat_id=chat_id,
+                    king_name=item.get("king_name", "king"),
+                    data_text=item.get("data_text", "")
+                )
+                tg_answer_callback_query(callback_id, "Txt отправлен")
+            except Exception:
+                logging.exception("download_king_bulk_txt failed")
+                tg_answer_callback_query(callback_id, "Не удалось отправить txt")
+
+            return jsonify({"ok": True})
+
+        if data == f"kings_bulk_skip_all_proxies:{user_id}":
+            state = get_state(user_id)
+            state["kings_bulk_skip_all_proxies"] = True
+
+            if message_id:
+                state["kings_bulk_proxy_message_id"] = message_id
+
+            set_state_with_custom_ttl(user_id, state, KING_BULK_PROXY_TTL)
+
+            if message_id:
+                tg_edit_message_text(
+                    chat_id=chat_id,
+                    message_id=message_id,
+                    text="✅ Прокси пропущены",
+                    inline_buttons=[]
+                )
+
+            tg_answer_callback_query(callback_id, "Все оставшиеся прокси будут пропущены")
+
+            process_kings_bulk_proxy_step(
+                chat_id=chat_id,
+                user_id=user_id,
+                username=state.get("kings_bulk_username", ""),
+                proxy_text="__SKIP_ALL_PROXIES__"
+            )
+            return jsonify({"ok": True})
+
+        if data.startswith("confirm_kings_bulk_octo:"):
+            target_user_id = data.split(":", 1)[1]
+
+            if str(user_id) != str(target_user_id):
+                tg_answer_callback_query(callback_id, "Это не ваша кнопка")
+                return
+
+            tg_answer_callback_query(callback_id)
+
+            state = get_state(user_id)
+
+            if message_id:
+                state["kings_bulk_confirm_message_id"] = message_id
+                set_state_with_custom_ttl(user_id, state, KING_BULK_PROXY_TTL)
+
+                tg_edit_message_text(
+                    chat_id,
+                    message_id,
+                    "✅ Список king подтверждён",
+                    inline_buttons=[]
+                )
+
+            start_kings_bulk_proxy_step(chat_id, user_id)
+            return jsonify({"ok": True})
+
+        if data.startswith("cancel_kings_bulk_octo:"):
+            target_user_id = data.split(":", 1)[1]
+
+            if str(user_id) != str(target_user_id):
+                tg_answer_callback_query(callback_id, "Это не ваша кнопка")
+                return
+
+            tg_answer_callback_query(callback_id, "Выдача отменена")
+            clear_state(user_id)
+
+            if message_id:
+                tg_edit_message_text(
+                    chat_id,
+                    message_id,
+                    "❌ Выдача king отменена",
+                    inline_buttons=[]
+                )
+
+            send_kings_menu(chat_id, "Меню кингов:")
             return jsonify({"ok": True})
 
         if data == f"download_farm_king_bulk_zip:{user_id}":
