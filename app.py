@@ -13,6 +13,8 @@ from google.oauth2.service_account import Credentials
 import threading
 import uuid
 import tempfile
+import base64
+import zlib
 
 app = Flask(__name__)
 CORS(app)
@@ -187,6 +189,7 @@ SHEET_FARM_FPS = "База фарм фп"
 SHEET_CRYPTO_KINGS = "База_крипта_кинги"
 SHEET_PIXELS = "База_пикселей"
 SHEET_STICKERS = "Стикеры"
+SHEET_KING_DOWNLOADS = "Кэш_скачиваний_king"
 
 ADMIN_POLL = "Опрос"
 
@@ -411,6 +414,54 @@ last_backup_date = None
 MOSCOW_TZ = ZoneInfo("Europe/Moscow")
 farm_bulk_worker_lock = threading.Lock()
 farm_bulk_workers_running = set()
+
+# Резервирование farm king строк — защита от race condition при параллельных выдачах
+farm_kings_reserve_lock = threading.Lock()
+farm_kings_reserved_rows = {}  # row_index -> user_id, кто зарезервировал
+FARM_KINGS_RESERVE_TTL = 1800  # 30 минут максимум держим резерв
+_farm_kings_reserve_timestamps = {}  # row_index -> timestamp
+
+def reserve_farm_king_rows(user_id, row_indices):
+    """Зарезервировать список строк за пользователем. Возвращает True если все свободны."""
+    now = time.time()
+    with farm_kings_reserve_lock:
+        # Сначала очистим протухшие резервы
+        stale = [r for r, ts in _farm_kings_reserve_timestamps.items()
+                 if now - ts > FARM_KINGS_RESERVE_TTL]
+        for r in stale:
+            farm_kings_reserved_rows.pop(r, None)
+            _farm_kings_reserve_timestamps.pop(r, None)
+
+        # Проверяем, не занят ли кто-то другой
+        for idx in row_indices:
+            owner = farm_kings_reserved_rows.get(idx)
+            if owner is not None and owner != user_id:
+                return False  # Уже занято другим
+
+        # Резервируем
+        for idx in row_indices:
+            farm_kings_reserved_rows[idx] = user_id
+            _farm_kings_reserve_timestamps[idx] = now
+        return True
+
+def release_farm_king_rows(user_id):
+    """Снять все резервы пользователя (при отмене или завершении)."""
+    with farm_kings_reserve_lock:
+        to_release = [r for r, uid in farm_kings_reserved_rows.items() if uid == user_id]
+        for r in to_release:
+            farm_kings_reserved_rows.pop(r, None)
+            _farm_kings_reserve_timestamps.pop(r, None)
+
+def get_reserved_rows_set():
+    """Вернуть множество всех зарезервированных row_index (для фильтрации)."""
+    now = time.time()
+    with farm_kings_reserve_lock:
+        stale = [r for r, ts in _farm_kings_reserve_timestamps.items()
+                 if now - ts > FARM_KINGS_RESERVE_TTL]
+        for r in stale:
+            farm_kings_reserved_rows.pop(r, None)
+            _farm_kings_reserve_timestamps.pop(r, None)
+        return set(farm_kings_reserved_rows.keys())
 polls_lock = threading.Lock()
 polls_data = {}
 next_poll_id = 1
@@ -433,7 +484,6 @@ CRYPTO_BULK_MODE_PRICE = "awaiting_crypto_kings_price_bulk"
 CRYPTO_BULK_MODE_CONFIRM = "awaiting_crypto_kings_confirm_bulk"
 
 FARM_KING_BULK_PROXY_TTL = CRYPTO_BULK_PROXY_TTL
-FARM_KING_BULK_RESERVE_TTL = 60 * 30  # 30 минут держим резерв до ввода названий
 
 FARM_KING_OCTO_MODE_SUPPLIER = "awaiting_farm_king_supplier_octo"
 
@@ -470,282 +520,6 @@ google_error_until = 0
 GOOGLE_ERROR_COOLDOWN = 5
 google_error_count = 0
 
-def make_farm_king_reserve_stamp():
-    return f"reserved:{datetime.now(MOSCOW_TZ).strftime('%Y%m%d_%H%M%S')}:{uuid.uuid4().hex[:8]}"
-
-
-def build_reserved_farm_king_row_values(row, king_name, reserve_stamp, reserved_by):
-    row = ensure_row_len(row, 13)
-    return [[
-        king_name,
-        row[1],
-        row[2],
-        row[3],
-        "reserved",
-        "farm",
-        reserve_stamp,
-        row[7],
-        reserved_by,
-        row[9],
-        row[10],
-        row[11]
-    ]]
-
-
-def build_free_farm_king_row_values(row):
-    row = ensure_row_len(row, 13)
-    return [[
-        "",
-        row[1],
-        row[2],
-        row[3],
-        "free",
-        "",
-        "",
-        row[7],
-        "",
-        row[9],
-        row[10],
-        row[11]
-    ]]
-
-
-def reserve_farm_kings_bulk_slots(user_id, username, geo, supplier, count_needed):
-    geo = str(geo or "").strip()
-    supplier = str(supplier or "").strip()
-
-    try:
-        count_needed = int(count_needed or 0)
-    except Exception:
-        count_needed = 0
-
-    if count_needed <= 0:
-        return False, "Некорректное количество farm king.", []
-
-    reserved_by = f"@{username}" if username else f"user:{user_id}"
-
-    with issue_lock:
-        rows = get_sheet_rows_cached(SHEET_FARM_KINGS, force=True)
-        candidates = []
-
-        for idx, raw_row in enumerate(rows[1:], start=2):
-            row = ensure_row_len(raw_row, 13)
-
-            if str(row[4]).strip().lower() != "free":
-                continue
-            if geo and str(row[7]).strip() != geo:
-                continue
-            if supplier and str(row[3]).strip() != supplier:
-                continue
-
-            purchase_date = parse_date(row[1]) or datetime.max
-            candidates.append({
-                "row_index": idx,
-                "row": row,
-                "purchase_date_obj": purchase_date
-            })
-
-        candidates.sort(key=lambda x: x["purchase_date_obj"])
-        selected = candidates[:count_needed]
-
-        if len(selected) < count_needed:
-            return False, (
-                f"Недостаточно свободных farm king.\n"
-                f"GEO: {geo}\n"
-                f"Поставщик: {supplier}\n"
-                f"Доступно: {len(selected)}"
-            ), []
-
-        updates = []
-        reserved_items = []
-
-        for item in selected:
-            row = ensure_row_len(item["row"], 13)
-            row_index = item["row_index"]
-            reserve_stamp = make_farm_king_reserve_stamp()
-
-            updates.append({
-                "range": f"A{row_index}:L{row_index}",
-                "values": build_reserved_farm_king_row_values(row, "", reserve_stamp, reserved_by)
-            })
-
-            reserved_items.append({
-                "row_index": row_index,
-                "purchase_date": row[1],
-                "price": row[2],
-                "supplier": row[3],
-                "geo": row[7],
-                "king_name": "",
-                "data_text": get_full_king_data_from_row(row),
-                "sync_id": row[12],
-                "reserve_stamp": reserve_stamp,
-                "reserved_by": reserved_by
-            })
-
-        if updates:
-            sheet_batch_update_raw(SHEET_FARM_KINGS, updates)
-            refresh_sheet_cache(SHEET_FARM_KINGS)
-
-        return True, "", reserved_items
-
-
-def apply_farm_kings_bulk_names_to_reserved_items(items, king_names):
-    items = [dict(x or {}) for x in (items or []) if x]
-    king_names = [str(x).strip() for x in (king_names or []) if str(x).strip()]
-
-    if not items:
-        return False, "Резерв farm king не найден. Начни выдачу заново.", []
-
-    if len(items) != len(king_names):
-        return False, f"Нужно прислать ровно {len(items)} названий.", []
-
-    reserved_row_indexes = set()
-    for item in items:
-        try:
-            row_index = int(item.get("row_index") or 0)
-        except Exception:
-            row_index = 0
-
-        if row_index >= 2:
-            reserved_row_indexes.add(row_index)
-
-    with issue_lock:
-        rows = get_sheet_rows_cached(SHEET_FARM_KINGS, force=True)
-        existing_names = set()
-
-        for idx, raw_row in enumerate(rows[1:], start=2):
-            row = ensure_row_len(raw_row, 13)
-            existing_name = str(row[0]).strip().lower()
-
-            if not existing_name:
-                continue
-            if idx in reserved_row_indexes:
-                continue
-
-            existing_names.add(existing_name)
-
-        duplicates = [name for name in king_names if name.lower() in existing_names]
-        if duplicates:
-            return False, "Эти названия уже существуют:\n" + "\n".join(duplicates[:20]), []
-
-        updates = []
-        queue = []
-
-        for item, king_name in zip(items, king_names):
-            try:
-                row_index = int(item.get("row_index") or 0)
-            except Exception:
-                row_index = 0
-
-            if row_index < 2 or row_index - 1 >= len(rows):
-                return False, "Резерв farm king потерян. Начни выдачу заново.", []
-
-            row = ensure_row_len(rows[row_index - 1], 13)
-
-            if not farm_kings_bulk_row_is_reserved_for_item(row, item):
-                return False, "Резерв farm king потерян. Начни выдачу заново.", []
-
-            reserve_stamp = str(item.get("reserve_stamp", "")).strip()
-            reserved_by = str(item.get("reserved_by", "")).strip()
-
-            updates.append({
-                "range": f"A{row_index}:L{row_index}",
-                "values": build_reserved_farm_king_row_values(row, king_name, reserve_stamp, reserved_by)
-            })
-
-            queue_item = dict(item)
-            queue_item["king_name"] = king_name
-            queue_item["data_text"] = get_full_king_data_from_row(row)
-            queue.append(queue_item)
-
-        if updates:
-            sheet_batch_update_raw(SHEET_FARM_KINGS, updates)
-            refresh_sheet_cache(SHEET_FARM_KINGS)
-
-        return True, "", queue
-
-
-def release_farm_kings_bulk_reservations_from_items(items):
-    items = [dict(x or {}) for x in (items or []) if x]
-    if not items:
-        return 0
-
-    with issue_lock:
-        rows = get_sheet_rows_cached(SHEET_FARM_KINGS, force=True)
-        updates = []
-        seen = set()
-
-        for item in items:
-            try:
-                row_index = int(item.get("row_index") or 0)
-            except Exception:
-                row_index = 0
-
-            if row_index < 2 or row_index in seen:
-                continue
-            if row_index - 1 >= len(rows):
-                continue
-
-            seen.add(row_index)
-
-            row = ensure_row_len(rows[row_index - 1], 13)
-            status = str(row[4]).strip().lower()
-            expected_name = str(item.get("king_name", "")).strip()
-            reserve_stamp = str(item.get("reserve_stamp", "")).strip()
-            reserved_by = str(item.get("reserved_by", "")).strip()
-
-            if status != "reserved":
-                continue
-            if expected_name and str(row[0]).strip() != expected_name:
-                continue
-            if reserve_stamp and str(row[6]).strip() != reserve_stamp:
-                continue
-            if reserved_by and str(row[8]).strip() != reserved_by:
-                continue
-
-            updates.append({
-                "range": f"A{row_index}:L{row_index}",
-                "values": build_free_farm_king_row_values(row)
-            })
-
-        if not updates:
-            return 0
-
-        sheet_batch_update_raw(SHEET_FARM_KINGS, updates)
-        refresh_sheet_cache(SHEET_FARM_KINGS)
-        return len(updates)
-
-
-def release_farm_kings_bulk_reservations_from_state(state):
-    state = dict(state or {})
-    items = state.get("farm_kings_bulk_queue", []) or state.get("farm_kings_bulk_reserved_items", [])
-
-    try:
-        return release_farm_kings_bulk_reservations_from_items(items)
-    except Exception:
-        logging.exception("release_farm_kings_bulk_reservations_from_state failed")
-        return 0
-
-
-def farm_kings_bulk_row_is_reserved_for_item(row, item):
-    row = ensure_row_len(row, 13)
-    if str(row[4]).strip().lower() != "reserved":
-        return False
-
-    expected_name = str(item.get("king_name", "")).strip()
-    reserve_stamp = str(item.get("reserve_stamp", "")).strip()
-    reserved_by = str(item.get("reserved_by", "")).strip()
-
-    if expected_name and str(row[0]).strip() != expected_name:
-        return False
-    if reserve_stamp and str(row[6]).strip() != reserve_stamp:
-        return False
-    if reserved_by and str(row[8]).strip() != reserved_by:
-        return False
-
-    return True
-
-
 def reset_google_cache():
     global gspread_client, sheet_cache, table_cache, basebot_sheet_cache
     gspread_client = None
@@ -765,6 +539,7 @@ def reset_google_cache():
             SHEET_FARM_FPS: {"rows": None, "updated_at": 0},
             SHEET_PIXELS: {"rows": None, "updated_at": 0},
             SHEET_STICKERS: {"rows": None, "updated_at": 0},
+    SHEET_KING_DOWNLOADS: {"rows": None, "updated_at": 0},
         }
 
 def reset_table_cache():
@@ -782,6 +557,7 @@ def reset_table_cache():
             SHEET_FARM_FPS: {"rows": None, "updated_at": 0},
             SHEET_PIXELS: {"rows": None, "updated_at": 0},
             SHEET_STICKERS: {"rows": None, "updated_at": 0},
+    SHEET_KING_DOWNLOADS: {"rows": None, "updated_at": 0},
         }
 
 def check_google_available():
@@ -814,6 +590,7 @@ table_cache = {
     SHEET_FARM_FPS: {"rows": None, "updated_at": 0},
     SHEET_PIXELS: {"rows": None, "updated_at": 0},
     SHEET_STICKERS: {"rows": None, "updated_at": 0},
+    SHEET_KING_DOWNLOADS: {"rows": None, "updated_at": 0},
 }
 
 table_cache_lock = threading.Lock()
@@ -3070,6 +2847,242 @@ def tg_send_kings_as_zip(chat_id, issued_items, archive_name="kings_bundle.zip")
     resp.raise_for_status()
     return resp.json()
 
+def ensure_king_downloads_sheet_exists():
+    try:
+        with google_lock:
+            client = get_gspread_client()
+            spreadsheet = client.open_by_key(SPREADSHEET_ID)
+
+            try:
+                sheet = spreadsheet.worksheet(SHEET_KING_DOWNLOADS)
+            except gspread.exceptions.WorksheetNotFound:
+                sheet = spreadsheet.add_worksheet(title=SHEET_KING_DOWNLOADS, rows=2000, cols=9)
+
+            rows = sheet.get_all_values()
+            need_init = False
+
+            if not rows:
+                need_init = True
+            elif len(rows[0]) < 9:
+                need_init = True
+            elif str(rows[0][0]).strip() != "token":
+                need_init = True
+
+            if need_init:
+                sheet.update(
+                    "A1:I1",
+                    [[
+                        "token",
+                        "owner_user_id",
+                        "bundle_kind",
+                        "item_index",
+                        "king_name",
+                        "part_index",
+                        "total_parts",
+                        "payload_chunk",
+                        "created_at",
+                    ]]
+                )
+
+            mark_sheet_cache_stale(SHEET_KING_DOWNLOADS)
+            return sheet
+
+    except Exception:
+        logging.exception("ensure_king_downloads_sheet_exists crashed")
+        raise
+
+
+KING_DOWNLOAD_CHUNK_SIZE = 40000
+
+
+def _split_text_chunks(text, chunk_size=KING_DOWNLOAD_CHUNK_SIZE):
+    text = str(text or "")
+    if not text:
+        return [""]
+
+    return [text[i:i + chunk_size] for i in range(0, len(text), chunk_size)] or [""]
+
+
+
+def encode_king_download_text(data_text):
+    raw = str(data_text or "").encode("utf-8")
+    packed = zlib.compress(raw, 9)
+    encoded = base64.b64encode(packed).decode("ascii")
+    return _split_text_chunks(encoded)
+
+
+
+def decode_king_download_text(encoded_chunks):
+    joined = "".join([str(x or "") for x in (encoded_chunks or [])])
+    if not joined:
+        return ""
+
+    raw = base64.b64decode(joined.encode("ascii"))
+    return zlib.decompress(raw).decode("utf-8")
+
+
+
+def append_king_download_rows(rows_to_add):
+    rows_to_add = [list(x or []) for x in (rows_to_add or []) if x]
+    if not rows_to_add:
+        return
+
+    ensure_king_downloads_sheet_exists()
+
+    def _do():
+        with google_lock:
+            sheet = get_sheet(SHEET_KING_DOWNLOADS)
+            sheet.append_rows(rows_to_add, value_input_option="RAW")
+
+    google_write_with_retry(_do)
+    mark_sheet_cache_stale(SHEET_KING_DOWNLOADS)
+
+
+
+def save_king_download_bundle(owner_user_id, bundle_kind, items):
+    items = [dict(x or {}) for x in (items or []) if x]
+    if not items:
+        return ""
+
+    try:
+        ensure_king_downloads_sheet_exists()
+        token = uuid.uuid4().hex
+        created_at = datetime.now(MOSCOW_TZ).strftime("%d/%m/%Y %H:%M:%S")
+        rows_to_add = []
+
+        for item_index, item in enumerate(items):
+            king_name = str(item.get("king_name", "") or "king").strip() or "king"
+            data_text = str(item.get("data_text", "") or "")
+            chunks = encode_king_download_text(data_text)
+            total_parts = len(chunks)
+
+            for part_index, payload_chunk in enumerate(chunks):
+                rows_to_add.append([
+                    token,
+                    str(owner_user_id),
+                    str(bundle_kind),
+                    str(item_index),
+                    king_name,
+                    str(part_index),
+                    str(total_parts),
+                    payload_chunk,
+                    created_at,
+                ])
+
+        append_king_download_rows(rows_to_add)
+        return token
+
+    except Exception:
+        logging.exception(
+            f"save_king_download_bundle failed: owner={owner_user_id}, kind={bundle_kind}"
+        )
+        return ""
+
+
+
+def load_king_download_bundle(token, owner_user_id=None, bundle_kind=None):
+    token = str(token or "").strip()
+    if not token:
+        return []
+
+    try:
+        ensure_king_downloads_sheet_exists()
+        rows = get_sheet_rows_cached(SHEET_KING_DOWNLOADS, force=True)
+    except Exception:
+        logging.exception(f"load_king_download_bundle failed to load sheet: token={token}")
+        return []
+
+    grouped = {}
+
+    for raw_row in rows[1:]:
+        row = ensure_row_len(raw_row, 9)
+
+        row_token = str(row[0]).strip()
+        row_owner = str(row[1]).strip()
+        row_kind = str(row[2]).strip()
+
+        if row_token != token:
+            continue
+
+        if owner_user_id is not None and row_owner != str(owner_user_id):
+            continue
+
+        if bundle_kind is not None and row_kind != str(bundle_kind):
+            continue
+
+        try:
+            item_index = int(str(row[3]).strip() or "0")
+        except Exception:
+            item_index = 0
+
+        king_name = str(row[4]).strip() or "king"
+
+        try:
+            part_index = int(str(row[5]).strip() or "0")
+        except Exception:
+            part_index = 0
+
+        try:
+            total_parts = int(str(row[6]).strip() or "1")
+        except Exception:
+            total_parts = 1
+
+        payload_chunk = str(row[7] or "")
+
+        item = grouped.setdefault(item_index, {
+            "king_name": king_name,
+            "total_parts": total_parts,
+            "parts": {}
+        })
+
+        item["king_name"] = king_name or item.get("king_name", "king")
+        item["total_parts"] = max(int(item.get("total_parts", 1) or 1), total_parts)
+        item["parts"][part_index] = payload_chunk
+
+    result = []
+
+    for item_index in sorted(grouped.keys()):
+        item = grouped[item_index]
+        total_parts = int(item.get("total_parts", 1) or 1)
+        parts_map = item.get("parts", {}) or {}
+
+        encoded_chunks = [parts_map.get(i, "") for i in range(total_parts)]
+        if not any(encoded_chunks):
+            continue
+
+        try:
+            data_text = decode_king_download_text(encoded_chunks)
+        except Exception:
+            logging.exception(
+                f"decode king download failed: token={token}, item_index={item_index}, kind={bundle_kind}"
+            )
+            continue
+
+        result.append({
+            "king_name": item.get("king_name", "king"),
+            "data_text": data_text,
+        })
+
+    return result
+
+
+
+def pick_king_download_item(items, requested_index=0):
+    items = list(items or [])
+    if not items:
+        return None
+
+    try:
+        requested_index = int(requested_index)
+    except Exception:
+        requested_index = 0
+
+    if requested_index < 0 or requested_index >= len(items):
+        requested_index = 0
+
+    return items[requested_index]
+
+
 def build_crypto_bulk_result_text(results, for_whom):
     success_items = [x for x in results if x.get("octo_ok")]
     failed_items = [x for x in results if not x.get("octo_ok")]
@@ -3236,19 +3249,25 @@ def finish_crypto_kings_bulk(chat_id, user_id):
 
     success_items = [x for x in results if x.get("octo_ok")]
     inline_buttons = []
+    download_token = ""
+
+    if success_items:
+        download_token = save_king_download_bundle(user_id, "crypto_bulk", success_items)
 
     if len(success_items) == 1:
+        callback_data = f"dcbt:{download_token}:0" if download_token else f"download_crypto_bulk_txt:{user_id}:0"
         inline_buttons = [[
             {
                 "text": "📄 Скачать txt",
-                "callback_data": f"download_crypto_bulk_txt:{user_id}:0"
+                "callback_data": callback_data
             }
         ]]
     elif len(success_items) >= 2:
+        callback_data = f"dcbz:{download_token}" if download_token else f"download_crypto_bulk_zip:{user_id}"
         inline_buttons = [[
             {
                 "text": "📦 Скачать zip",
-                "callback_data": f"download_crypto_bulk_zip:{user_id}"
+                "callback_data": callback_data
             }
         ]]
 
@@ -5795,12 +5814,17 @@ def find_free_farm_kings(count_needed, geo=None, supplier=None):
     candidates = []
     geo = str(geo or "").strip()
     supplier = str(supplier or "").strip()
+    reserved = get_reserved_rows_set()
 
     for idx, row in enumerate(rows[1:], start=2):
         if len(row) < 12:
             row = row + [''] * (12 - len(row))
 
         if str(row[4]).strip().lower() != "free":
+            continue
+
+        # Пропускаем строки, уже зарезервированные другим пользователем
+        if idx in reserved:
             continue
 
         row_geo = str(row[7]).strip()
@@ -5936,6 +5960,7 @@ def find_free_farm_kings_by_geo_and_price(count_needed, geo, price):
     candidates = []
     geo = str(geo or "").strip()
     price = normalize_price_key(price)
+    reserved = get_reserved_rows_set()
 
     for idx, row in enumerate(rows[1:], start=2):
         row = ensure_row_len(row, 13)
@@ -5952,6 +5977,10 @@ def find_free_farm_kings_by_geo_and_price(count_needed, geo, price):
         if row_price != price:
             continue
         if current_name:
+            continue
+
+        # Пропускаем строки, уже зарезервированные другим пользователем
+        if idx in reserved:
             continue
 
         purchase_date = parse_date(row[1]) or datetime.max
@@ -6265,11 +6294,6 @@ def run_farm_bulk_worker(chat_id, user_id):
             logging.exception("failed to save farm_bulk_last_error")
 
         try:
-            release_farm_kings_bulk_reservations_from_state(get_state(user_id))
-        except Exception:
-            logging.exception("failed to release reserved farm kings after worker crash")
-
-        try:
             if progress_message_id:
                 tg_delete_message(chat_id, progress_message_id)
         except Exception:
@@ -6286,7 +6310,6 @@ def run_farm_bulk_worker(chat_id, user_id):
         with farm_bulk_worker_lock:
             farm_bulk_workers_running.discard(user_id)
 
-
 def process_farm_kings_bulk_proxy_step_background(chat_id, user_id, username):
     state = get_state(user_id)
 
@@ -6298,7 +6321,7 @@ def process_farm_kings_bulk_proxy_step_background(chat_id, user_id, username):
     if current_index >= len(queue):
         return
 
-    current_item = dict(queue[current_index] or {})
+    current_item = queue[current_index]
 
     king_row = current_item.get("row_index")
     king_name = str(current_item.get("king_name", "")).strip()
@@ -6306,30 +6329,9 @@ def process_farm_kings_bulk_proxy_step_background(chat_id, user_id, username):
     price_value = str(current_item.get("price", "")).strip()
     geo_value = str(current_item.get("geo", "")).strip()
     supplier_value = str(current_item.get("supplier", "")).strip()
-
+    
     proxy_text = str(current_item.get("proxy_text", "")).strip()
     skip_all = bool(state.get("farm_kings_bulk_skip_all_proxies"))
-
-    def fail_current(error_text, parsed_farm_king=None):
-        release_farm_kings_bulk_reservations_from_items([current_item])
-
-        payload = {
-            "king_name": king_name or "не указано",
-            "price": price_value,
-            "geo": geo_value,
-            "supplier": supplier_value,
-            "data_text": data_text,
-            "octo_ok": False,
-            "error_text": str(error_text or "неизвестная ошибка").strip() or "неизвестная ошибка"
-        }
-
-        if parsed_farm_king is not None:
-            payload["parsed_farm_king"] = parsed_farm_king
-
-        results.append(payload)
-        state["farm_kings_bulk_results"] = results
-        state["farm_kings_bulk_current_index"] = current_index + 1
-        set_state_with_custom_ttl(user_id, state, FARM_KING_BULK_PROXY_TTL)
 
     proxy_data = None
     if not skip_all:
@@ -6337,8 +6339,21 @@ def process_farm_kings_bulk_proxy_step_background(chat_id, user_id, username):
 
         if proxy_raw and proxy_raw != "__SKIP_ALL_PROXIES__":
             proxy_data = parse_proxy_input(proxy_raw)
+
             if not proxy_data:
-                fail_current("неверный формат proxy")
+                results.append({
+                    "king_name": king_name,
+                    "price": price_value,
+                    "geo": geo_value,
+                    "supplier": supplier_value,
+                    "data_text": data_text,
+                    "octo_ok": False,
+                    "error_text": "неверный формат proxy"
+                })
+
+                state["farm_kings_bulk_results"] = results
+                state["farm_kings_bulk_current_index"] = current_index + 1
+                set_state_with_custom_ttl(user_id, state, FARM_KING_BULK_PROXY_TTL)
                 return
 
     parsed_farm_king = {}
@@ -6348,32 +6363,87 @@ def process_farm_kings_bulk_proxy_step_background(chat_id, user_id, username):
         logging.exception("process_farm_kings_bulk_proxy_step_background parse failed")
 
     if not king_row or not king_name:
-        fail_current("потеряны данные farm king", parsed_farm_king=parsed_farm_king)
+        results.append({
+            "king_name": king_name or "не указано",
+            "price": price_value,
+            "geo": geo_value,
+            "supplier": supplier_value,
+            "data_text": data_text,
+            "octo_ok": False,
+            "error_text": "потеряны данные farm king"
+        })
+
+        state["farm_kings_bulk_results"] = results
+        state["farm_kings_bulk_current_index"] = current_index + 1
+        set_state_with_custom_ttl(user_id, state, FARM_KING_BULK_PROXY_TTL)
         return
 
     row = get_sheet_row_live(SHEET_FARM_KINGS, king_row, 13)
 
     if not row or not any(str(x).strip() for x in row):
-        fail_current("строка пропала из таблицы", parsed_farm_king=parsed_farm_king)
+        results.append({
+            "king_name": king_name,
+            "price": price_value,
+            "geo": geo_value,
+            "supplier": supplier_value,
+            "data_text": data_text,
+            "octo_ok": False,
+            "error_text": "строка пропала из таблицы"
+        })
+
+        state["farm_kings_bulk_results"] = results
+        state["farm_kings_bulk_current_index"] = current_index + 1
+        set_state_with_custom_ttl(user_id, state, FARM_KING_BULK_PROXY_TTL)
         return
 
-    row = ensure_row_len(row, 13)
     status = str(row[4]).strip().lower()
 
     if status == "taken":
-        fail_current("этот farm king уже занят", parsed_farm_king=parsed_farm_king)
+        results.append({
+            "king_name": king_name,
+            "price": price_value,
+            "geo": geo_value,
+            "supplier": supplier_value,
+            "data_text": data_text,
+            "octo_ok": False,
+            "error_text": "этот farm king уже занят"
+        })
+
+        state["farm_kings_bulk_results"] = results
+        state["farm_kings_bulk_current_index"] = current_index + 1
+        set_state_with_custom_ttl(user_id, state, FARM_KING_BULK_PROXY_TTL)
         return
 
     if status == "ban":
-        fail_current("этот farm king уже в ban", parsed_farm_king=parsed_farm_king)
+        results.append({
+            "king_name": king_name,
+            "price": price_value,
+            "geo": geo_value,
+            "supplier": supplier_value,
+            "data_text": data_text,
+            "octo_ok": False,
+            "error_text": "этот farm king уже в ban"
+        })
+
+        state["farm_kings_bulk_results"] = results
+        state["farm_kings_bulk_current_index"] = current_index + 1
+        set_state_with_custom_ttl(user_id, state, FARM_KING_BULK_PROXY_TTL)
         return
 
-    if status == "reserved":
-        if not farm_kings_bulk_row_is_reserved_for_item(row, current_item):
-            fail_current("этот farm king уже зарезервирован другим пользователем", parsed_farm_king=parsed_farm_king)
-            return
-    elif status != "free":
-        fail_current("этот farm king недоступен", parsed_farm_king=parsed_farm_king)
+    if status != "free":
+        results.append({
+            "king_name": king_name,
+            "price": price_value,
+            "geo": geo_value,
+            "supplier": supplier_value,
+            "data_text": data_text,
+            "octo_ok": False,
+            "error_text": "этот farm king недоступен"
+        })
+
+        state["farm_kings_bulk_results"] = results
+        state["farm_kings_bulk_current_index"] = current_index + 1
+        set_state_with_custom_ttl(user_id, state, FARM_KING_BULK_PROXY_TTL)
         return
 
     today = datetime.now(MOSCOW_TZ).strftime("%d/%m/%Y")
@@ -6412,7 +6482,26 @@ def process_farm_kings_bulk_proxy_step_background(chat_id, user_id, username):
 
         logging.error(f"FARM BULK OCTO RAW RESULT: {octo_result}")
         logging.error(f"FARM BULK OCTO ERROR TEXT: {error_text}")
-        fail_current(error_text, parsed_farm_king=parsed_farm_king)
+
+        results.append({
+            "king_name": king_name,
+            "price": price_value,
+            "geo": geo_value,
+            "supplier": supplier_value,
+            "data_text": data_text,
+            "parsed_farm_king": parsed_farm_king,
+            "octo_ok": False,
+            "error_text": error_text
+        })
+
+        state["farm_kings_bulk_results"] = results
+        state["farm_kings_bulk_current_index"] = current_index + 1
+        set_state_with_custom_ttl(user_id, state, FARM_KING_BULK_PROXY_TTL)
+        return
+
+        state["farm_kings_bulk_results"] = results
+        state["farm_kings_bulk_current_index"] = current_index + 1
+        set_state_with_custom_ttl(user_id, state, FARM_KING_BULK_PROXY_TTL)
         return
 
     cookies_ok = False
@@ -6489,7 +6578,6 @@ def process_farm_kings_bulk_proxy_step_background(chat_id, user_id, username):
     state["farm_kings_bulk_issue_rows"] = pending_issue_rows
 
     set_state_with_custom_ttl(user_id, state, FARM_KING_BULK_PROXY_TTL)
-
 
 def build_farm_kings_bulk_result_messages(results, max_len=3500):
     success_items = [x for x in results if x.get("octo_ok")]
@@ -6609,6 +6697,8 @@ def send_farm_kings_bulk_followup_messages(chat_id, results):
 def finish_farm_kings_bulk(chat_id, user_id):
     state = get_state(user_id)
 
+    release_farm_king_rows(user_id)  # Снять резерв — выдача завершена
+
     progress_message_id = state.get("farm_kings_bulk_progress_message_id")
     if progress_message_id:
         tg_delete_message(chat_id, progress_message_id)
@@ -6617,18 +6707,13 @@ def finish_farm_kings_bulk(chat_id, user_id):
     if pending_issue_rows:
         append_issue_rows_fixed(pending_issue_rows)
 
-    try:
-        release_farm_kings_bulk_reservations_from_state(state)
-    except Exception:
-        logging.exception("finish_farm_kings_bulk failed to release leftovers")
-
     results = state.get("farm_kings_bulk_results", [])
 
     if not results:
         clear_state(user_id)
-
+    
         error_text = str(state.get("farm_bulk_last_error", "неизвестная ошибка"))
-
+    
         send_farm_kings_menu(
             chat_id,
             f"Не удалось выдать ни одного farm king.\n\nОшибка:\n{error_text}"
@@ -6639,19 +6724,25 @@ def finish_farm_kings_bulk(chat_id, user_id):
 
     success_items = [x for x in results if x.get("octo_ok")]
     inline_buttons = []
+    download_token = ""
+
+    if success_items:
+        download_token = save_king_download_bundle(user_id, "farm_bulk", success_items)
 
     if len(success_items) == 1:
+        callback_data = f"dfbt:{download_token}:0" if download_token else f"download_farm_king_bulk_txt:{user_id}:0"
         inline_buttons = [[
             {
                 "text": "📄 Скачать txt",
-                "callback_data": f"download_farm_king_bulk_txt:{user_id}:0"
+                "callback_data": callback_data
             }
         ]]
     elif len(success_items) >= 2:
+        callback_data = f"dfbz:{download_token}" if download_token else f"download_farm_king_bulk_zip:{user_id}"
         inline_buttons = [[
             {
                 "text": "📦 Скачать zip",
-                "callback_data": f"download_farm_king_bulk_zip:{user_id}"
+                "callback_data": callback_data
             }
         ]]
 
@@ -6670,7 +6761,6 @@ def finish_farm_kings_bulk(chat_id, user_id):
     })
 
     send_farm_kings_menu(chat_id, "Выбери следующее действие:")
-
 
 def farm_king_name_exists(king_name):
     rows = get_sheet_rows_cached(SHEET_FARM_KINGS)
@@ -8932,7 +9022,6 @@ def get_state(user_id):
 
     return dict(state)
 
-
 def set_state_with_custom_ttl(user_id, state, ttl_seconds):
     state = dict(state or {})
     state["_time"] = time.time()
@@ -8942,39 +9031,34 @@ def set_state_with_custom_ttl(user_id, state, ttl_seconds):
         user_states[str(user_id)] = state
         user_states[user_id] = state
 
-
 def cleanup_states():
     now = time.time()
-    to_delete = set()
 
     with state_lock:
-        for user_id, state in list(user_states.items()):
-            state = dict(state or {})
+        to_delete = []
 
+        for user_id, state in user_states.items():
             if not state:
-                to_delete.add(str(user_id))
+                to_delete.append(user_id)
                 continue
 
             custom_expires_at = state.get("_custom_expires_at")
             if custom_expires_at:
                 try:
                     if now > float(custom_expires_at):
-                        to_delete.add(str(user_id))
+                        to_delete.append(user_id)
                     continue
                 except Exception:
-                    to_delete.add(str(user_id))
+                    to_delete.append(user_id)
                     continue
 
-            state_time = state.get("_time", 0)
-            try:
-                if state_time and now - float(state_time) > STATE_TTL:
-                    to_delete.add(str(user_id))
-            except Exception:
-                to_delete.add(str(user_id))
+            updated_at = state.get("updated_at", 0)
+            if updated_at and now - updated_at > STATE_TTL:
+                to_delete.append(user_id)
 
-    for user_id in to_delete:
-        clear_state(user_id)
-
+        for user_id in to_delete:
+            user_states.pop(user_id, None)
+            user_state_history.pop(user_id, None)
 
 def cleanup_processed_updates():
     now = time.time()
@@ -8987,7 +9071,6 @@ def cleanup_processed_updates():
 
         for update_id in to_delete:
             processed_updates.pop(update_id, None)
-
 
 def is_duplicate_update(update_id):
     if update_id is None:
@@ -9003,7 +9086,6 @@ def is_duplicate_update(update_id):
         processed_updates[update_id] = now
         return False
 
-
 def set_state(user_id, data):
     data = dict(data)
     data["_time"] = time.time()
@@ -9017,71 +9099,33 @@ def set_state(user_id, data):
 
         user_states[str(user_id)] = data
 
-
 def push_state_to_history(user_id, state):
     with state_lock:
         history = user_state_history.get(str(user_id), [])
         history.append(dict(state))
         user_state_history[str(user_id)] = history[-30:]  # храним последние 30 шагов
 
-
 def go_back_state(user_id):
-    current_state = {}
-
     with state_lock:
-        current_state = dict(
-            user_states.get(str(user_id))
-            or user_states.get(user_id)
-            or {}
-        )
-
         history = user_state_history.get(str(user_id), [])
         if not history:
             return None
 
-        prev_state = dict(history.pop())
+        prev_state = history.pop()
         user_state_history[str(user_id)] = history
         user_states[str(user_id)] = dict(prev_state)
         user_states[str(user_id)]["_time"] = time.time()
-
-    should_release_farm_reserve = (
-        (current_state.get("farm_kings_bulk_queue") or current_state.get("farm_kings_bulk_reserved_items"))
-        and not (prev_state.get("farm_kings_bulk_queue") or prev_state.get("farm_kings_bulk_reserved_items"))
-    )
-
-    if should_release_farm_reserve:
-        try:
-            release_farm_kings_bulk_reservations_from_state(current_state)
-        except Exception:
-            logging.exception("go_back_state failed to release reserved farm kings")
-
-    return dict(prev_state)
-
+        return dict(prev_state)
 
 def update_state(user_id, **kwargs):
     state = get_state(user_id)
     state.update(kwargs)
     set_state(user_id, state)
 
-
 def clear_state(user_id):
     with state_lock:
-        state_snapshot = dict(
-            user_states.get(str(user_id))
-            or user_states.get(user_id)
-            or {}
-        )
         user_states.pop(str(user_id), None)
-        user_states.pop(user_id, None)
         user_state_history.pop(str(user_id), None)
-        user_state_history.pop(user_id, None)
-
-    if state_snapshot.get("farm_kings_bulk_queue") or state_snapshot.get("farm_kings_bulk_reserved_items"):
-        try:
-            release_farm_kings_bulk_reservations_from_state(state_snapshot)
-        except Exception:
-            logging.exception("clear_state failed to release reserved farm kings")
-
 
 def set_last_accounts_section(user_id, section_name):
     state = get_state(user_id)
@@ -11078,19 +11122,25 @@ def finish_kings_bulk(chat_id, user_id):
 
     success_items = [x for x in results if x.get("octo_ok")]
     inline_buttons = []
+    download_token = ""
+
+    if success_items:
+        download_token = save_king_download_bundle(user_id, "king_bulk", success_items)
 
     if len(success_items) == 1:
+        callback_data = f"dkbt:{download_token}:0" if download_token else f"download_king_bulk_txt:{user_id}:0"
         inline_buttons = [[
             {
                 "text": "📄 Скачать txt",
-                "callback_data": f"download_king_bulk_txt:{user_id}:0"
+                "callback_data": callback_data
             }
         ]]
     elif len(success_items) >= 2:
+        callback_data = f"dkbz:{download_token}" if download_token else f"download_king_bulk_zip:{user_id}"
         inline_buttons = [[
             {
                 "text": "📦 Скачать zip",
-                "callback_data": f"download_king_bulk_zip:{user_id}"
+                "callback_data": callback_data
             }
         ]]
 
@@ -13609,8 +13659,21 @@ def octo_find_profile_by_title(profile_title):
     for page in range(0, 10):
         url = f"{OCTO_API_BASE}/profiles?page={page}&page_len=100&fields=title"
 
-        resp = requests.get(url, headers=headers, timeout=60)
-        resp.raise_for_status()
+        # Retry на 429 с экспоненциальным backoff
+        for attempt in range(5):
+            resp = requests.get(url, headers=headers, timeout=60)
+            if resp.status_code == 429:
+                wait = 2 ** attempt  # 1, 2, 4, 8, 16 сек
+                logging.warning(f"OCTO 429 rate limit (page={page}, attempt={attempt}), ждём {wait}s")
+                time.sleep(wait)
+                continue
+            resp.raise_for_status()
+            break
+        else:
+            resp.raise_for_status()  # если все 5 попыток — 429, бросаем
+
+        if page > 0:
+            time.sleep(0.3)  # небольшая пауза между страницами
 
         data = resp.json()
 
@@ -13688,8 +13751,18 @@ def octo_debug_list_profiles():
     }
 
     url = f"{OCTO_API_BASE}/profiles?page=0&page_len=100&fields=title"
-    resp = requests.get(url, headers=headers, timeout=60)
-    resp.raise_for_status()
+
+    for attempt in range(5):
+        resp = requests.get(url, headers=headers, timeout=60)
+        if resp.status_code == 429:
+            wait = 2 ** attempt
+            logging.warning(f"OCTO 429 rate limit (debug_list, attempt={attempt}), ждём {wait}s")
+            time.sleep(wait)
+            continue
+        resp.raise_for_status()
+        break
+    else:
+        resp.raise_for_status()
 
     data = resp.json()
 
@@ -16949,6 +17022,199 @@ def handle_message(msg):
             )
             return
 
+        if state.get("mode") == KING_OCTO_MODE_SINGLE_PROXY:
+            try:
+                proxy_raw = text.strip()
+
+                if proxy_raw == "__SKIP_PROXY_KING_SINGLE__":
+                    proxy_data = None
+                else:
+                    proxy_data = parse_proxy_input(proxy_raw)
+                    if not proxy_data:
+                        send_text_input_prompt(
+                            chat_id,
+                            "Неверный формат proxy.\n\nИспользуй:\nsocks5://login:password@host:port"
+                        )
+                        return
+
+                king_row = state.get("king_row")
+                king_name = str(state.get("king_name", "")).strip()
+                king_for_whom = str(state.get("king_for_whom", "")).strip()
+                parsed_king = state.get("parsed_king", {}) or {}
+                geo_value = str(state.get("king_geo_value", "")).strip()
+                data_text = str(state.get("king_data_text", "")).strip()
+                sync_id = state.get("king_sync_id")
+                today = str(state.get("king_today", "")).strip()
+                who_took_text = str(state.get("king_who_took_text", "")).strip()
+
+                if not king_row or not king_name or not king_for_whom:
+                    clear_state(user_id)
+                    send_kings_menu(chat_id, "Потеряны данные king. Начни заново.")
+                    return
+
+                row = get_sheet_row_live(SHEET_KINGS, king_row, 13)
+
+                if not row or not any(str(x).strip() for x in row):
+                    clear_state(user_id)
+                    send_kings_menu(chat_id, "King не найден в таблице. Начни заново.")
+                    return
+
+                status = str(row[4]).strip().lower()
+
+                if status == "taken":
+                    clear_state(user_id)
+                    send_kings_menu(chat_id, "Этот king уже занят.")
+                    return
+
+                if status == "ban":
+                    clear_state(user_id)
+                    send_kings_menu(chat_id, "Этот king уже в ban.")
+                    return
+
+                if status != "free":
+                    clear_state(user_id)
+                    send_kings_menu(chat_id, "Этот king недоступен.")
+                    return
+
+                octo_ok = False
+                octo_msg = ""
+                octo_result = None
+                profile_uuid = ""
+
+                cookies_ok = False
+                cookies_msg = ""
+                cookies_payload = None
+
+                try:
+                    octo_ok, octo_result = ensure_octo_profile_with_retry(
+                        ensure_func=ensure_octo_profile_for_crypto_king,
+                        profile_name=king_name,
+                        parsed=parsed_king,
+                        proxy_data=proxy_data
+                    )
+                    octo_msg = str(octo_result)
+                except Exception as octo_error:
+                    logging.exception("KING_SINGLE_PROXY: Octo create crashed")
+                    octo_msg = str(octo_error)
+
+                if not octo_ok:
+                    tg_send_long_message(
+                        chat_id,
+                        f"❌ Не удалось создать Octo профиль\n{octo_msg or 'неизвестная ошибка'}"
+                    )
+                    return
+
+                try:
+                    profile_uuid = extract_octo_profile_uuid_from_result(octo_result)
+                    cookies_payload = normalize_crypto_cookies_for_import(
+                        parsed_king.get("cookies_json", "")
+                    )
+                    if cookies_payload and profile_uuid:
+                        cookies_ok, cookies_msg = try_import_crypto_king_cookies(
+                            profile_uuid=profile_uuid,
+                            cookies_payload=cookies_payload
+                        )
+                    else:
+                        cookies_msg = "cookies не найдены или profile_uuid пустой"
+                except Exception as cookies_error:
+                    logging.exception("KING_SINGLE_PROXY: cookies import crashed")
+                    cookies_msg = str(cookies_error)
+
+                sheet_update_raw(
+                    SHEET_KINGS,
+                    f"A{king_row}:I{king_row}",
+                    [[
+                        king_name,
+                        row[1],
+                        row[2],
+                        row[3],
+                        "taken",
+                        king_for_whom,
+                        today,
+                        geo_value,
+                        who_took_text
+                    ]]
+                )
+                mark_sheet_cache_stale(SHEET_KINGS)
+
+                if sync_id:
+                    sync_status_to_basebot(BASEBOT_SHEET_KINGS, sync_id, "taken")
+
+                append_king_to_issues_sheet(
+                    king_name=king_name,
+                    purchase_date=row[1],
+                    price=row[2],
+                    transfer_date=today,
+                    supplier=row[3],
+                    for_whom=king_for_whom
+                )
+
+                invalidate_stats_cache()
+
+                preview_message_id = state.get("king_preview_message_id")
+
+                set_state(user_id, {
+                    "mode": "king_octo_issued",
+                    "last_king_name": king_name,
+                    "last_king_data_text": data_text,
+                    "king_preview_message_id": preview_message_id,
+                })
+
+                if preview_message_id:
+                    mark_king_octo_preview_as_issued(
+                        chat_id=chat_id,
+                        message_id=preview_message_id,
+                        king_name=king_name,
+                        king_for_whom=king_for_whom,
+                        price=row[2],
+                        geo_value=parsed_king.get("geo", geo_value)
+                    )
+
+                download_token = save_king_download_bundle(
+                    owner_user_id=user_id,
+                    bundle_kind="king_single",
+                    items=[{
+                        "king_name": king_name,
+                        "data_text": data_text,
+                    }]
+                )
+
+                tg_send_inline_message(
+                    chat_id,
+                    f"✅ King заведен в Octo\n\n"
+                    f"✏️Название: {king_name}\n"
+                    f"👨‍💻Для кого: {king_for_whom}\n"
+                    f"💵Цена: {row[2]}\n"
+                    f"🌐Гео: {parsed_king.get('geo', geo_value)}",
+                    [[{
+                        "text": "📄 Скачать txt",
+                        "callback_data": f"dkst:{download_token}" if download_token else f"download_king_txt:{user_id}"
+                    }]]
+                )
+
+                cookies_json = str(parsed_king.get("cookies_json", "")).strip()
+
+                if cookies_json:
+                    if cookies_ok:
+                        tg_send_message(
+                            chat_id,
+                            "Куки вставлены✅\n\n"
+                            "После сохранения Куки открыв профиль на редактирование — куки не отображаются. И это нормально"
+                        )
+                    else:
+                        tg_send_long_message(
+                            chat_id,
+                            f"Куки не вставлены❌\n\n"
+                            f"Ошибка Octo:\n{cookies_msg or 'пустая ошибка'}"
+                        )
+
+                return
+
+            except Exception:
+                logging.exception("KING_SINGLE_PROXY crashed")
+                tg_send_message(chat_id, "Ошибка выдачи king. Попробуй ещё раз.")
+                send_kings_menu(chat_id, "Меню кингов:")
+
         if state.get("mode") == KING_OCTO_MODE_BULK_PROXY:
             process_kings_bulk_proxy_step(
                 chat_id=chat_id,
@@ -17768,6 +18034,14 @@ def handle_message(msg):
                         price=row[2],
                         geo_value=parsed_farm_king.get("geo", geo_value)
                     )
+                download_token = save_king_download_bundle(
+                    owner_user_id=user_id,
+                    bundle_kind="farm_single",
+                    items=[{
+                        "king_name": king_name,
+                        "data_text": data_text,
+                    }]
+                )
 
                 tg_send_inline_message(
                     chat_id,
@@ -17778,7 +18052,7 @@ def handle_message(msg):
                     f"🌐Гео: {parsed_farm_king.get('geo', geo_value)}",
                     [[{
                         "text": "📄 Скачать txt",
-                        "callback_data": f"download_farm_king_txt:{user_id}"
+                        "callback_data": f"dfst:{download_token}" if download_token else f"download_farm_king_txt:{user_id}"
                     }]]
                 )
 
@@ -17878,34 +18152,28 @@ def handle_message(msg):
                 send_text_input_prompt(chat_id, "Какое название будет у farm king?")
                 return
 
-            ok, reserve_message, reserved_items = reserve_farm_kings_bulk_slots(
-                user_id=user_id,
-                username=username,
+            free_items = find_free_farm_kings(
+                count_needed,
                 geo=geo_value,
-                supplier=text,
-                count_needed=count_needed
+                supplier=text
             )
 
-            if not ok:
-                tg_send_message(chat_id, reserve_message or "Не удалось зарезервировать farm king.")
+            if len(free_items) < count_needed:
+                tg_send_message(
+                    chat_id,
+                    f"Недостаточно свободных farm king.\n"
+                    f"GEO: {geo_value}\n"
+                    f"Поставщик: {text}\n"
+                    f"Доступно: {len(free_items)}"
+                )
                 return
 
             state["mode"] = FARM_KING_OCTO_MODE_BULK_NAMES
-            state["farm_kings_bulk_queue"] = []
-            state["farm_kings_bulk_results"] = []
-            state["farm_kings_bulk_current_index"] = 0
-            state["farm_kings_bulk_proxy_collect_index"] = 0
-            state["farm_kings_bulk_username"] = username
-            state["farm_kings_bulk_issue_rows"] = []
-            state["farm_kings_bulk_reserved_items"] = [dict(x) for x in reserved_items]
-
-            set_state_with_custom_ttl(user_id, state, FARM_KING_BULK_RESERVE_TTL)
+            set_state(user_id, state)
 
             send_text_input_prompt(
                 chat_id,
-                f"Пришли {count_needed} названий для farm king.\n"
-                f"Каждое название с новой строки.\n\n"
-                f"Эти {count_needed} farm king уже зарезервированы за тобой."
+                f"Пришли {count_needed} названий для farm king.\nКаждое название с новой строки."
             )
             return
 
@@ -17971,64 +18239,45 @@ def handle_message(msg):
                 tg_send_message(chat_id, "Названия не должны повторяться.")
                 return
 
-            reserved_items = state.get("farm_kings_bulk_reserved_items", [])
+            duplicates = []
+            for name in names:
+                if farm_king_name_exists(name):
+                    duplicates.append(name)
 
-            if reserved_items:
-                ok, reserve_message, queue = apply_farm_kings_bulk_names_to_reserved_items(
-                    reserved_items,
-                    names
+            if duplicates:
+                tg_send_message(
+                    chat_id,
+                    "Эти названия уже существуют:\n" + "\n".join(duplicates[:20])
                 )
-            else:
-                duplicates = []
-                for name in names:
-                    if farm_king_name_exists(name):
-                        duplicates.append(name)
-
-                if duplicates:
-                    tg_send_message(
-                        chat_id,
-                        "Эти названия уже существуют:\n" + "\n".join(duplicates[:20])
-                    )
-                    return
-
-                selected_rows = find_free_farm_kings(
-                    count_needed,
-                    geo=state.get("farm_king_geo", ""),
-                    supplier=state.get("farm_king_supplier", "")
-                )
-
-                if len(selected_rows) < count_needed:
-                    tg_send_message(
-                        chat_id,
-                        f"Недостаточно свободных farm king.\n"
-                        f"GEO: {state.get('farm_king_geo', '')}\n"
-                        f"Поставщик: {state.get('farm_king_supplier', '')}\n"
-                        f"Доступно: {len(selected_rows)}"
-                    )
-                    return
-
-                queue = []
-                for item, king_name in zip(selected_rows, names):
-                    queue.append({
-                        "row_index": item["row_index"],
-                        "purchase_date": item["row"][1],
-                        "price": item["row"][2],
-                        "supplier": item["row"][3],
-                        "geo": item["row"][7],
-                        "king_name": king_name,
-                        "data_text": get_full_king_data_from_row(item["row"])
-                    })
-                ok = True
-                reserve_message = ""
-
-            if not ok:
-                if "Резерв farm king потерян" in str(reserve_message):
-                    clear_state(user_id)
-                    send_farm_kings_menu(chat_id, reserve_message)
-                    return
-
-                tg_send_message(chat_id, reserve_message or "Не удалось зарезервировать farm king.")
                 return
+
+            selected_rows = find_free_farm_kings(
+                count_needed,
+                geo=state.get("farm_king_geo", ""),
+                supplier=state.get("farm_king_supplier", "")
+            )
+
+            if len(selected_rows) < count_needed:
+                tg_send_message(
+                    chat_id,
+                    f"Недостаточно свободных farm king.\n"
+                    f"GEO: {state.get('farm_king_geo', '')}\n"
+                    f"Поставщик: {state.get('farm_king_supplier', '')}\n"
+                    f"Доступно: {len(selected_rows)}"
+                )
+                return
+
+            queue = []
+            for item, king_name in zip(selected_rows, names):
+                queue.append({
+                    "row_index": item["row_index"],
+                    "purchase_date": item["row"][1],
+                    "price": item["row"][2],
+                    "supplier": item["row"][3],
+                    "geo": item["row"][7],
+                    "king_name": king_name,
+                    "data_text": get_full_king_data_from_row(item["row"])
+                })
 
             state["farm_kings_bulk_queue"] = queue
             state["farm_kings_bulk_results"] = []
@@ -18036,7 +18285,6 @@ def handle_message(msg):
             state["farm_kings_bulk_proxy_collect_index"] = 0
             state["farm_kings_bulk_username"] = username
             state["farm_kings_bulk_issue_rows"] = []
-            state["farm_kings_bulk_reserved_items"] = [dict(x) for x in queue]
 
             set_state_with_custom_ttl(user_id, state, FARM_KING_BULK_PROXY_TTL)
 
@@ -18614,6 +18862,14 @@ def handle_message(msg):
                         price=row[2],
                         geo_value=parsed_crypto.get("geo", geo_value)
                     )
+                download_token = save_king_download_bundle(
+                    owner_user_id=user_id,
+                    bundle_kind="crypto_single",
+                    items=[{
+                        "king_name": king_name,
+                        "data_text": data_text,
+                    }]
+                )
 
                 tg_send_inline_message(
                     chat_id,
@@ -18624,7 +18880,7 @@ def handle_message(msg):
                     f"🌐Гео: {parsed_crypto.get('geo', geo_value)}",
                     [[{
                         "text": "📄 Скачать txt",
-                        "callback_data": f"download_crypto_txt:{user_id}"
+                        "callback_data": f"dcst:{download_token}" if download_token else f"download_crypto_txt:{user_id}"
                     }]]
                 )
                 
@@ -19136,6 +19392,200 @@ def handle_callback_query(callback_query):
             )
             return
 
+        if data.startswith("dfst:"):
+            token = data.split(":", 1)[1].strip()
+            items = load_king_download_bundle(token, owner_user_id=user_id, bundle_kind="farm_single")
+            item = pick_king_download_item(items, 0)
+
+            if not item:
+                tg_answer_callback_query(callback_id, "Нет данных для txt файла")
+                return jsonify({"ok": True})
+
+            try:
+                tg_send_king_data_as_txt(
+                    chat_id=chat_id,
+                    king_name=item.get("king_name", "king"),
+                    data_text=item.get("data_text", "")
+                )
+                tg_answer_callback_query(callback_id, "Txt отправлен")
+            except Exception:
+                logging.exception("dfst send failed")
+                tg_answer_callback_query(callback_id, "Не удалось отправить txt")
+
+            return jsonify({"ok": True})
+
+        if data.startswith("dkbz:"):
+            token = data.split(":", 1)[1].strip()
+            items = load_king_download_bundle(token, owner_user_id=user_id, bundle_kind="king_bulk")
+
+            if not items:
+                tg_answer_callback_query(callback_id, "Нет файлов для скачивания")
+                return jsonify({"ok": True})
+
+            try:
+                archive_name = f"kings_{datetime.now(MOSCOW_TZ).strftime('%Y%m%d_%H%M%S')}.zip"
+                tg_send_kings_as_zip(
+                    chat_id=chat_id,
+                    issued_items=items,
+                    archive_name=archive_name
+                )
+                tg_answer_callback_query(callback_id, "Zip отправлен")
+            except Exception:
+                logging.exception("dkbz send failed")
+                tg_answer_callback_query(callback_id, "Не удалось отправить zip")
+
+            return jsonify({"ok": True})
+
+        if data.startswith("dkbt:"):
+            parts = data.split(":")
+            token = parts[1].strip() if len(parts) > 1 else ""
+            try:
+                item_index = int(parts[2]) if len(parts) > 2 else 0
+            except Exception:
+                item_index = 0
+
+            items = load_king_download_bundle(token, owner_user_id=user_id, bundle_kind="king_bulk")
+            item = pick_king_download_item(items, item_index)
+
+            if not item:
+                tg_answer_callback_query(callback_id, "Нет txt для скачивания")
+                return jsonify({"ok": True})
+
+            try:
+                tg_send_king_data_as_txt(
+                    chat_id=chat_id,
+                    king_name=item.get("king_name", "king"),
+                    data_text=item.get("data_text", "")
+                )
+                tg_answer_callback_query(callback_id, "Txt отправлен")
+            except Exception:
+                logging.exception("dkbt send failed")
+                tg_answer_callback_query(callback_id, "Не удалось отправить txt")
+
+            return jsonify({"ok": True})
+
+        if data.startswith("dfbz:"):
+            token = data.split(":", 1)[1].strip()
+            items = load_king_download_bundle(token, owner_user_id=user_id, bundle_kind="farm_bulk")
+
+            if not items:
+                tg_answer_callback_query(callback_id, "Нет файлов для скачивания")
+                return jsonify({"ok": True})
+
+            try:
+                archive_name = f"farm_kings_{datetime.now(MOSCOW_TZ).strftime('%Y%m%d_%H%M%S')}.zip"
+                tg_send_kings_as_zip(
+                    chat_id=chat_id,
+                    issued_items=items,
+                    archive_name=archive_name
+                )
+                tg_answer_callback_query(callback_id, "Zip отправлен")
+            except Exception:
+                logging.exception("dfbz send failed")
+                tg_answer_callback_query(callback_id, "Не удалось отправить zip")
+
+            return jsonify({"ok": True})
+
+        if data.startswith("dfbt:"):
+            parts = data.split(":")
+            token = parts[1].strip() if len(parts) > 1 else ""
+            try:
+                item_index = int(parts[2]) if len(parts) > 2 else 0
+            except Exception:
+                item_index = 0
+
+            items = load_king_download_bundle(token, owner_user_id=user_id, bundle_kind="farm_bulk")
+            item = pick_king_download_item(items, item_index)
+
+            if not item:
+                tg_answer_callback_query(callback_id, "Нет txt для скачивания")
+                return jsonify({"ok": True})
+
+            try:
+                tg_send_king_data_as_txt(
+                    chat_id=chat_id,
+                    king_name=item.get("king_name", "king"),
+                    data_text=item.get("data_text", "")
+                )
+                tg_answer_callback_query(callback_id, "Txt отправлен")
+            except Exception:
+                logging.exception("dfbt send failed")
+                tg_answer_callback_query(callback_id, "Не удалось отправить txt")
+
+            return jsonify({"ok": True})
+
+        if data.startswith("dcbz:"):
+            token = data.split(":", 1)[1].strip()
+            items = load_king_download_bundle(token, owner_user_id=user_id, bundle_kind="crypto_bulk")
+
+            if not items:
+                tg_answer_callback_query(callback_id, "Нет файлов для скачивания")
+                return jsonify({"ok": True})
+
+            try:
+                archive_name = f"crypto_kings_{datetime.now(MOSCOW_TZ).strftime('%Y%m%d_%H%M%S')}.zip"
+                tg_send_kings_as_zip(
+                    chat_id=chat_id,
+                    issued_items=items,
+                    archive_name=archive_name
+                )
+                tg_answer_callback_query(callback_id, "Zip отправлен")
+            except Exception:
+                logging.exception("dcbz send failed")
+                tg_answer_callback_query(callback_id, "Не удалось отправить zip")
+
+            return jsonify({"ok": True})
+
+        if data.startswith("dcbt:"):
+            parts = data.split(":")
+            token = parts[1].strip() if len(parts) > 1 else ""
+            try:
+                item_index = int(parts[2]) if len(parts) > 2 else 0
+            except Exception:
+                item_index = 0
+
+            items = load_king_download_bundle(token, owner_user_id=user_id, bundle_kind="crypto_bulk")
+            item = pick_king_download_item(items, item_index)
+
+            if not item:
+                tg_answer_callback_query(callback_id, "Нет txt для скачивания")
+                return jsonify({"ok": True})
+
+            try:
+                tg_send_king_data_as_txt(
+                    chat_id=chat_id,
+                    king_name=item.get("king_name", "king"),
+                    data_text=item.get("data_text", "")
+                )
+                tg_answer_callback_query(callback_id, "Txt отправлен")
+            except Exception:
+                logging.exception("dcbt send failed")
+                tg_answer_callback_query(callback_id, "Не удалось отправить txt")
+
+            return jsonify({"ok": True})
+
+        if data.startswith("dcst:"):
+            token = data.split(":", 1)[1].strip()
+            items = load_king_download_bundle(token, owner_user_id=user_id, bundle_kind="crypto_single")
+            item = pick_king_download_item(items, 0)
+
+            if not item:
+                tg_answer_callback_query(callback_id, "Нет данных для txt файла")
+                return jsonify({"ok": True})
+
+            try:
+                tg_send_king_data_as_txt(
+                    chat_id=chat_id,
+                    king_name=item.get("king_name", "king"),
+                    data_text=item.get("data_text", "")
+                )
+                tg_answer_callback_query(callback_id, "Txt отправлен")
+            except Exception:
+                logging.exception("dcst send failed")
+                tg_answer_callback_query(callback_id, "Не удалось отправить txt")
+
+            return jsonify({"ok": True})
+
         if data.startswith("download_farm_king_txt:"):
             target_user_id = data.split(":", 1)[1]
 
@@ -19358,6 +19808,20 @@ def handle_callback_query(callback_query):
 
             state = get_state(user_id)
 
+            # === РЕЗЕРВИРОВАНИЕ: сразу занять все строки за этим пользователем ===
+            queue = state.get("farm_kings_bulk_queue", [])
+            row_indices = [item["row_index"] for item in queue if item.get("row_index")]
+            if row_indices and not reserve_farm_king_rows(user_id, row_indices):
+                tg_send_message(
+                    chat_id,
+                    "⚠️ Часть farm king уже была взята другим пользователем.\n"
+                    "Пожалуйста, начни выдачу заново."
+                )
+                clear_state(user_id)
+                send_farm_kings_menu(chat_id, "Меню Farm King:")
+                return jsonify({"ok": True})
+            # ====================================================================
+
             if message_id:
                 state["farm_kings_bulk_confirm_message_id"] = message_id
                 set_state_with_custom_ttl(user_id, state, FARM_KING_BULK_PROXY_TTL)
@@ -19380,6 +19844,7 @@ def handle_callback_query(callback_query):
                 return
 
             tg_answer_callback_query(callback_id, "Выдача отменена")
+            release_farm_king_rows(user_id)  # Снять резерв
             clear_state(user_id)
 
             if message_id:
@@ -19391,6 +19856,30 @@ def handle_callback_query(callback_query):
                 )
 
             send_farm_kings_menu(chat_id, "Меню Farm King:")
+            return jsonify({"ok": True})
+
+        if data.startswith("king_skip_proxy:"):
+            target_user_id = data.split(":", 1)[1]
+
+            if str(user_id) != str(target_user_id):
+                tg_answer_callback_query(callback_id, "Это не ваша кнопка")
+                return
+
+            tg_answer_callback_query(callback_id, "Прокси пропущены")
+
+            if message_id:
+                tg_edit_message_text(
+                    chat_id,
+                    message_id,
+                    "✅ Прокси пропущены",
+                    inline_buttons=[]
+                )
+
+            handle_message({
+                "chat": {"id": chat_id},
+                "from": {"id": user_id, "username": callback_query["from"].get("username", "")},
+                "text": "__SKIP_PROXY_KING_SINGLE__"
+            })
             return jsonify({"ok": True})
 
         if data.startswith("farm_king_skip_proxy:"):
