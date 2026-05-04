@@ -13,6 +13,8 @@ from google.oauth2.service_account import Credentials
 import threading
 import uuid
 import tempfile
+import base64
+import zlib
 
 app = Flask(__name__)
 CORS(app)
@@ -187,6 +189,7 @@ SHEET_FARM_FPS = "База фарм фп"
 SHEET_CRYPTO_KINGS = "База_крипта_кинги"
 SHEET_PIXELS = "База_пикселей"
 SHEET_STICKERS = "Стикеры"
+SHEET_KING_DOWNLOADS = "Кэш_скачиваний_king"
 
 ADMIN_POLL = "Опрос"
 
@@ -488,6 +491,7 @@ def reset_google_cache():
             SHEET_FARM_FPS: {"rows": None, "updated_at": 0},
             SHEET_PIXELS: {"rows": None, "updated_at": 0},
             SHEET_STICKERS: {"rows": None, "updated_at": 0},
+    SHEET_KING_DOWNLOADS: {"rows": None, "updated_at": 0},
         }
 
 def reset_table_cache():
@@ -505,6 +509,7 @@ def reset_table_cache():
             SHEET_FARM_FPS: {"rows": None, "updated_at": 0},
             SHEET_PIXELS: {"rows": None, "updated_at": 0},
             SHEET_STICKERS: {"rows": None, "updated_at": 0},
+    SHEET_KING_DOWNLOADS: {"rows": None, "updated_at": 0},
         }
 
 def check_google_available():
@@ -537,6 +542,7 @@ table_cache = {
     SHEET_FARM_FPS: {"rows": None, "updated_at": 0},
     SHEET_PIXELS: {"rows": None, "updated_at": 0},
     SHEET_STICKERS: {"rows": None, "updated_at": 0},
+    SHEET_KING_DOWNLOADS: {"rows": None, "updated_at": 0},
 }
 
 table_cache_lock = threading.Lock()
@@ -2793,6 +2799,242 @@ def tg_send_kings_as_zip(chat_id, issued_items, archive_name="kings_bundle.zip")
     resp.raise_for_status()
     return resp.json()
 
+def ensure_king_downloads_sheet_exists():
+    try:
+        with google_lock:
+            client = get_gspread_client()
+            spreadsheet = client.open_by_key(SPREADSHEET_ID)
+
+            try:
+                sheet = spreadsheet.worksheet(SHEET_KING_DOWNLOADS)
+            except gspread.exceptions.WorksheetNotFound:
+                sheet = spreadsheet.add_worksheet(title=SHEET_KING_DOWNLOADS, rows=2000, cols=9)
+
+            rows = sheet.get_all_values()
+            need_init = False
+
+            if not rows:
+                need_init = True
+            elif len(rows[0]) < 9:
+                need_init = True
+            elif str(rows[0][0]).strip() != "token":
+                need_init = True
+
+            if need_init:
+                sheet.update(
+                    "A1:I1",
+                    [[
+                        "token",
+                        "owner_user_id",
+                        "bundle_kind",
+                        "item_index",
+                        "king_name",
+                        "part_index",
+                        "total_parts",
+                        "payload_chunk",
+                        "created_at",
+                    ]]
+                )
+
+            mark_sheet_cache_stale(SHEET_KING_DOWNLOADS)
+            return sheet
+
+    except Exception:
+        logging.exception("ensure_king_downloads_sheet_exists crashed")
+        raise
+
+
+KING_DOWNLOAD_CHUNK_SIZE = 40000
+
+
+def _split_text_chunks(text, chunk_size=KING_DOWNLOAD_CHUNK_SIZE):
+    text = str(text or "")
+    if not text:
+        return [""]
+
+    return [text[i:i + chunk_size] for i in range(0, len(text), chunk_size)] or [""]
+
+
+
+def encode_king_download_text(data_text):
+    raw = str(data_text or "").encode("utf-8")
+    packed = zlib.compress(raw, 9)
+    encoded = base64.b64encode(packed).decode("ascii")
+    return _split_text_chunks(encoded)
+
+
+
+def decode_king_download_text(encoded_chunks):
+    joined = "".join([str(x or "") for x in (encoded_chunks or [])])
+    if not joined:
+        return ""
+
+    raw = base64.b64decode(joined.encode("ascii"))
+    return zlib.decompress(raw).decode("utf-8")
+
+
+
+def append_king_download_rows(rows_to_add):
+    rows_to_add = [list(x or []) for x in (rows_to_add or []) if x]
+    if not rows_to_add:
+        return
+
+    ensure_king_downloads_sheet_exists()
+
+    def _do():
+        with google_lock:
+            sheet = get_sheet(SHEET_KING_DOWNLOADS)
+            sheet.append_rows(rows_to_add, value_input_option="RAW")
+
+    google_write_with_retry(_do)
+    mark_sheet_cache_stale(SHEET_KING_DOWNLOADS)
+
+
+
+def save_king_download_bundle(owner_user_id, bundle_kind, items):
+    items = [dict(x or {}) for x in (items or []) if x]
+    if not items:
+        return ""
+
+    try:
+        ensure_king_downloads_sheet_exists()
+        token = uuid.uuid4().hex
+        created_at = datetime.now(MOSCOW_TZ).strftime("%d/%m/%Y %H:%M:%S")
+        rows_to_add = []
+
+        for item_index, item in enumerate(items):
+            king_name = str(item.get("king_name", "") or "king").strip() or "king"
+            data_text = str(item.get("data_text", "") or "")
+            chunks = encode_king_download_text(data_text)
+            total_parts = len(chunks)
+
+            for part_index, payload_chunk in enumerate(chunks):
+                rows_to_add.append([
+                    token,
+                    str(owner_user_id),
+                    str(bundle_kind),
+                    str(item_index),
+                    king_name,
+                    str(part_index),
+                    str(total_parts),
+                    payload_chunk,
+                    created_at,
+                ])
+
+        append_king_download_rows(rows_to_add)
+        return token
+
+    except Exception:
+        logging.exception(
+            f"save_king_download_bundle failed: owner={owner_user_id}, kind={bundle_kind}"
+        )
+        return ""
+
+
+
+def load_king_download_bundle(token, owner_user_id=None, bundle_kind=None):
+    token = str(token or "").strip()
+    if not token:
+        return []
+
+    try:
+        ensure_king_downloads_sheet_exists()
+        rows = get_sheet_rows_cached(SHEET_KING_DOWNLOADS, force=True)
+    except Exception:
+        logging.exception(f"load_king_download_bundle failed to load sheet: token={token}")
+        return []
+
+    grouped = {}
+
+    for raw_row in rows[1:]:
+        row = ensure_row_len(raw_row, 9)
+
+        row_token = str(row[0]).strip()
+        row_owner = str(row[1]).strip()
+        row_kind = str(row[2]).strip()
+
+        if row_token != token:
+            continue
+
+        if owner_user_id is not None and row_owner != str(owner_user_id):
+            continue
+
+        if bundle_kind is not None and row_kind != str(bundle_kind):
+            continue
+
+        try:
+            item_index = int(str(row[3]).strip() or "0")
+        except Exception:
+            item_index = 0
+
+        king_name = str(row[4]).strip() or "king"
+
+        try:
+            part_index = int(str(row[5]).strip() or "0")
+        except Exception:
+            part_index = 0
+
+        try:
+            total_parts = int(str(row[6]).strip() or "1")
+        except Exception:
+            total_parts = 1
+
+        payload_chunk = str(row[7] or "")
+
+        item = grouped.setdefault(item_index, {
+            "king_name": king_name,
+            "total_parts": total_parts,
+            "parts": {}
+        })
+
+        item["king_name"] = king_name or item.get("king_name", "king")
+        item["total_parts"] = max(int(item.get("total_parts", 1) or 1), total_parts)
+        item["parts"][part_index] = payload_chunk
+
+    result = []
+
+    for item_index in sorted(grouped.keys()):
+        item = grouped[item_index]
+        total_parts = int(item.get("total_parts", 1) or 1)
+        parts_map = item.get("parts", {}) or {}
+
+        encoded_chunks = [parts_map.get(i, "") for i in range(total_parts)]
+        if not any(encoded_chunks):
+            continue
+
+        try:
+            data_text = decode_king_download_text(encoded_chunks)
+        except Exception:
+            logging.exception(
+                f"decode king download failed: token={token}, item_index={item_index}, kind={bundle_kind}"
+            )
+            continue
+
+        result.append({
+            "king_name": item.get("king_name", "king"),
+            "data_text": data_text,
+        })
+
+    return result
+
+
+
+def pick_king_download_item(items, requested_index=0):
+    items = list(items or [])
+    if not items:
+        return None
+
+    try:
+        requested_index = int(requested_index)
+    except Exception:
+        requested_index = 0
+
+    if requested_index < 0 or requested_index >= len(items):
+        requested_index = 0
+
+    return items[requested_index]
+
+
 def build_crypto_bulk_result_text(results, for_whom):
     success_items = [x for x in results if x.get("octo_ok")]
     failed_items = [x for x in results if not x.get("octo_ok")]
@@ -2959,19 +3201,25 @@ def finish_crypto_kings_bulk(chat_id, user_id):
 
     success_items = [x for x in results if x.get("octo_ok")]
     inline_buttons = []
+    download_token = ""
+
+    if success_items:
+        download_token = save_king_download_bundle(user_id, "crypto_bulk", success_items)
 
     if len(success_items) == 1:
+        callback_data = f"dcbt:{download_token}:0" if download_token else f"download_crypto_bulk_txt:{user_id}:0"
         inline_buttons = [[
             {
                 "text": "📄 Скачать txt",
-                "callback_data": f"download_crypto_bulk_txt:{user_id}:0"
+                "callback_data": callback_data
             }
         ]]
     elif len(success_items) >= 2:
+        callback_data = f"dcbz:{download_token}" if download_token else f"download_crypto_bulk_zip:{user_id}"
         inline_buttons = [[
             {
                 "text": "📦 Скачать zip",
-                "callback_data": f"download_crypto_bulk_zip:{user_id}"
+                "callback_data": callback_data
             }
         ]]
 
@@ -6416,19 +6664,25 @@ def finish_farm_kings_bulk(chat_id, user_id):
 
     success_items = [x for x in results if x.get("octo_ok")]
     inline_buttons = []
+    download_token = ""
+
+    if success_items:
+        download_token = save_king_download_bundle(user_id, "farm_bulk", success_items)
 
     if len(success_items) == 1:
+        callback_data = f"dfbt:{download_token}:0" if download_token else f"download_farm_king_bulk_txt:{user_id}:0"
         inline_buttons = [[
             {
                 "text": "📄 Скачать txt",
-                "callback_data": f"download_farm_king_bulk_txt:{user_id}:0"
+                "callback_data": callback_data
             }
         ]]
     elif len(success_items) >= 2:
+        callback_data = f"dfbz:{download_token}" if download_token else f"download_farm_king_bulk_zip:{user_id}"
         inline_buttons = [[
             {
                 "text": "📦 Скачать zip",
-                "callback_data": f"download_farm_king_bulk_zip:{user_id}"
+                "callback_data": callback_data
             }
         ]]
 
@@ -10808,19 +11062,25 @@ def finish_kings_bulk(chat_id, user_id):
 
     success_items = [x for x in results if x.get("octo_ok")]
     inline_buttons = []
+    download_token = ""
+
+    if success_items:
+        download_token = save_king_download_bundle(user_id, "king_bulk", success_items)
 
     if len(success_items) == 1:
+        callback_data = f"dkbt:{download_token}:0" if download_token else f"download_king_bulk_txt:{user_id}:0"
         inline_buttons = [[
             {
                 "text": "📄 Скачать txt",
-                "callback_data": f"download_king_bulk_txt:{user_id}:0"
+                "callback_data": callback_data
             }
         ]]
     elif len(success_items) >= 2:
+        callback_data = f"dkbz:{download_token}" if download_token else f"download_king_bulk_zip:{user_id}"
         inline_buttons = [[
             {
                 "text": "📦 Скачать zip",
-                "callback_data": f"download_king_bulk_zip:{user_id}"
+                "callback_data": callback_data
             }
         ]]
 
@@ -17498,6 +17758,14 @@ def handle_message(msg):
                         price=row[2],
                         geo_value=parsed_farm_king.get("geo", geo_value)
                     )
+                download_token = save_king_download_bundle(
+                    owner_user_id=user_id,
+                    bundle_kind="farm_single",
+                    items=[{
+                        "king_name": king_name,
+                        "data_text": data_text,
+                    }]
+                )
 
                 tg_send_inline_message(
                     chat_id,
@@ -17508,7 +17776,7 @@ def handle_message(msg):
                     f"🌐Гео: {parsed_farm_king.get('geo', geo_value)}",
                     [[{
                         "text": "📄 Скачать txt",
-                        "callback_data": f"download_farm_king_txt:{user_id}"
+                        "callback_data": f"dfst:{download_token}" if download_token else f"download_farm_king_txt:{user_id}"
                     }]]
                 )
 
@@ -18318,6 +18586,14 @@ def handle_message(msg):
                         price=row[2],
                         geo_value=parsed_crypto.get("geo", geo_value)
                     )
+                download_token = save_king_download_bundle(
+                    owner_user_id=user_id,
+                    bundle_kind="crypto_single",
+                    items=[{
+                        "king_name": king_name,
+                        "data_text": data_text,
+                    }]
+                )
 
                 tg_send_inline_message(
                     chat_id,
@@ -18328,7 +18604,7 @@ def handle_message(msg):
                     f"🌐Гео: {parsed_crypto.get('geo', geo_value)}",
                     [[{
                         "text": "📄 Скачать txt",
-                        "callback_data": f"download_crypto_txt:{user_id}"
+                        "callback_data": f"dcst:{download_token}" if download_token else f"download_crypto_txt:{user_id}"
                     }]]
                 )
                 
@@ -18839,6 +19115,200 @@ def handle_callback_query(callback_query):
                 }]]
             )
             return
+
+        if data.startswith("dfst:"):
+            token = data.split(":", 1)[1].strip()
+            items = load_king_download_bundle(token, owner_user_id=user_id, bundle_kind="farm_single")
+            item = pick_king_download_item(items, 0)
+
+            if not item:
+                tg_answer_callback_query(callback_id, "Нет данных для txt файла")
+                return jsonify({"ok": True})
+
+            try:
+                tg_send_king_data_as_txt(
+                    chat_id=chat_id,
+                    king_name=item.get("king_name", "king"),
+                    data_text=item.get("data_text", "")
+                )
+                tg_answer_callback_query(callback_id, "Txt отправлен")
+            except Exception:
+                logging.exception("dfst send failed")
+                tg_answer_callback_query(callback_id, "Не удалось отправить txt")
+
+            return jsonify({"ok": True})
+
+        if data.startswith("dkbz:"):
+            token = data.split(":", 1)[1].strip()
+            items = load_king_download_bundle(token, owner_user_id=user_id, bundle_kind="king_bulk")
+
+            if not items:
+                tg_answer_callback_query(callback_id, "Нет файлов для скачивания")
+                return jsonify({"ok": True})
+
+            try:
+                archive_name = f"kings_{datetime.now(MOSCOW_TZ).strftime('%Y%m%d_%H%M%S')}.zip"
+                tg_send_kings_as_zip(
+                    chat_id=chat_id,
+                    issued_items=items,
+                    archive_name=archive_name
+                )
+                tg_answer_callback_query(callback_id, "Zip отправлен")
+            except Exception:
+                logging.exception("dkbz send failed")
+                tg_answer_callback_query(callback_id, "Не удалось отправить zip")
+
+            return jsonify({"ok": True})
+
+        if data.startswith("dkbt:"):
+            parts = data.split(":")
+            token = parts[1].strip() if len(parts) > 1 else ""
+            try:
+                item_index = int(parts[2]) if len(parts) > 2 else 0
+            except Exception:
+                item_index = 0
+
+            items = load_king_download_bundle(token, owner_user_id=user_id, bundle_kind="king_bulk")
+            item = pick_king_download_item(items, item_index)
+
+            if not item:
+                tg_answer_callback_query(callback_id, "Нет txt для скачивания")
+                return jsonify({"ok": True})
+
+            try:
+                tg_send_king_data_as_txt(
+                    chat_id=chat_id,
+                    king_name=item.get("king_name", "king"),
+                    data_text=item.get("data_text", "")
+                )
+                tg_answer_callback_query(callback_id, "Txt отправлен")
+            except Exception:
+                logging.exception("dkbt send failed")
+                tg_answer_callback_query(callback_id, "Не удалось отправить txt")
+
+            return jsonify({"ok": True})
+
+        if data.startswith("dfbz:"):
+            token = data.split(":", 1)[1].strip()
+            items = load_king_download_bundle(token, owner_user_id=user_id, bundle_kind="farm_bulk")
+
+            if not items:
+                tg_answer_callback_query(callback_id, "Нет файлов для скачивания")
+                return jsonify({"ok": True})
+
+            try:
+                archive_name = f"farm_kings_{datetime.now(MOSCOW_TZ).strftime('%Y%m%d_%H%M%S')}.zip"
+                tg_send_kings_as_zip(
+                    chat_id=chat_id,
+                    issued_items=items,
+                    archive_name=archive_name
+                )
+                tg_answer_callback_query(callback_id, "Zip отправлен")
+            except Exception:
+                logging.exception("dfbz send failed")
+                tg_answer_callback_query(callback_id, "Не удалось отправить zip")
+
+            return jsonify({"ok": True})
+
+        if data.startswith("dfbt:"):
+            parts = data.split(":")
+            token = parts[1].strip() if len(parts) > 1 else ""
+            try:
+                item_index = int(parts[2]) if len(parts) > 2 else 0
+            except Exception:
+                item_index = 0
+
+            items = load_king_download_bundle(token, owner_user_id=user_id, bundle_kind="farm_bulk")
+            item = pick_king_download_item(items, item_index)
+
+            if not item:
+                tg_answer_callback_query(callback_id, "Нет txt для скачивания")
+                return jsonify({"ok": True})
+
+            try:
+                tg_send_king_data_as_txt(
+                    chat_id=chat_id,
+                    king_name=item.get("king_name", "king"),
+                    data_text=item.get("data_text", "")
+                )
+                tg_answer_callback_query(callback_id, "Txt отправлен")
+            except Exception:
+                logging.exception("dfbt send failed")
+                tg_answer_callback_query(callback_id, "Не удалось отправить txt")
+
+            return jsonify({"ok": True})
+
+        if data.startswith("dcbz:"):
+            token = data.split(":", 1)[1].strip()
+            items = load_king_download_bundle(token, owner_user_id=user_id, bundle_kind="crypto_bulk")
+
+            if not items:
+                tg_answer_callback_query(callback_id, "Нет файлов для скачивания")
+                return jsonify({"ok": True})
+
+            try:
+                archive_name = f"crypto_kings_{datetime.now(MOSCOW_TZ).strftime('%Y%m%d_%H%M%S')}.zip"
+                tg_send_kings_as_zip(
+                    chat_id=chat_id,
+                    issued_items=items,
+                    archive_name=archive_name
+                )
+                tg_answer_callback_query(callback_id, "Zip отправлен")
+            except Exception:
+                logging.exception("dcbz send failed")
+                tg_answer_callback_query(callback_id, "Не удалось отправить zip")
+
+            return jsonify({"ok": True})
+
+        if data.startswith("dcbt:"):
+            parts = data.split(":")
+            token = parts[1].strip() if len(parts) > 1 else ""
+            try:
+                item_index = int(parts[2]) if len(parts) > 2 else 0
+            except Exception:
+                item_index = 0
+
+            items = load_king_download_bundle(token, owner_user_id=user_id, bundle_kind="crypto_bulk")
+            item = pick_king_download_item(items, item_index)
+
+            if not item:
+                tg_answer_callback_query(callback_id, "Нет txt для скачивания")
+                return jsonify({"ok": True})
+
+            try:
+                tg_send_king_data_as_txt(
+                    chat_id=chat_id,
+                    king_name=item.get("king_name", "king"),
+                    data_text=item.get("data_text", "")
+                )
+                tg_answer_callback_query(callback_id, "Txt отправлен")
+            except Exception:
+                logging.exception("dcbt send failed")
+                tg_answer_callback_query(callback_id, "Не удалось отправить txt")
+
+            return jsonify({"ok": True})
+
+        if data.startswith("dcst:"):
+            token = data.split(":", 1)[1].strip()
+            items = load_king_download_bundle(token, owner_user_id=user_id, bundle_kind="crypto_single")
+            item = pick_king_download_item(items, 0)
+
+            if not item:
+                tg_answer_callback_query(callback_id, "Нет данных для txt файла")
+                return jsonify({"ok": True})
+
+            try:
+                tg_send_king_data_as_txt(
+                    chat_id=chat_id,
+                    king_name=item.get("king_name", "king"),
+                    data_text=item.get("data_text", "")
+                )
+                tg_answer_callback_query(callback_id, "Txt отправлен")
+            except Exception:
+                logging.exception("dcst send failed")
+                tg_answer_callback_query(callback_id, "Не удалось отправить txt")
+
+            return jsonify({"ok": True})
 
         if data.startswith("download_farm_king_txt:"):
             target_user_id = data.split(":", 1)[1]
