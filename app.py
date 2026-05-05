@@ -6187,6 +6187,10 @@ def start_farm_kings_bulk_proxy_step(chat_id, user_id):
         f"socks5://host:port"
     )
 
+    # Сохраняем state ДО отправки сообщения — защита от race condition
+    state["mode"] = FARM_KING_OCTO_MODE_BULK_PROXY
+    set_state_with_custom_ttl(user_id, state, FARM_KING_BULK_PROXY_TTL)
+
     sent = tg_send_inline_message(
         chat_id,
         text,
@@ -6198,17 +6202,15 @@ def start_farm_kings_bulk_proxy_step(chat_id, user_id):
         ]]
     )
 
-    state["mode"] = FARM_KING_OCTO_MODE_BULK_PROXY
-
     try:
         if isinstance(sent, dict):
             proxy_message_id = sent.get("result", {}).get("message_id")
             if proxy_message_id:
+                state = get_state(user_id)
                 state["farm_kings_bulk_proxy_message_id"] = proxy_message_id
+                set_state_with_custom_ttl(user_id, state, FARM_KING_BULK_PROXY_TTL)
     except Exception:
         logging.exception("start_farm_kings_bulk_proxy_step failed to save proxy message_id")
-
-    set_state_with_custom_ttl(user_id, state, FARM_KING_BULK_PROXY_TTL)
 
 def start_farm_bulk_worker_if_needed(chat_id, user_id):
     with farm_bulk_worker_lock:
@@ -10394,6 +10396,11 @@ def start_kings_bulk_proxy_step(chat_id, user_id):
         f"socks5://host:port"
     )
 
+    # Сохраняем state ДО отправки сообщения — защита от race condition
+    # (пользователь может ответить до того как set_state выполнится)
+    state["mode"] = KING_OCTO_MODE_BULK_PROXY
+    set_state_with_custom_ttl(user_id, state, KING_BULK_PROXY_TTL)
+
     sent = tg_send_inline_message(
         chat_id,
         text,
@@ -10405,17 +10412,15 @@ def start_kings_bulk_proxy_step(chat_id, user_id):
         ]]
     )
 
-    state["mode"] = KING_OCTO_MODE_BULK_PROXY
-
     try:
         if isinstance(sent, dict):
             message_id = sent.get("result", {}).get("message_id")
             if message_id:
+                state = get_state(user_id)
                 state["kings_bulk_proxy_message_id"] = message_id
+                set_state_with_custom_ttl(user_id, state, KING_BULK_PROXY_TTL)
     except Exception:
         logging.exception("start_kings_bulk_proxy_step failed to save message_id")
-
-    set_state_with_custom_ttl(user_id, state, KING_BULK_PROXY_TTL)
 
 def confirm_farm_king_octo_issue(chat_id, user_id, username):
     try:
