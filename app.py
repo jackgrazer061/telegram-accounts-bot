@@ -304,7 +304,7 @@ GAMBLA_NAMES = [
     '№30 MG88', '№39 AA96', '№47 DK99', '№49 IE97',
     '№51 VG98', '№21 VK84', '№22 AU85', '№53 DR100', '№54 VP101',
     '№000 richard', '№55 AL102', '№56 IC1', '№58 KM2', '№59 AH6', '№43 MD9', '№45 AA8', '№61 SN11',
-    '№63 ED123', '№64 SA122', '№65 BS125'
+    '№63 ED123', '№64 SA122'
 ]
 
 SUBMENU_GET = '➡️Выдать лички'
@@ -414,54 +414,6 @@ last_backup_date = None
 MOSCOW_TZ = ZoneInfo("Europe/Moscow")
 farm_bulk_worker_lock = threading.Lock()
 farm_bulk_workers_running = set()
-
-# Резервирование farm king строк — защита от race condition при параллельных выдачах
-farm_kings_reserve_lock = threading.Lock()
-farm_kings_reserved_rows = {}  # row_index -> user_id, кто зарезервировал
-FARM_KINGS_RESERVE_TTL = 1800  # 30 минут максимум держим резерв
-_farm_kings_reserve_timestamps = {}  # row_index -> timestamp
-
-def reserve_farm_king_rows(user_id, row_indices):
-    """Зарезервировать список строк за пользователем. Возвращает True если все свободны."""
-    now = time.time()
-    with farm_kings_reserve_lock:
-        # Сначала очистим протухшие резервы
-        stale = [r for r, ts in _farm_kings_reserve_timestamps.items()
-                 if now - ts > FARM_KINGS_RESERVE_TTL]
-        for r in stale:
-            farm_kings_reserved_rows.pop(r, None)
-            _farm_kings_reserve_timestamps.pop(r, None)
-
-        # Проверяем, не занят ли кто-то другой
-        for idx in row_indices:
-            owner = farm_kings_reserved_rows.get(idx)
-            if owner is not None and owner != user_id:
-                return False  # Уже занято другим
-
-        # Резервируем
-        for idx in row_indices:
-            farm_kings_reserved_rows[idx] = user_id
-            _farm_kings_reserve_timestamps[idx] = now
-        return True
-
-def release_farm_king_rows(user_id):
-    """Снять все резервы пользователя (при отмене или завершении)."""
-    with farm_kings_reserve_lock:
-        to_release = [r for r, uid in farm_kings_reserved_rows.items() if uid == user_id]
-        for r in to_release:
-            farm_kings_reserved_rows.pop(r, None)
-            _farm_kings_reserve_timestamps.pop(r, None)
-
-def get_reserved_rows_set():
-    """Вернуть множество всех зарезервированных row_index (для фильтрации)."""
-    now = time.time()
-    with farm_kings_reserve_lock:
-        stale = [r for r, ts in _farm_kings_reserve_timestamps.items()
-                 if now - ts > FARM_KINGS_RESERVE_TTL]
-        for r in stale:
-            farm_kings_reserved_rows.pop(r, None)
-            _farm_kings_reserve_timestamps.pop(r, None)
-        return set(farm_kings_reserved_rows.keys())
 polls_lock = threading.Lock()
 polls_data = {}
 next_poll_id = 1
@@ -5814,17 +5766,12 @@ def find_free_farm_kings(count_needed, geo=None, supplier=None):
     candidates = []
     geo = str(geo or "").strip()
     supplier = str(supplier or "").strip()
-    reserved = get_reserved_rows_set()
 
     for idx, row in enumerate(rows[1:], start=2):
         if len(row) < 12:
             row = row + [''] * (12 - len(row))
 
         if str(row[4]).strip().lower() != "free":
-            continue
-
-        # Пропускаем строки, уже зарезервированные другим пользователем
-        if idx in reserved:
             continue
 
         row_geo = str(row[7]).strip()
@@ -5960,7 +5907,6 @@ def find_free_farm_kings_by_geo_and_price(count_needed, geo, price):
     candidates = []
     geo = str(geo or "").strip()
     price = normalize_price_key(price)
-    reserved = get_reserved_rows_set()
 
     for idx, row in enumerate(rows[1:], start=2):
         row = ensure_row_len(row, 13)
@@ -5977,10 +5923,6 @@ def find_free_farm_kings_by_geo_and_price(count_needed, geo, price):
         if row_price != price:
             continue
         if current_name:
-            continue
-
-        # Пропускаем строки, уже зарезервированные другим пользователем
-        if idx in reserved:
             continue
 
         purchase_date = parse_date(row[1]) or datetime.max
@@ -6187,10 +6129,6 @@ def start_farm_kings_bulk_proxy_step(chat_id, user_id):
         f"socks5://host:port"
     )
 
-    # Сохраняем state ДО отправки сообщения — защита от race condition
-    state["mode"] = FARM_KING_OCTO_MODE_BULK_PROXY
-    set_state_with_custom_ttl(user_id, state, FARM_KING_BULK_PROXY_TTL)
-
     sent = tg_send_inline_message(
         chat_id,
         text,
@@ -6202,15 +6140,17 @@ def start_farm_kings_bulk_proxy_step(chat_id, user_id):
         ]]
     )
 
+    state["mode"] = FARM_KING_OCTO_MODE_BULK_PROXY
+
     try:
         if isinstance(sent, dict):
             proxy_message_id = sent.get("result", {}).get("message_id")
             if proxy_message_id:
-                state = get_state(user_id)
                 state["farm_kings_bulk_proxy_message_id"] = proxy_message_id
-                set_state_with_custom_ttl(user_id, state, FARM_KING_BULK_PROXY_TTL)
     except Exception:
         logging.exception("start_farm_kings_bulk_proxy_step failed to save proxy message_id")
+
+    set_state_with_custom_ttl(user_id, state, FARM_KING_BULK_PROXY_TTL)
 
 def start_farm_bulk_worker_if_needed(chat_id, user_id):
     with farm_bulk_worker_lock:
@@ -6283,7 +6223,7 @@ def run_farm_bulk_worker(chat_id, user_id):
             except Exception:
                 logging.exception("run_farm_bulk_worker failed to update progress message")
 
-            time.sleep(1.5)  # пауза между кингами — защита от 429 в Octo
+            time.sleep(0.3)
 
     except Exception as e:
         logging.exception("run_farm_bulk_worker crashed")
@@ -6698,8 +6638,6 @@ def send_farm_kings_bulk_followup_messages(chat_id, results):
 
 def finish_farm_kings_bulk(chat_id, user_id):
     state = get_state(user_id)
-
-    release_farm_king_rows(user_id)  # Снять резерв — выдача завершена
 
     progress_message_id = state.get("farm_kings_bulk_progress_message_id")
     if progress_message_id:
@@ -10396,8 +10334,6 @@ def start_kings_bulk_proxy_step(chat_id, user_id):
         f"socks5://host:port"
     )
 
-    # Сохраняем state ДО отправки сообщения — защита от race condition
-    # (пользователь может ответить до того как set_state выполнится)
     state["mode"] = KING_OCTO_MODE_BULK_PROXY
     set_state_with_custom_ttl(user_id, state, KING_BULK_PROXY_TTL)
 
@@ -10417,6 +10353,7 @@ def start_kings_bulk_proxy_step(chat_id, user_id):
             message_id = sent.get("result", {}).get("message_id")
             if message_id:
                 state = get_state(user_id)
+                state["mode"] = KING_OCTO_MODE_BULK_PROXY
                 state["kings_bulk_proxy_message_id"] = message_id
                 set_state_with_custom_ttl(user_id, state, KING_BULK_PROXY_TTL)
     except Exception:
@@ -10656,9 +10593,13 @@ def confirm_king_octo_issue(chat_id, user_id, username):
 def process_kings_bulk_proxy_step(chat_id, user_id, username, proxy_text):
     state = get_state(user_id)
 
-    if state.get("mode") != KING_OCTO_MODE_BULK_PROXY:
+    if state.get("mode") not in [KING_OCTO_MODE_BULK_PROXY, KING_OCTO_MODE_BULK_CONFIRM]:
         send_kings_menu(chat_id, "Сначала начни выдачу king заново.")
         return
+
+    if state.get("mode") != KING_OCTO_MODE_BULK_PROXY:
+        state["mode"] = KING_OCTO_MODE_BULK_PROXY
+        set_state_with_custom_ttl(user_id, state, KING_BULK_PROXY_TTL)
 
     queue = state.get("kings_bulk_queue", [])
     current_index = int(state.get("kings_bulk_current_index", 0))
@@ -13664,21 +13605,8 @@ def octo_find_profile_by_title(profile_title):
     for page in range(0, 10):
         url = f"{OCTO_API_BASE}/profiles?page={page}&page_len=100&fields=title"
 
-        # Retry на 429 с экспоненциальным backoff
-        for attempt in range(5):
-            resp = requests.get(url, headers=headers, timeout=60)
-            if resp.status_code == 429:
-                wait = 2 ** attempt  # 1, 2, 4, 8, 16 сек
-                logging.warning(f"OCTO 429 rate limit (page={page}, attempt={attempt}), ждём {wait}s")
-                time.sleep(wait)
-                continue
-            resp.raise_for_status()
-            break
-        else:
-            resp.raise_for_status()  # если все 5 попыток — 429, бросаем
-
-        if page > 0:
-            time.sleep(0.3)  # небольшая пауза между страницами
+        resp = requests.get(url, headers=headers, timeout=60)
+        resp.raise_for_status()
 
         data = resp.json()
 
@@ -13756,18 +13684,8 @@ def octo_debug_list_profiles():
     }
 
     url = f"{OCTO_API_BASE}/profiles?page=0&page_len=100&fields=title"
-
-    for attempt in range(5):
-        resp = requests.get(url, headers=headers, timeout=60)
-        if resp.status_code == 429:
-            wait = 2 ** attempt
-            logging.warning(f"OCTO 429 rate limit (debug_list, attempt={attempt}), ждём {wait}s")
-            time.sleep(wait)
-            continue
-        resp.raise_for_status()
-        break
-    else:
-        resp.raise_for_status()
+    resp = requests.get(url, headers=headers, timeout=60)
+    resp.raise_for_status()
 
     data = resp.json()
 
@@ -13986,15 +13904,14 @@ def ensure_octo_profile_for_farm_king(profile_name, parsed, proxy_data=None):
     try:
         existing = octo_find_profile_by_title(profile_name)
         if existing:
-            profile_uuid = extract_octo_profile_uuid_from_result(existing)
-            if profile_uuid:
-                try:
-                    # Используем uuid — не делаем повторный поиск по всем страницам
-                    octo_update_profile_tags_by_uuid(profile_uuid, [OCTO_TAG_FARMERS])
-                except Exception:
-                    logging.exception("ensure_octo_profile_for_farm_king tag update failed for existing profile")
+            try:
+                octo_update_profile_tags_by_title(profile_name, [OCTO_TAG_FARMERS])
+            except Exception:
+                logging.exception("ensure_octo_profile_for_farm_king tag update failed for existing profile")
 
-                try:
+            try:
+                profile_uuid = extract_octo_profile_uuid_from_result(existing)
+                if profile_uuid:
                     octo_update_profile_extensions_by_uuid(
                         profile_uuid,
                         OCTO_FARM_EXTENSIONS
@@ -14015,8 +13932,8 @@ def ensure_octo_profile_for_farm_king(profile_name, parsed, proxy_data=None):
                             },
                             timeout=30
                         )
-                except Exception:
-                    logging.exception("farm king setup failed for existing profile")
+            except Exception:
+                logging.exception("farm king setup failed for existing profile")
 
             return True, existing
 
@@ -14029,11 +13946,13 @@ def ensure_octo_profile_for_farm_king(profile_name, parsed, proxy_data=None):
         result = octo_create_profile(payload)
 
         try:
+            octo_update_profile_tags_by_title(profile_name, [OCTO_TAG_FARMERS])
+        except Exception:
+            logging.exception("ensure_octo_profile_for_farm_king tag update failed after create")
+
+        try:
             profile_uuid = extract_octo_profile_uuid_from_result(result)
             if profile_uuid:
-                # Используем uuid сразу — не делаем повторный поиск по всем страницам
-                octo_update_profile_tags_by_uuid(profile_uuid, [OCTO_TAG_FARMERS])
-
                 octo_update_profile_extensions_by_uuid(
                     profile_uuid,
                     OCTO_FARM_EXTENSIONS
@@ -17026,200 +16945,7 @@ def handle_message(msg):
             )
             return
 
-        if state.get("mode") == KING_OCTO_MODE_SINGLE_PROXY:
-            try:
-                proxy_raw = text.strip()
-
-                if proxy_raw == "__SKIP_PROXY_KING_SINGLE__":
-                    proxy_data = None
-                else:
-                    proxy_data = parse_proxy_input(proxy_raw)
-                    if not proxy_data:
-                        send_text_input_prompt(
-                            chat_id,
-                            "Неверный формат proxy.\n\nИспользуй:\nsocks5://login:password@host:port"
-                        )
-                        return
-
-                king_row = state.get("king_row")
-                king_name = str(state.get("king_name", "")).strip()
-                king_for_whom = str(state.get("king_for_whom", "")).strip()
-                parsed_king = state.get("parsed_king", {}) or {}
-                geo_value = str(state.get("king_geo_value", "")).strip()
-                data_text = str(state.get("king_data_text", "")).strip()
-                sync_id = state.get("king_sync_id")
-                today = str(state.get("king_today", "")).strip()
-                who_took_text = str(state.get("king_who_took_text", "")).strip()
-
-                if not king_row or not king_name or not king_for_whom:
-                    clear_state(user_id)
-                    send_kings_menu(chat_id, "Потеряны данные king. Начни заново.")
-                    return
-
-                row = get_sheet_row_live(SHEET_KINGS, king_row, 13)
-
-                if not row or not any(str(x).strip() for x in row):
-                    clear_state(user_id)
-                    send_kings_menu(chat_id, "King не найден в таблице. Начни заново.")
-                    return
-
-                status = str(row[4]).strip().lower()
-
-                if status == "taken":
-                    clear_state(user_id)
-                    send_kings_menu(chat_id, "Этот king уже занят.")
-                    return
-
-                if status == "ban":
-                    clear_state(user_id)
-                    send_kings_menu(chat_id, "Этот king уже в ban.")
-                    return
-
-                if status != "free":
-                    clear_state(user_id)
-                    send_kings_menu(chat_id, "Этот king недоступен.")
-                    return
-
-                octo_ok = False
-                octo_msg = ""
-                octo_result = None
-                profile_uuid = ""
-
-                cookies_ok = False
-                cookies_msg = ""
-                cookies_payload = None
-
-                try:
-                    octo_ok, octo_result = ensure_octo_profile_with_retry(
-                        ensure_func=ensure_octo_profile_for_crypto_king,
-                        profile_name=king_name,
-                        parsed=parsed_king,
-                        proxy_data=proxy_data
-                    )
-                    octo_msg = str(octo_result)
-                except Exception as octo_error:
-                    logging.exception("KING_SINGLE_PROXY: Octo create crashed")
-                    octo_msg = str(octo_error)
-
-                if not octo_ok:
-                    tg_send_long_message(
-                        chat_id,
-                        f"❌ Не удалось создать Octo профиль\n{octo_msg or 'неизвестная ошибка'}"
-                    )
-                    return
-
-                try:
-                    profile_uuid = extract_octo_profile_uuid_from_result(octo_result)
-                    cookies_payload = normalize_crypto_cookies_for_import(
-                        parsed_king.get("cookies_json", "")
-                    )
-                    if cookies_payload and profile_uuid:
-                        cookies_ok, cookies_msg = try_import_crypto_king_cookies(
-                            profile_uuid=profile_uuid,
-                            cookies_payload=cookies_payload
-                        )
-                    else:
-                        cookies_msg = "cookies не найдены или profile_uuid пустой"
-                except Exception as cookies_error:
-                    logging.exception("KING_SINGLE_PROXY: cookies import crashed")
-                    cookies_msg = str(cookies_error)
-
-                sheet_update_raw(
-                    SHEET_KINGS,
-                    f"A{king_row}:I{king_row}",
-                    [[
-                        king_name,
-                        row[1],
-                        row[2],
-                        row[3],
-                        "taken",
-                        king_for_whom,
-                        today,
-                        geo_value,
-                        who_took_text
-                    ]]
-                )
-                mark_sheet_cache_stale(SHEET_KINGS)
-
-                if sync_id:
-                    sync_status_to_basebot(BASEBOT_SHEET_KINGS, sync_id, "taken")
-
-                append_king_to_issues_sheet(
-                    king_name=king_name,
-                    purchase_date=row[1],
-                    price=row[2],
-                    transfer_date=today,
-                    supplier=row[3],
-                    for_whom=king_for_whom
-                )
-
-                invalidate_stats_cache()
-
-                preview_message_id = state.get("king_preview_message_id")
-
-                set_state(user_id, {
-                    "mode": "king_octo_issued",
-                    "last_king_name": king_name,
-                    "last_king_data_text": data_text,
-                    "king_preview_message_id": preview_message_id,
-                })
-
-                if preview_message_id:
-                    mark_king_octo_preview_as_issued(
-                        chat_id=chat_id,
-                        message_id=preview_message_id,
-                        king_name=king_name,
-                        king_for_whom=king_for_whom,
-                        price=row[2],
-                        geo_value=parsed_king.get("geo", geo_value)
-                    )
-
-                download_token = save_king_download_bundle(
-                    owner_user_id=user_id,
-                    bundle_kind="king_single",
-                    items=[{
-                        "king_name": king_name,
-                        "data_text": data_text,
-                    }]
-                )
-
-                tg_send_inline_message(
-                    chat_id,
-                    f"✅ King заведен в Octo\n\n"
-                    f"✏️Название: {king_name}\n"
-                    f"👨‍💻Для кого: {king_for_whom}\n"
-                    f"💵Цена: {row[2]}\n"
-                    f"🌐Гео: {parsed_king.get('geo', geo_value)}",
-                    [[{
-                        "text": "📄 Скачать txt",
-                        "callback_data": f"dkst:{download_token}" if download_token else f"download_king_txt:{user_id}"
-                    }]]
-                )
-
-                cookies_json = str(parsed_king.get("cookies_json", "")).strip()
-
-                if cookies_json:
-                    if cookies_ok:
-                        tg_send_message(
-                            chat_id,
-                            "Куки вставлены✅\n\n"
-                            "После сохранения Куки открыв профиль на редактирование — куки не отображаются. И это нормально"
-                        )
-                    else:
-                        tg_send_long_message(
-                            chat_id,
-                            f"Куки не вставлены❌\n\n"
-                            f"Ошибка Octo:\n{cookies_msg or 'пустая ошибка'}"
-                        )
-
-                return
-
-            except Exception:
-                logging.exception("KING_SINGLE_PROXY crashed")
-                tg_send_message(chat_id, "Ошибка выдачи king. Попробуй ещё раз.")
-                send_kings_menu(chat_id, "Меню кингов:")
-
-        if state.get("mode") == KING_OCTO_MODE_BULK_PROXY:
+        if state.get("mode") in [KING_OCTO_MODE_BULK_PROXY, KING_OCTO_MODE_BULK_CONFIRM]:
             process_kings_bulk_proxy_step(
                 chat_id=chat_id,
                 user_id=user_id,
@@ -19697,11 +19423,14 @@ def handle_callback_query(callback_query):
             tg_answer_callback_query(callback_id)
 
             state = get_state(user_id)
+            state["mode"] = KING_OCTO_MODE_BULK_PROXY
 
             if message_id:
                 state["kings_bulk_confirm_message_id"] = message_id
-                set_state_with_custom_ttl(user_id, state, KING_BULK_PROXY_TTL)
 
+            set_state_with_custom_ttl(user_id, state, KING_BULK_PROXY_TTL)
+
+            if message_id:
                 tg_edit_message_text(
                     chat_id,
                     message_id,
@@ -19812,20 +19541,6 @@ def handle_callback_query(callback_query):
 
             state = get_state(user_id)
 
-            # === РЕЗЕРВИРОВАНИЕ: сразу занять все строки за этим пользователем ===
-            queue = state.get("farm_kings_bulk_queue", [])
-            row_indices = [item["row_index"] for item in queue if item.get("row_index")]
-            if row_indices and not reserve_farm_king_rows(user_id, row_indices):
-                tg_send_message(
-                    chat_id,
-                    "⚠️ Часть farm king уже была взята другим пользователем.\n"
-                    "Пожалуйста, начни выдачу заново."
-                )
-                clear_state(user_id)
-                send_farm_kings_menu(chat_id, "Меню Farm King:")
-                return jsonify({"ok": True})
-            # ====================================================================
-
             if message_id:
                 state["farm_kings_bulk_confirm_message_id"] = message_id
                 set_state_with_custom_ttl(user_id, state, FARM_KING_BULK_PROXY_TTL)
@@ -19848,7 +19563,6 @@ def handle_callback_query(callback_query):
                 return
 
             tg_answer_callback_query(callback_id, "Выдача отменена")
-            release_farm_king_rows(user_id)  # Снять резерв
             clear_state(user_id)
 
             if message_id:
@@ -19860,30 +19574,6 @@ def handle_callback_query(callback_query):
                 )
 
             send_farm_kings_menu(chat_id, "Меню Farm King:")
-            return jsonify({"ok": True})
-
-        if data.startswith("king_skip_proxy:"):
-            target_user_id = data.split(":", 1)[1]
-
-            if str(user_id) != str(target_user_id):
-                tg_answer_callback_query(callback_id, "Это не ваша кнопка")
-                return
-
-            tg_answer_callback_query(callback_id, "Прокси пропущены")
-
-            if message_id:
-                tg_edit_message_text(
-                    chat_id,
-                    message_id,
-                    "✅ Прокси пропущены",
-                    inline_buttons=[]
-                )
-
-            handle_message({
-                "chat": {"id": chat_id},
-                "from": {"id": user_id, "username": callback_query["from"].get("username", "")},
-                "text": "__SKIP_PROXY_KING_SINGLE__"
-            })
             return jsonify({"ok": True})
 
         if data.startswith("farm_king_skip_proxy:"):
