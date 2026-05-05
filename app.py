@@ -6283,7 +6283,7 @@ def run_farm_bulk_worker(chat_id, user_id):
             except Exception:
                 logging.exception("run_farm_bulk_worker failed to update progress message")
 
-            time.sleep(0.3)
+            time.sleep(1.5)  # пауза между кингами — защита от 429 в Octo
 
     except Exception as e:
         logging.exception("run_farm_bulk_worker crashed")
@@ -13986,14 +13986,15 @@ def ensure_octo_profile_for_farm_king(profile_name, parsed, proxy_data=None):
     try:
         existing = octo_find_profile_by_title(profile_name)
         if existing:
-            try:
-                octo_update_profile_tags_by_title(profile_name, [OCTO_TAG_FARMERS])
-            except Exception:
-                logging.exception("ensure_octo_profile_for_farm_king tag update failed for existing profile")
+            profile_uuid = extract_octo_profile_uuid_from_result(existing)
+            if profile_uuid:
+                try:
+                    # Используем uuid — не делаем повторный поиск по всем страницам
+                    octo_update_profile_tags_by_uuid(profile_uuid, [OCTO_TAG_FARMERS])
+                except Exception:
+                    logging.exception("ensure_octo_profile_for_farm_king tag update failed for existing profile")
 
-            try:
-                profile_uuid = extract_octo_profile_uuid_from_result(existing)
-                if profile_uuid:
+                try:
                     octo_update_profile_extensions_by_uuid(
                         profile_uuid,
                         OCTO_FARM_EXTENSIONS
@@ -14014,8 +14015,8 @@ def ensure_octo_profile_for_farm_king(profile_name, parsed, proxy_data=None):
                             },
                             timeout=30
                         )
-            except Exception:
-                logging.exception("farm king setup failed for existing profile")
+                except Exception:
+                    logging.exception("farm king setup failed for existing profile")
 
             return True, existing
 
@@ -14028,13 +14029,11 @@ def ensure_octo_profile_for_farm_king(profile_name, parsed, proxy_data=None):
         result = octo_create_profile(payload)
 
         try:
-            octo_update_profile_tags_by_title(profile_name, [OCTO_TAG_FARMERS])
-        except Exception:
-            logging.exception("ensure_octo_profile_for_farm_king tag update failed after create")
-
-        try:
             profile_uuid = extract_octo_profile_uuid_from_result(result)
             if profile_uuid:
+                # Используем uuid сразу — не делаем повторный поиск по всем страницам
+                octo_update_profile_tags_by_uuid(profile_uuid, [OCTO_TAG_FARMERS])
+
                 octo_update_profile_extensions_by_uuid(
                     profile_uuid,
                     OCTO_FARM_EXTENSIONS
