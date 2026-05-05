@@ -8454,6 +8454,15 @@ def is_octo_rate_limit_error(exc_or_text):
         or "rate limit" in text
     )
 
+
+def is_octo_profile_limit_error(exc_or_text):
+    text = str(exc_or_text or "").lower()
+    return (
+        "limit_reached" in text
+        or "maximum profiles" in text
+        or ("403" in text and "profiles" in text and "maximum" in text)
+    )
+
 def octo_update_profile_description(profile_uuid, description_text):
     if not profile_uuid:
         raise RuntimeError("Не передан profile_uuid для Octo")
@@ -10334,9 +10343,6 @@ def start_kings_bulk_proxy_step(chat_id, user_id):
         f"socks5://host:port"
     )
 
-    state["mode"] = KING_OCTO_MODE_BULK_PROXY
-    set_state_with_custom_ttl(user_id, state, KING_BULK_PROXY_TTL)
-
     sent = tg_send_inline_message(
         chat_id,
         text,
@@ -10348,16 +10354,17 @@ def start_kings_bulk_proxy_step(chat_id, user_id):
         ]]
     )
 
+    state["mode"] = KING_OCTO_MODE_BULK_PROXY
+
     try:
         if isinstance(sent, dict):
             message_id = sent.get("result", {}).get("message_id")
             if message_id:
-                state = get_state(user_id)
-                state["mode"] = KING_OCTO_MODE_BULK_PROXY
                 state["kings_bulk_proxy_message_id"] = message_id
-                set_state_with_custom_ttl(user_id, state, KING_BULK_PROXY_TTL)
     except Exception:
         logging.exception("start_kings_bulk_proxy_step failed to save message_id")
+
+    set_state_with_custom_ttl(user_id, state, KING_BULK_PROXY_TTL)
 
 def confirm_farm_king_octo_issue(chat_id, user_id, username):
     try:
@@ -10593,13 +10600,9 @@ def confirm_king_octo_issue(chat_id, user_id, username):
 def process_kings_bulk_proxy_step(chat_id, user_id, username, proxy_text):
     state = get_state(user_id)
 
-    if state.get("mode") not in [KING_OCTO_MODE_BULK_PROXY, KING_OCTO_MODE_BULK_CONFIRM]:
+    if state.get("mode") != KING_OCTO_MODE_BULK_PROXY:
         send_kings_menu(chat_id, "Сначала начни выдачу king заново.")
         return
-
-    if state.get("mode") != KING_OCTO_MODE_BULK_PROXY:
-        state["mode"] = KING_OCTO_MODE_BULK_PROXY
-        set_state_with_custom_ttl(user_id, state, KING_BULK_PROXY_TTL)
 
     queue = state.get("kings_bulk_queue", [])
     current_index = int(state.get("kings_bulk_current_index", 0))
@@ -13593,7 +13596,25 @@ def parse_proxy_input(text):
 
     return None
 
-def octo_find_profile_by_title(profile_title):
+def octo_extract_profile_items(data):
+    items = []
+
+    if isinstance(data, dict):
+        if isinstance(data.get("data"), list):
+            items = data["data"]
+        elif isinstance(data.get("profiles"), list):
+            items = data["profiles"]
+        elif isinstance(data.get("items"), list):
+            items = data["items"]
+        elif isinstance(data.get("list"), list):
+            items = data["list"]
+    elif isinstance(data, list):
+        items = data
+
+    return items
+
+
+def octo_find_profile_by_title(profile_title, max_pages=10):
     logging.info("OCTO_FIND_V3_RUNNING")
     headers = {
         "X-Octo-Api-Token": OCTO_API_TOKEN,
@@ -13601,27 +13622,19 @@ def octo_find_profile_by_title(profile_title):
     }
 
     target = str(profile_title or "").strip().lower()
+    if not target:
+        return None
 
-    for page in range(0, 10):
+    max_pages = max(1, int(max_pages or 10))
+
+    for page in range(0, max_pages):
         url = f"{OCTO_API_BASE}/profiles?page={page}&page_len=100&fields=title"
 
         resp = requests.get(url, headers=headers, timeout=60)
         resp.raise_for_status()
 
         data = resp.json()
-
-        items = []
-        if isinstance(data, dict):
-            if isinstance(data.get("data"), list):
-                items = data["data"]
-            elif isinstance(data.get("profiles"), list):
-                items = data["profiles"]
-            elif isinstance(data.get("items"), list):
-                items = data["items"]
-            elif isinstance(data.get("list"), list):
-                items = data["list"]
-        elif isinstance(data, list):
-            items = data
+        items = octo_extract_profile_items(data)
 
         for item in items:
             title_val = str(item.get("title", "")).strip().lower()
@@ -13630,8 +13643,43 @@ def octo_find_profile_by_title(profile_title):
             if title_val == target or name_val == target:
                 return item
 
-        if not items:
+        if not items or len(items) < 100:
             break
+
+    return None
+
+
+def octo_find_profile_by_title_deep(profile_title, max_pages=80, sleep_between=0.0):
+    target = str(profile_title or "").strip().lower()
+    if not target:
+        return None
+
+    headers = {
+        "X-Octo-Api-Token": OCTO_API_TOKEN,
+        "Content-Type": "application/json",
+    }
+
+    max_pages = max(1, int(max_pages or 80))
+
+    for page in range(0, max_pages):
+        url = f"{OCTO_API_BASE}/profiles?page={page}&page_len=100&fields=title"
+        resp = requests.get(url, headers=headers, timeout=60)
+        resp.raise_for_status()
+
+        data = resp.json()
+        items = octo_extract_profile_items(data)
+
+        for item in items:
+            title_val = str(item.get("title", "")).strip().lower()
+            name_val = str(item.get("name", "")).strip().lower()
+            if title_val == target or name_val == target:
+                return item
+
+        if not items or len(items) < 100:
+            break
+
+        if sleep_between:
+            time.sleep(float(sleep_between))
 
     return None
 
@@ -14288,23 +14336,91 @@ def octo_create_profile(payload):
 
     url = f"{OCTO_API_BASE}/profiles"
 
-    logging.info(f"OCTO CREATE URL: {url}")
-    logging.info(f"OCTO CREATE PAYLOAD: {json.dumps(payload, ensure_ascii=False)}")
+    def _post_once(post_payload):
+        logging.info(f"OCTO CREATE URL: {url}")
+        logging.info(f"OCTO CREATE PAYLOAD: {json.dumps(post_payload, ensure_ascii=False)}")
 
-    resp = requests.post(
-        url,
-        json=payload,
-        headers=headers,
-        timeout=60
-    )
+        resp = requests.post(
+            url,
+            json=post_payload,
+            headers=headers,
+            timeout=60
+        )
 
-    logging.info(f"OCTO STATUS: {resp.status_code}")
-    logging.info(f"OCTO RESPONSE: {resp.text}")
+        logging.info(f"OCTO STATUS: {resp.status_code}")
+        logging.info(f"OCTO RESPONSE: {resp.text}")
+        return resp
+
+    def _try_find_existing_by_title(title):
+        title = str(title or "").strip()
+        if not title:
+            return None
+
+        try:
+            time.sleep(1)
+            return octo_find_profile_by_title_deep(title, max_pages=80)
+        except Exception:
+            logging.exception("octo_create_profile deep title search failed")
+            return None
+
+    resp = _post_once(payload)
 
     if resp.status_code >= 400:
-        raise RuntimeError(f"Octo API error {resp.status_code}: {resp.text}")
+        error_text = f"Octo API error {resp.status_code}: {resp.text}"
 
-    return resp.json()
+        if is_octo_profile_limit_error(error_text):
+            title = str((payload or {}).get("title") or "").strip()
+
+            existing = _try_find_existing_by_title(title)
+            if existing:
+                logging.warning(
+                    f"OCTO CREATE fallback: found existing profile after limit_reached title={title}"
+                )
+                return existing
+
+            if isinstance(payload, dict) and payload.get("template_id"):
+                retry_payload = dict(payload)
+                retry_payload.pop("template_id", None)
+
+                logging.warning(
+                    f"OCTO CREATE fallback: retry without template_id title={title}"
+                )
+
+                retry_resp = _post_once(retry_payload)
+                if retry_resp.status_code < 400:
+                    return retry_resp.json()
+
+                retry_error_text = f"Octo API error {retry_resp.status_code}: {retry_resp.text}"
+
+                if is_octo_profile_limit_error(retry_error_text):
+                    existing = _try_find_existing_by_title(title)
+                    if existing:
+                        logging.warning(
+                            f"OCTO CREATE fallback after retry: found existing profile title={title}"
+                        )
+                        return existing
+
+                raise RuntimeError(retry_error_text)
+
+        raise RuntimeError(error_text)
+
+    data = resp.json()
+
+    if isinstance(data, dict) and data.get("success") is False:
+        error_text = f"Octo API error: {data}"
+
+        if is_octo_profile_limit_error(error_text):
+            title = str((payload or {}).get("title") or "").strip()
+            existing = _try_find_existing_by_title(title)
+            if existing:
+                logging.warning(
+                    f"OCTO CREATE fallback: found existing profile on success=false title={title}"
+                )
+                return existing
+
+        raise RuntimeError(error_text)
+
+    return data
 
 def ensure_octo_profile_for_warehouse(profile_name, proxy_data):
     existing = octo_find_profile_by_title(profile_name)
@@ -16945,7 +17061,7 @@ def handle_message(msg):
             )
             return
 
-        if state.get("mode") in [KING_OCTO_MODE_BULK_PROXY, KING_OCTO_MODE_BULK_CONFIRM]:
+        if state.get("mode") == KING_OCTO_MODE_BULK_PROXY:
             process_kings_bulk_proxy_step(
                 chat_id=chat_id,
                 user_id=user_id,
@@ -19423,14 +19539,11 @@ def handle_callback_query(callback_query):
             tg_answer_callback_query(callback_id)
 
             state = get_state(user_id)
-            state["mode"] = KING_OCTO_MODE_BULK_PROXY
 
             if message_id:
                 state["kings_bulk_confirm_message_id"] = message_id
+                set_state_with_custom_ttl(user_id, state, KING_BULK_PROXY_TTL)
 
-            set_state_with_custom_ttl(user_id, state, KING_BULK_PROXY_TTL)
-
-            if message_id:
                 tg_edit_message_text(
                     chat_id,
                     message_id,
