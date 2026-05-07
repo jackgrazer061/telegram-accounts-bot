@@ -48,6 +48,7 @@ OCTO_CRYPTO_EXTENSIONS = [
     "nmnnilimjhkbdmnpojpbihmnphkneckf@1.0.9",     # SMIT Connect
     "naciaagbkifhpnoodlkhbejjldaiffcm@1.6.9",     # Get Token Cookie
     "lopekoolgoijpmaidblgfgelbkfkgmod@0.6.0",     # Pass key
+    "hikeheopipicfonmagblhkcfdhpojpia@1.0",       # BM-verif remover
 ]
 
 OCTO_FARM_EXTENSIONS = [
@@ -59,6 +60,7 @@ OCTO_FARM_EXTENSIONS = [
     "nmnnilimjhkbdmnpojpbihmnphkneckf@1.0.9",     # SMIT Connect
     "naciaagbkifhpnoodlkhbejjldaiffcm@1.6.9",     # Get Token Cookie
     "lopekoolgoijpmaidblgfgelbkfkgmod@0.6.0",     # Pass key
+    "hikeheopipicfonmagblhkcfdhpojpia@1.0",       # BM-verif remover
 ]
 
 if not BOT_TOKEN:
@@ -304,7 +306,7 @@ GAMBLA_NAMES = [
     '№30 MG88', '№39 AA96', '№47 DK99', '№49 IE97',
     '№51 VG98', '№21 VK84', '№22 AU85', '№53 DR100', '№54 VP101',
     '№000 richard', '№55 AL102', '№56 IC1', '№58 KM2', '№59 AH6', '№43 MD9', '№45 AA8', '№61 SN11',
-    '№63 ED123', '№64 SA122'
+    '№63 ED123', '№64 SA122', '№65 BS125'
 ]
 
 SUBMENU_GET = '➡️Выдать лички'
@@ -414,6 +416,161 @@ last_backup_date = None
 MOSCOW_TZ = ZoneInfo("Europe/Moscow")
 farm_bulk_worker_lock = threading.Lock()
 farm_bulk_workers_running = set()
+
+# ===== ОЧЕРЕДЬ ФАРМ КИНГОВ =====
+farm_kings_queue_lock = threading.Lock()
+# [ {user_id, chat_id, username, notified_at} ]
+farm_kings_queue_list = []
+# user_id -> True (кто сейчас активно берёт)
+farm_kings_queue_active = {}
+FARM_KINGS_QUEUE_TIMEOUT = 5 * 60  # 5 минут на ответ после уведомления
+
+def fkq_is_active(user_id):
+    """Проверить — есть ли сейчас активный пользователь (берёт кингов)."""
+    with farm_kings_queue_lock:
+        return bool(farm_kings_queue_active)
+
+def fkq_try_enter(user_id, chat_id, username):
+    """Попытаться войти. Возвращает (can_go, position).
+    can_go=True — иди сразу, position=0.
+    can_go=False — встал в очередь, position=номер в очереди (1-based)."""
+    with farm_kings_queue_lock:
+        # Уже в активных?
+        if farm_kings_queue_active.get(user_id):
+            return True, 0
+        # Уже в очереди?
+        for i, entry in enumerate(farm_kings_queue_list):
+            if entry["user_id"] == user_id:
+                return False, i + 1
+        # Никого нет — входим сразу
+        if not farm_kings_queue_active:
+            farm_kings_queue_active[user_id] = True
+            return True, 0
+        # Есть активный — встаём в очередь
+        farm_kings_queue_list.append({
+            "user_id": user_id,
+            "chat_id": chat_id,
+            "username": username,
+            "notified_at": None,
+        })
+        return False, len(farm_kings_queue_list)
+
+def fkq_leave(user_id):
+    """Освободить слот (завершил или отменил). Уведомить следующего."""
+    next_entry = None
+    with farm_kings_queue_lock:
+        farm_kings_queue_active.pop(user_id, None)
+        # Очищаем протухших из начала очереди
+        now = time.time()
+        while farm_kings_queue_list:
+            entry = farm_kings_queue_list[0]
+            notified_at = entry.get("notified_at")
+            if notified_at and now - notified_at > FARM_KINGS_QUEUE_TIMEOUT:
+                farm_kings_queue_list.pop(0)
+                logging.info(f"fkq_leave: skipped timed-out user {entry['user_id']}")
+                continue
+            break
+        if farm_kings_queue_list and not farm_kings_queue_active:
+            next_entry = farm_kings_queue_list.pop(0)
+            farm_kings_queue_active[next_entry["user_id"]] = True
+            next_entry["notified_at"] = time.time()
+    if next_entry:
+        _fkq_notify_next(next_entry)
+
+def fkq_cancel_waiting(user_id):
+    """Выйти из очереди ожидания (не активный)."""
+    with farm_kings_queue_lock:
+        for i, entry in enumerate(farm_kings_queue_list):
+            if entry["user_id"] == user_id:
+                farm_kings_queue_list.pop(i)
+                return True
+    return False
+
+def fkq_queue_status():
+    """Кто активен и сколько ждут."""
+    with farm_kings_queue_lock:
+        active = list(farm_kings_queue_active.keys())
+        waiting = [e["username"] or str(e["user_id"]) for e in farm_kings_queue_list]
+        return active, waiting
+
+def _fkq_notify_next(entry):
+    """Уведомить следующего — его очередь."""
+    try:
+        uname = f"@{entry['username']}" if entry.get("username") else "тебя"
+        tg_send_inline_message(
+            entry["chat_id"],
+            f"✅ Твоя очередь, {uname}!\n\n"
+            f"Можешь брать farm king — у тебя есть {FARM_KINGS_QUEUE_TIMEOUT // 60} минуты.\n"
+            f"Если не начнёшь — очередь перейдёт дальше.",
+            [[{
+                "text": "❌ Выйти из очереди",
+                "callback_data": f"fkq_cancel:{entry['user_id']}"
+            }]]
+        )
+    except Exception:
+        logging.exception(f"_fkq_notify_next failed for user {entry['user_id']}")
+
+def fkq_start_timeout_watcher(user_id, chat_id):
+    """Запустить фоновый поток — если через 5 минут не начал, выкинуть."""
+    def _watch():
+        time.sleep(FARM_KINGS_QUEUE_TIMEOUT + 5)
+        with farm_kings_queue_lock:
+            if not farm_kings_queue_active.get(user_id):
+                return
+            # Всё ещё активен но не начал (state не в нужном mode) — пропускаем
+        # Нет способа точно знать начал ли он без проверки state — просто оставим,
+        # fkq_leave вызывается из finish/cancel и очистит сам.
+    threading.Thread(target=_watch, daemon=True).start()
+
+# ===== КОНЕЦ ОЧЕРЕДИ ФАРМ КИНГОВ =====
+
+# Резервирование farm king строк — защита от race condition при параллельных выдачах
+farm_kings_reserve_lock = threading.Lock()
+farm_kings_reserved_rows = {}  # row_index -> user_id, кто зарезервировал
+FARM_KINGS_RESERVE_TTL = 1800  # 30 минут максимум держим резерв
+_farm_kings_reserve_timestamps = {}  # row_index -> timestamp
+
+def reserve_farm_king_rows(user_id, row_indices):
+    """Зарезервировать список строк за пользователем. Возвращает True если все свободны."""
+    now = time.time()
+    with farm_kings_reserve_lock:
+        # Сначала очистим протухшие резервы
+        stale = [r for r, ts in _farm_kings_reserve_timestamps.items()
+                 if now - ts > FARM_KINGS_RESERVE_TTL]
+        for r in stale:
+            farm_kings_reserved_rows.pop(r, None)
+            _farm_kings_reserve_timestamps.pop(r, None)
+
+        # Проверяем, не занят ли кто-то другой
+        for idx in row_indices:
+            owner = farm_kings_reserved_rows.get(idx)
+            if owner is not None and owner != user_id:
+                return False  # Уже занято другим
+
+        # Резервируем
+        for idx in row_indices:
+            farm_kings_reserved_rows[idx] = user_id
+            _farm_kings_reserve_timestamps[idx] = now
+        return True
+
+def release_farm_king_rows(user_id):
+    """Снять все резервы пользователя (при отмене или завершении)."""
+    with farm_kings_reserve_lock:
+        to_release = [r for r, uid in farm_kings_reserved_rows.items() if uid == user_id]
+        for r in to_release:
+            farm_kings_reserved_rows.pop(r, None)
+            _farm_kings_reserve_timestamps.pop(r, None)
+
+def get_reserved_rows_set():
+    """Вернуть множество всех зарезервированных row_index (для фильтрации)."""
+    now = time.time()
+    with farm_kings_reserve_lock:
+        stale = [r for r, ts in _farm_kings_reserve_timestamps.items()
+                 if now - ts > FARM_KINGS_RESERVE_TTL]
+        for r in stale:
+            farm_kings_reserved_rows.pop(r, None)
+            _farm_kings_reserve_timestamps.pop(r, None)
+        return set(farm_kings_reserved_rows.keys())
 polls_lock = threading.Lock()
 polls_data = {}
 next_poll_id = 1
@@ -5766,12 +5923,17 @@ def find_free_farm_kings(count_needed, geo=None, supplier=None):
     candidates = []
     geo = str(geo or "").strip()
     supplier = str(supplier or "").strip()
+    reserved = get_reserved_rows_set()
 
     for idx, row in enumerate(rows[1:], start=2):
         if len(row) < 12:
             row = row + [''] * (12 - len(row))
 
         if str(row[4]).strip().lower() != "free":
+            continue
+
+        # Пропускаем строки, уже зарезервированные другим пользователем
+        if idx in reserved:
             continue
 
         row_geo = str(row[7]).strip()
@@ -5907,6 +6069,7 @@ def find_free_farm_kings_by_geo_and_price(count_needed, geo, price):
     candidates = []
     geo = str(geo or "").strip()
     price = normalize_price_key(price)
+    reserved = get_reserved_rows_set()
 
     for idx, row in enumerate(rows[1:], start=2):
         row = ensure_row_len(row, 13)
@@ -5923,6 +6086,10 @@ def find_free_farm_kings_by_geo_and_price(count_needed, geo, price):
         if row_price != price:
             continue
         if current_name:
+            continue
+
+        # Пропускаем строки, уже зарезервированные другим пользователем
+        if idx in reserved:
             continue
 
         purchase_date = parse_date(row[1]) or datetime.max
@@ -6129,6 +6296,10 @@ def start_farm_kings_bulk_proxy_step(chat_id, user_id):
         f"socks5://host:port"
     )
 
+    # Сохраняем state ДО отправки сообщения — защита от race condition
+    state["mode"] = FARM_KING_OCTO_MODE_BULK_PROXY
+    set_state_with_custom_ttl(user_id, state, FARM_KING_BULK_PROXY_TTL)
+
     sent = tg_send_inline_message(
         chat_id,
         text,
@@ -6140,17 +6311,15 @@ def start_farm_kings_bulk_proxy_step(chat_id, user_id):
         ]]
     )
 
-    state["mode"] = FARM_KING_OCTO_MODE_BULK_PROXY
-
     try:
         if isinstance(sent, dict):
             proxy_message_id = sent.get("result", {}).get("message_id")
             if proxy_message_id:
+                state = get_state(user_id)
                 state["farm_kings_bulk_proxy_message_id"] = proxy_message_id
+                set_state_with_custom_ttl(user_id, state, FARM_KING_BULK_PROXY_TTL)
     except Exception:
         logging.exception("start_farm_kings_bulk_proxy_step failed to save proxy message_id")
-
-    set_state_with_custom_ttl(user_id, state, FARM_KING_BULK_PROXY_TTL)
 
 def start_farm_bulk_worker_if_needed(chat_id, user_id):
     with farm_bulk_worker_lock:
@@ -6223,7 +6392,7 @@ def run_farm_bulk_worker(chat_id, user_id):
             except Exception:
                 logging.exception("run_farm_bulk_worker failed to update progress message")
 
-            time.sleep(0.3)
+            time.sleep(1.5)  # пауза между кингами — защита от 429 в Octo
 
     except Exception as e:
         logging.exception("run_farm_bulk_worker crashed")
@@ -6638,6 +6807,9 @@ def send_farm_kings_bulk_followup_messages(chat_id, results):
 
 def finish_farm_kings_bulk(chat_id, user_id):
     state = get_state(user_id)
+
+    release_farm_king_rows(user_id)  # Снять резерв — выдача завершена
+    fkq_leave(user_id)               # Освободить место в очереди
 
     progress_message_id = state.get("farm_kings_bulk_progress_message_id")
     if progress_message_id:
@@ -8222,27 +8394,263 @@ def parse_crypto_king_raw_data(raw_text):
         "raw_text": text_original,
     }
 
-    # ---------- FORMAT 1: pipe ----------
-    if "|" in text and text.count("|") >= 5 and "login -" not in text.lower():
-        parts = [x.strip() for x in text.split("|")]
-        if len(parts) >= 6:
-            result["fb_login"] = _sanitize_login(parts[0])
-            result["fb_password"] = parts[1].strip()
-            result["twofa"] = _validate_2fa(parts[2])
-            result["email"] = _validate_email(parts[3])
-            result["email_password"] = parts[4].strip()
-            result["service"] = parts[5].strip()
+    # ---------- FORMAT COLON-SEPARATED: Name:email:fb_pass:email:email_pass:fb_login:UA::token:cookies (форматы 2, 7) ----------
+    # Детектор: первая часть — имя с пробелом, вторая — email
+    if ":" in text and "|" not in text:
+        colon_parts = [x.strip() for x in text.split(":")]
+        if len(colon_parts) >= 6:
+            p0_is_name = bool(re.fullmatch(r"[A-Za-z ]{3,40}", colon_parts[0])) and " " in colon_parts[0]
+            p1_is_email = bool(_validate_email(colon_parts[1]))
+            if p0_is_name and p1_is_email:
+                result["email"] = _validate_email(colon_parts[1])
+                result["fb_password"] = colon_parts[2].strip() if len(colon_parts) > 2 else ""
+                # colon_parts[3] — email повтор
+                result["email_password"] = colon_parts[4].strip() if len(colon_parts) > 4 else ""
+                result["fb_login"] = _sanitize_login(colon_parts[5]) if len(colon_parts) > 5 else ""
 
+                result["twofa"] = _validate_2fa(_extract_twofa_value(text_original))
+                result["geo"] = _extract_geo_value(text_original)
+                result["cookies_json"] = _extract_cookie_json_block(text_original)
+                result["docs_links"] = _extract_docs_links(text_original)
+                result["bm_links"] = _extract_bm_links(text_original)
+                result["cookies_links"] = _extract_cookie_links(text_original)
+                result["user_agent"] = _extract_user_agent(text_original)
+
+                if not result["fb_login"] and result["email"]:
+                    result["fb_login"] = result["email"]
+
+                result["fb_login"] = _sanitize_login(result["fb_login"])
+                result["email"] = _validate_email(result["email"])
+                result["twofa"] = _validate_2fa(result["twofa"])
+                if _validate_email(result["fb_password"]):
+                    result["fb_password"] = ""
+                if not result["cookies_json"]:
+                    result["cookies_json"] = extract_cookie_json_from_raw_king_text(text_original)
+                return result
+
+    # ---------- FORMAT PIPE (|) ----------
+    # Форматы 5, 8, 14: id|pass|2fa|email|email_pass|service|...
+    # Также: id|@#!pass|2fa|email|pass||cookies
+    if "|" in text and text.count("|") >= 4 and "login -" not in text.lower() and "Fb:" not in text and "E-mail:" not in text:
+        parts = [x.strip() for x in text.split("|")]
+        if len(parts) >= 5:
+            p0 = parts[0]
+            p1 = parts[1] if len(parts) > 1 else ""
+            p2 = parts[2] if len(parts) > 2 else ""
+            p3 = parts[3] if len(parts) > 3 else ""
+            p4 = parts[4] if len(parts) > 4 else ""
+            p5 = parts[5] if len(parts) > 5 else ""
+
+            # p0 должен быть числовым ID или именем без пробелов
+            p0_is_id = bool(re.fullmatch(r"[0-9]{8,20}", p0))
+            p0_is_name = bool(re.fullmatch(r"[A-Za-z ]{3,40}", p0)) and " " in p0
+
+            if p0_is_id or p0_is_name:
+                if p0_is_id:
+                    result["fb_login"] = p0
+                    result["fb_password"] = p1
+                    result["twofa"] = _validate_2fa(p2)
+                    result["email"] = _validate_email(p3)
+                    result["email_password"] = p4
+                    result["service"] = p5 if p5 and not p5.startswith("xs=") and not p5 == "Live" else ""
+                else:
+                    # Name:email:fb_pass:email:email_pass:fb_login (формат 2, 7)
+                    # parts: Name, email, fb_pass, email, email_pass, fb_login, UA, empty, token, cookies, GEO, avatarl
+                    result["email"] = _validate_email(p1)
+                    result["fb_password"] = p2
+                    result["email_password"] = p4
+                    result["fb_login"] = _sanitize_login(p5) if p5 else ""
+
+                result["cookies_json"] = _extract_cookie_json_block(text_original)
+                result["docs_links"] = _extract_docs_links(text_original)
+                result["bm_links"] = _extract_bm_links(text_original)
+                result["cookies_links"] = _extract_cookie_links(text_original)
+                result["bm_email_pairs"] = _extract_bm_email_pairs(text_original)
+                result["user_agent"] = _extract_user_agent(text_original)
+                result["geo"] = _extract_geo_value(text_original)
+                result["twofa"] = _validate_2fa(result["twofa"] or _extract_twofa_value(text_original))
+
+                if not result["fb_login"] and result["email"]:
+                    result["fb_login"] = result["email"]
+
+                # FINAL SANITY
+                result["fb_login"] = _sanitize_login(result["fb_login"])
+                result["email"] = _validate_email(result["email"])
+                result["twofa"] = _validate_2fa(result["twofa"])
+                if _validate_email(result["fb_password"]):
+                    result["fb_password"] = ""
+                if _validate_email(result["email_password"]):
+                    result["email_password"] = ""
+                if not result["cookies_json"]:
+                    result["cookies_json"] = extract_cookie_json_from_raw_king_text(text_original)
+                return result
+
+    # ---------- FORMAT: Fb:\tID:pass\tE-mail:\temail:pass\t2FA:\tXXX (формат 4) ----------
+    # Ищем "Fb:" или "Facebook:" с парой id:pass рядом
+    m_fb = re.search(r"(?:^|\n|\t)\s*F(?:b|acebook)\s*:\s*([0-9]{8,20})\s*:\s*(\S+)", text, re.IGNORECASE)
+    m_email_pair = re.search(r"E-?mail\s*:\s*([A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,})\s*:\s*(\S+)", text, re.IGNORECASE)
+    if m_fb and m_email_pair:
+        result["fb_login"] = m_fb.group(1).strip()
+        result["fb_password"] = m_fb.group(2).strip()
+        result["email"] = _validate_email(m_email_pair.group(1))
+        result["email_password"] = m_email_pair.group(2).strip()
+        result["twofa"] = _validate_2fa(_extract_twofa_value(text))
+        result["geo"] = _extract_geo_value(text_original)
+        result["cookies_json"] = _extract_cookie_json_block(text_original)
+        result["docs_links"] = _extract_docs_links(text_original)
+        result["bm_links"] = _extract_bm_links(text_original)
+        result["cookies_links"] = _extract_cookie_links(text_original)
+        result["user_agent"] = _extract_user_agent(text_original)
+        if not result["cookies_json"]:
+            result["cookies_json"] = extract_cookie_json_from_raw_king_text(text_original)
+        return result
+
+    # ---------- FORMAT: label - value (tab-separated, формат 11) ----------
+    # UK\tlogin - 61579226233323\tpassword - sEC6R0hkRV\tEmail - email:pass\t2FA - url
+    has_login_dash = bool(re.search(r"\blogin\s*-\s*[0-9]{8,20}", text, re.IGNORECASE))
+    has_password_dash = bool(re.search(r"\bpassword\s*-\s*\S+", text, re.IGNORECASE))
+    if has_login_dash or has_password_dash:
+        m = re.search(r"\blogin\s*-\s*([0-9A-Za-z@._\-]{5,})", text, re.IGNORECASE)
+        if m:
+            result["fb_login"] = _sanitize_login(m.group(1).strip())
+        m = re.search(r"\bpassword\s*-\s*(\S+)", text, re.IGNORECASE)
+        if m:
+            result["fb_password"] = m.group(1).strip()
+
+        # Email - email:pass  или  Email - email\nPassword - pass
+        m = re.search(r"\bEmail\s*-\s*([A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,})\s*:\s*(\S+)", text, re.IGNORECASE)
+        if m:
+            result["email"] = _validate_email(m.group(1))
+            result["email_password"] = m.group(2).strip().split(";")[0].strip()
+        else:
+            result["email"] = _validate_email(_extract_email_from_email_block(text))
+            result["email_password"] = _extract_email_password_from_email_block(text)
+
+        result["twofa"] = _validate_2fa(_extract_twofa_value(text))
+        result["geo"] = _extract_geo_value(text_original)
+        result["cookies_json"] = _extract_cookie_json_block(text_original)
+        result["docs_links"] = _extract_docs_links(text_original)
+        result["bm_links"] = _extract_bm_links(text_original)
+        result["cookies_links"] = _extract_cookie_links(text_original)
+        result["user_agent"] = _extract_user_agent(text_original)
+
+        if not result["fb_login"] and result["email"]:
+            result["fb_login"] = result["email"]
+
+        result["fb_login"] = _sanitize_login(result["fb_login"])
+        result["email"] = _validate_email(result["email"])
+        result["twofa"] = _validate_2fa(result["twofa"])
+        if not result["cookies_json"]:
+            result["cookies_json"] = extract_cookie_json_from_raw_king_text(text_original)
+        return result
+
+    # ---------- FORMAT TAB-SEPARATED: Name\temail\tfb_pass\temail\temail_pass\t...\tid (форматы 3, 9) ----------
+    # Детектор: есть табы, есть email, есть числовой id, нет явных меток
+    tab_parts = [x.strip() for x in re.split(r"\t+", text_original) if x.strip()]
+    if len(tab_parts) >= 5:
+        all_emails_in_tabs = [p for p in tab_parts if _validate_email(p)]
+        all_ids_in_tabs = [p for p in tab_parts if re.fullmatch(r"[0-9]{8,20}", p)]
+
+        if all_emails_in_tabs and all_ids_in_tabs:
+            email_idx = next((i for i, p in enumerate(tab_parts) if _validate_email(p)), -1)
+            fb_id = all_ids_in_tabs[0]
+
+            # Определяем email
+            result["email"] = _validate_email(tab_parts[email_idx])
+            result["fb_login"] = fb_id
+
+            # Пароль от FB: токен сразу после email
+            if email_idx + 1 < len(tab_parts):
+                cand = tab_parts[email_idx + 1]
+                if not _validate_email(cand) and not cand.startswith("http") and not re.fullmatch(r"[0-9.]{6,}", cand):
+                    result["fb_password"] = cand
+
+            # Пароль от Email: следующий после дублирования email (или после fb_password)
+            # Ищем email_idx ещё раз (дублирующийся email)
+            dup_email_idx = next((i for i, p in enumerate(tab_parts) if i > email_idx and _validate_email(p) and p.lower() == result["email"].lower()), -1)
+            if dup_email_idx != -1 and dup_email_idx + 1 < len(tab_parts):
+                cand = tab_parts[dup_email_idx + 1]
+                if not _validate_email(cand) and not cand.startswith("http") and not re.fullmatch(r"[0-9.]{6,}", cand):
+                    result["email_password"] = cand
+            elif email_idx + 2 < len(tab_parts) and not result["email_password"]:
+                cand = tab_parts[email_idx + 2]
+                if not _validate_email(cand) and not cand.startswith("http") and not re.fullmatch(r"[0-9]{6,}", cand):
+                    result["email_password"] = cand
+
+            # 2FA: ищем base32-строку в частях (с пробелами или без)
+            # Важно: настоящий base32 содержит только A-Z и 2-7 (uppercase)
+            for p in tab_parts:
+                p_clean = re.sub(r"\s+", "", p)
+                if len(p_clean) >= 16 and re.fullmatch(r"[A-Z2-7]{16,}", p_clean):
+                    result["twofa"] = _validate_2fa(p)
+                    break
+            # Если не нашли среди tab_parts — пробуем _extract_twofa_value
+            if not result["twofa"]:
+                result["twofa"] = _validate_2fa(_extract_twofa_value(text_original))
+
+            result["geo"] = _extract_geo_value(text_original)
             result["cookies_json"] = _extract_cookie_json_block(text_original)
             result["docs_links"] = _extract_docs_links(text_original)
             result["bm_links"] = _extract_bm_links(text_original)
             result["cookies_links"] = _extract_cookie_links(text_original)
-            result["bm_email_pairs"] = _extract_bm_email_pairs(text_original)
             result["user_agent"] = _extract_user_agent(text_original)
 
+            result["fb_login"] = _sanitize_login(result["fb_login"])
+            result["email"] = _validate_email(result["email"])
+            result["twofa"] = _validate_2fa(result["twofa"])
+            if _validate_email(result["fb_password"]):
+                result["fb_password"] = ""
+            if _validate_email(result["email_password"]):
+                result["email_password"] = ""
+            if not result["cookies_json"]:
+                result["cookies_json"] = extract_cookie_json_from_raw_king_text(text_original)
             return result
 
-    # ---------- COMMON EXTRACTION ----------
+    # ---------- FORMAT TAB wPL (формат 1): prefix\tname\tbirthdate\temail\tfb_pass\temail_pass\t2fa_url\tfb_link ----------
+    # Детектор: первая часть выглядит как код (wPL_aug) или просто нет числового id в начале
+    if "\t" in text_original or "    " in text_original:
+        raw_parts = [x.strip() for x in re.split(r"\t+|\s{4,}", text_original) if x.strip()]
+        if len(raw_parts) >= 6:
+            email_indexes = [i for i, p in enumerate(raw_parts) if _validate_email(p)]
+            if email_indexes:
+                ei = email_indexes[0]
+                email_val = raw_parts[ei]
+                result["email"] = _validate_email(email_val)
+                result["fb_login"] = email_val  # в этом формате email = FB Login
+
+                # После email идёт FB Password
+                if ei + 1 < len(raw_parts):
+                    cand = raw_parts[ei + 1]
+                    if not _validate_email(cand) and not cand.startswith("http") and not re.fullmatch(r"[0-9.]{6,}", cand):
+                        result["fb_password"] = cand
+
+                # После FB Password идёт Email Password
+                if ei + 2 < len(raw_parts):
+                    cand = raw_parts[ei + 2]
+                    if not _validate_email(cand) and not cand.startswith("http") and not re.fullmatch(r"[0-9.]{6,}", cand):
+                        result["email_password"] = cand
+
+                # 2FA может быть как ссылка с key= или как base32
+                result["twofa"] = _validate_2fa(_extract_twofa_value(text_original))
+                result["geo"] = _extract_geo_value(text_original)
+                result["cookies_json"] = _extract_cookie_json_block(text_original)
+                result["docs_links"] = _extract_docs_links(text_original)
+                result["bm_links"] = _extract_bm_links(text_original)
+                result["cookies_links"] = _extract_cookie_links(text_original)
+                result["user_agent"] = _extract_user_agent(text_original)
+
+                result["fb_login"] = _sanitize_login(result["fb_login"])
+                result["email"] = _validate_email(result["email"])
+                result["twofa"] = _validate_2fa(result["twofa"])
+                if _validate_email(result["fb_password"]):
+                    result["fb_password"] = ""
+                if _validate_email(result["email_password"]):
+                    result["email_password"] = ""
+                if not result["cookies_json"]:
+                    result["cookies_json"] = extract_cookie_json_from_raw_king_text(text_original)
+                return result
+
+    # ---------- COMMON EXTRACTION (существующая логика — запасной путь) ----------
     result["geo"] = _extract_geo_value(text)
     result["fb_login"] = _sanitize_login(_extract_login_value(text))
     result["fb_password"] = _extract_fb_password_value(text)
@@ -8257,7 +8665,6 @@ def parse_crypto_king_raw_data(raw_text):
     result["cookies_links"] = _extract_cookie_links(text_original)
     result["bm_email_pairs"] = _extract_bm_email_pairs(text_original)
 
-    # ---------- EMAILS ----------
     all_emails = _dedupe_keep_order(_extract_all_emails(text_original))
 
     pair_matches = re.findall(
@@ -8269,9 +8676,7 @@ def parse_crypto_king_raw_data(raw_text):
         pair_list.append(f"{em}:{pw}")
     result["extra_pairs"] = _dedupe_keep_order(pair_list)
 
-    # если явно email не найден, пробуем из списка email'ов
     if not result["email"] and all_emails:
-        # если fb_login уже email, то email берем следующий
         if result["fb_login"] and _validate_email(result["fb_login"]):
             for em in all_emails:
                 if em.lower() != result["fb_login"].lower():
@@ -8280,11 +8685,9 @@ def parse_crypto_king_raw_data(raw_text):
         else:
             result["email"] = all_emails[0]
 
-    # если логин пустой — пробуем первым email
     if not result["fb_login"] and all_emails:
         result["fb_login"] = all_emails[0]
 
-    # если email_password пустой — ищем email:password пары
     if not result["email_password"] and result["email"]:
         for pair in result["extra_pairs"]:
             if ":" not in pair:
@@ -8294,7 +8697,6 @@ def parse_crypto_king_raw_data(raw_text):
                 result["email_password"] = pw.strip()
                 break
 
-    # если service пустой — пробуем второй email
     if not result["service"] and len(all_emails) >= 2:
         for em in all_emails:
             if result["email"] and em.lower() == result["email"].lower():
@@ -8304,7 +8706,6 @@ def parse_crypto_king_raw_data(raw_text):
             result["service"] = em
             break
 
-    # ---------- FALLBACK PASSWORD LOGIC ----------
     if not result["fb_password"]:
         lines = _normalize_crypto_lines(text_original)
         for idx, line in enumerate(lines):
@@ -8317,64 +8718,21 @@ def parse_crypto_king_raw_data(raw_text):
                             result["fb_password"] = candidate
                             break
 
-        # ---------- TAB-SEPARATED SINGLE-LINE FALLBACK ----------
-    # Формат типа:
-    # name<TAB>person<TAB>birthdate<TAB>email<TAB>fb_password<TAB>email_password<TAB>2fa_link<TAB>fb_link<TAB>notes
-    if ("\t" in text_original or "    " in text_original):
-        raw_parts = [x.strip() for x in re.split(r"\t+|\s{4,}", str(text_original)) if x.strip()]
-
-        # если в строке есть хотя бы email и достаточно колонок — пробуем этот формат
-        if len(raw_parts) >= 6:
-            email_indexes = [i for i, part in enumerate(raw_parts) if _validate_email(part)]
-
-            if email_indexes:
-                email_idx = email_indexes[0]
-                email_value = _validate_email(raw_parts[email_idx])
-
-                # если явно не нашли логин/email — в этом формате email = и FB Login, и Email
-                if email_value:
-                    if not result["fb_login"]:
-                        result["fb_login"] = email_value
-                    if not result["email"]:
-                        result["email"] = email_value
-
-                    # следующий токен после email = Email Password
-                    if not result["email_password"] and email_idx + 1 < len(raw_parts):
-                        candidate = str(raw_parts[email_idx + 1]).strip()
-                        if candidate and not _validate_email(candidate) and not _validate_2fa(candidate):
-                            if not candidate.lower().startswith("http"):
-                                result["email_password"] = candidate
-
-                    # следующий после Email Password = FB Password
-                    if not result["fb_password"] and email_idx + 2 < len(raw_parts):
-                        candidate = str(raw_parts[email_idx + 2]).strip()
-                        if candidate and not _validate_email(candidate) and not _validate_2fa(candidate):
-                            if not candidate.lower().startswith("http"):
-                                result["fb_password"] = candidate
-
-        # если в fb_login попала facebook profile ссылка — очищаем
     if result["fb_login"] and "facebook.com/profile.php?id=" in str(result["fb_login"]).lower():
         result["fb_login"] = ""
 
-    # если прямого логина нет, используем email как FB Login
     if not result["fb_login"] and result["email"]:
         result["fb_login"] = result["email"]
 
-    # ---------- FINAL SANITY ----------
     result["fb_login"] = _sanitize_login(result["fb_login"])
     result["email"] = _validate_email(result["email"])
     result["twofa"] = _validate_2fa(result["twofa"])
 
-    # если email случайно попал в fb_password — чистим
     if _validate_email(result["fb_password"]):
         result["fb_password"] = ""
-
-    # если email_password случайно выглядит как email — чистим
     if _validate_email(result["email_password"]):
         result["email_password"] = ""
 
-    # если cookies_json не нашли обычным способом —
-    # пробуем вытащить любой валидный JSON-массив из raw текста
     if not result["cookies_json"]:
         result["cookies_json"] = extract_cookie_json_from_raw_king_text(text_original)
 
@@ -8453,7 +8811,6 @@ def is_octo_rate_limit_error(exc_or_text):
         or "too many requests" in text
         or "rate limit" in text
     )
-
 
 def is_octo_profile_limit_error(exc_or_text):
     text = str(exc_or_text or "").lower()
@@ -10343,6 +10700,11 @@ def start_kings_bulk_proxy_step(chat_id, user_id):
         f"socks5://host:port"
     )
 
+    # Сохраняем state ДО отправки сообщения — защита от race condition
+    # (пользователь может ответить до того как set_state выполнится)
+    state["mode"] = KING_OCTO_MODE_BULK_PROXY
+    set_state_with_custom_ttl(user_id, state, KING_BULK_PROXY_TTL)
+
     sent = tg_send_inline_message(
         chat_id,
         text,
@@ -10354,17 +10716,15 @@ def start_kings_bulk_proxy_step(chat_id, user_id):
         ]]
     )
 
-    state["mode"] = KING_OCTO_MODE_BULK_PROXY
-
     try:
         if isinstance(sent, dict):
             message_id = sent.get("result", {}).get("message_id")
             if message_id:
+                state = get_state(user_id)
                 state["kings_bulk_proxy_message_id"] = message_id
+                set_state_with_custom_ttl(user_id, state, KING_BULK_PROXY_TTL)
     except Exception:
         logging.exception("start_kings_bulk_proxy_step failed to save message_id")
-
-    set_state_with_custom_ttl(user_id, state, KING_BULK_PROXY_TTL)
 
 def confirm_farm_king_octo_issue(chat_id, user_id, username):
     try:
@@ -13630,8 +13990,23 @@ def octo_find_profile_by_title(profile_title, max_pages=10):
     for page in range(0, max_pages):
         url = f"{OCTO_API_BASE}/profiles?page={page}&page_len=100&fields=title"
 
-        resp = requests.get(url, headers=headers, timeout=60)
-        resp.raise_for_status()
+        for attempt in range(5):
+            resp = requests.get(url, headers=headers, timeout=60)
+            if resp.status_code == 429:
+                wait = 2 ** attempt
+                logging.warning(
+                    f"OCTO 429 rate limit (page={page}, attempt={attempt}), ждём {wait}s"
+                )
+                time.sleep(wait)
+                continue
+
+            resp.raise_for_status()
+            break
+        else:
+            resp.raise_for_status()
+
+        if page > 0:
+            time.sleep(0.3)
 
         data = resp.json()
         items = octo_extract_profile_items(data)
@@ -13663,8 +14038,21 @@ def octo_find_profile_by_title_deep(profile_title, max_pages=80, sleep_between=0
 
     for page in range(0, max_pages):
         url = f"{OCTO_API_BASE}/profiles?page={page}&page_len=100&fields=title"
-        resp = requests.get(url, headers=headers, timeout=60)
-        resp.raise_for_status()
+
+        for attempt in range(5):
+            resp = requests.get(url, headers=headers, timeout=60)
+            if resp.status_code == 429:
+                wait = 2 ** attempt
+                logging.warning(
+                    f"OCTO 429 rate limit (deep page={page}, attempt={attempt}), ждём {wait}s"
+                )
+                time.sleep(wait)
+                continue
+
+            resp.raise_for_status()
+            break
+        else:
+            resp.raise_for_status()
 
         data = resp.json()
         items = octo_extract_profile_items(data)
@@ -13732,8 +14120,18 @@ def octo_debug_list_profiles():
     }
 
     url = f"{OCTO_API_BASE}/profiles?page=0&page_len=100&fields=title"
-    resp = requests.get(url, headers=headers, timeout=60)
-    resp.raise_for_status()
+
+    for attempt in range(5):
+        resp = requests.get(url, headers=headers, timeout=60)
+        if resp.status_code == 429:
+            wait = 2 ** attempt
+            logging.warning(f"OCTO 429 rate limit (debug_list, attempt={attempt}), ждём {wait}s")
+            time.sleep(wait)
+            continue
+        resp.raise_for_status()
+        break
+    else:
+        resp.raise_for_status()
 
     data = resp.json()
 
@@ -13952,14 +14350,15 @@ def ensure_octo_profile_for_farm_king(profile_name, parsed, proxy_data=None):
     try:
         existing = octo_find_profile_by_title(profile_name)
         if existing:
-            try:
-                octo_update_profile_tags_by_title(profile_name, [OCTO_TAG_FARMERS])
-            except Exception:
-                logging.exception("ensure_octo_profile_for_farm_king tag update failed for existing profile")
+            profile_uuid = extract_octo_profile_uuid_from_result(existing)
+            if profile_uuid:
+                try:
+                    # Используем uuid — не делаем повторный поиск по всем страницам
+                    octo_update_profile_tags_by_uuid(profile_uuid, [OCTO_TAG_FARMERS])
+                except Exception:
+                    logging.exception("ensure_octo_profile_for_farm_king tag update failed for existing profile")
 
-            try:
-                profile_uuid = extract_octo_profile_uuid_from_result(existing)
-                if profile_uuid:
+                try:
                     octo_update_profile_extensions_by_uuid(
                         profile_uuid,
                         OCTO_FARM_EXTENSIONS
@@ -13980,8 +14379,8 @@ def ensure_octo_profile_for_farm_king(profile_name, parsed, proxy_data=None):
                             },
                             timeout=30
                         )
-            except Exception:
-                logging.exception("farm king setup failed for existing profile")
+                except Exception:
+                    logging.exception("farm king setup failed for existing profile")
 
             return True, existing
 
@@ -13994,13 +14393,11 @@ def ensure_octo_profile_for_farm_king(profile_name, parsed, proxy_data=None):
         result = octo_create_profile(payload)
 
         try:
-            octo_update_profile_tags_by_title(profile_name, [OCTO_TAG_FARMERS])
-        except Exception:
-            logging.exception("ensure_octo_profile_for_farm_king tag update failed after create")
-
-        try:
             profile_uuid = extract_octo_profile_uuid_from_result(result)
             if profile_uuid:
+                # Используем uuid сразу — не делаем повторный поиск по всем страницам
+                octo_update_profile_tags_by_uuid(profile_uuid, [OCTO_TAG_FARMERS])
+
                 octo_update_profile_extensions_by_uuid(
                     profile_uuid,
                     OCTO_FARM_EXTENSIONS
@@ -15228,6 +15625,13 @@ def handle_message(msg):
                 tg_send_message(chat_id, "У вас нет доступа к разделу Farmers.")
                 return
 
+            # Если был активным в очереди farm kings — освобождаем
+            with farm_kings_queue_lock:
+                was_active = farm_kings_queue_active.get(user_id, False)
+            if was_active:
+                fkq_leave(user_id)
+                release_farm_king_rows(user_id)
+
             clear_state(user_id)
             send_farmers_menu(chat_id)
             return
@@ -16000,10 +16404,25 @@ def handle_message(msg):
 
         if text == FARM_SUBMENU_GET_KINGS:
             clear_state(user_id)
-            set_state(user_id, {
-                "mode": FARM_KING_OCTO_MODE_COUNT
-            })
-            send_text_input_prompt(chat_id, "Сколько farm king нужно?")
+            uname = username or ""
+            can_go, position = fkq_try_enter(user_id, chat_id, uname)
+
+            if can_go:
+                set_state(user_id, {"mode": FARM_KING_OCTO_MODE_COUNT})
+                send_text_input_prompt(chat_id, "Сколько farm king нужно?")
+            else:
+                active_list, waiting_list = fkq_queue_status()
+                active_name = f"@{active_list[0]}" if active_list else "кто-то"
+                tg_send_inline_message(
+                    chat_id,
+                    f"⏳ Сейчас берёт {active_name}.\n\n"
+                    f"Ты в очереди #{position} — уведомлю когда освободится.\n"
+                    f"Ожидающих: {len(waiting_list)}",
+                    [[{
+                        "text": "❌ Выйти из очереди",
+                        "callback_data": f"fkq_cancel:{user_id}"
+                    }]]
+                )
             return
 
         if text == FARM_SUBMENU_RETURN_KING:
@@ -17060,6 +17479,199 @@ def handle_message(msg):
                 proxy_text=text
             )
             return
+
+        if state.get("mode") == KING_OCTO_MODE_SINGLE_PROXY:
+            try:
+                proxy_raw = text.strip()
+
+                if proxy_raw == "__SKIP_PROXY_KING_SINGLE__":
+                    proxy_data = None
+                else:
+                    proxy_data = parse_proxy_input(proxy_raw)
+                    if not proxy_data:
+                        send_text_input_prompt(
+                            chat_id,
+                            "Неверный формат proxy.\n\nИспользуй:\nsocks5://login:password@host:port"
+                        )
+                        return
+
+                king_row = state.get("king_row")
+                king_name = str(state.get("king_name", "")).strip()
+                king_for_whom = str(state.get("king_for_whom", "")).strip()
+                parsed_king = state.get("parsed_king", {}) or {}
+                geo_value = str(state.get("king_geo_value", "")).strip()
+                data_text = str(state.get("king_data_text", "")).strip()
+                sync_id = state.get("king_sync_id")
+                today = str(state.get("king_today", "")).strip()
+                who_took_text = str(state.get("king_who_took_text", "")).strip()
+
+                if not king_row or not king_name or not king_for_whom:
+                    clear_state(user_id)
+                    send_kings_menu(chat_id, "Потеряны данные king. Начни заново.")
+                    return
+
+                row = get_sheet_row_live(SHEET_KINGS, king_row, 13)
+
+                if not row or not any(str(x).strip() for x in row):
+                    clear_state(user_id)
+                    send_kings_menu(chat_id, "King не найден в таблице. Начни заново.")
+                    return
+
+                status = str(row[4]).strip().lower()
+
+                if status == "taken":
+                    clear_state(user_id)
+                    send_kings_menu(chat_id, "Этот king уже занят.")
+                    return
+
+                if status == "ban":
+                    clear_state(user_id)
+                    send_kings_menu(chat_id, "Этот king уже в ban.")
+                    return
+
+                if status != "free":
+                    clear_state(user_id)
+                    send_kings_menu(chat_id, "Этот king недоступен.")
+                    return
+
+                octo_ok = False
+                octo_msg = ""
+                octo_result = None
+                profile_uuid = ""
+
+                cookies_ok = False
+                cookies_msg = ""
+                cookies_payload = None
+
+                try:
+                    octo_ok, octo_result = ensure_octo_profile_with_retry(
+                        ensure_func=ensure_octo_profile_for_crypto_king,
+                        profile_name=king_name,
+                        parsed=parsed_king,
+                        proxy_data=proxy_data
+                    )
+                    octo_msg = str(octo_result)
+                except Exception as octo_error:
+                    logging.exception("KING_SINGLE_PROXY: Octo create crashed")
+                    octo_msg = str(octo_error)
+
+                if not octo_ok:
+                    tg_send_long_message(
+                        chat_id,
+                        f"❌ Не удалось создать Octo профиль\n{octo_msg or 'неизвестная ошибка'}"
+                    )
+                    return
+
+                try:
+                    profile_uuid = extract_octo_profile_uuid_from_result(octo_result)
+                    cookies_payload = normalize_crypto_cookies_for_import(
+                        parsed_king.get("cookies_json", "")
+                    )
+                    if cookies_payload and profile_uuid:
+                        cookies_ok, cookies_msg = try_import_crypto_king_cookies(
+                            profile_uuid=profile_uuid,
+                            cookies_payload=cookies_payload
+                        )
+                    else:
+                        cookies_msg = "cookies не найдены или profile_uuid пустой"
+                except Exception as cookies_error:
+                    logging.exception("KING_SINGLE_PROXY: cookies import crashed")
+                    cookies_msg = str(cookies_error)
+
+                sheet_update_raw(
+                    SHEET_KINGS,
+                    f"A{king_row}:I{king_row}",
+                    [[
+                        king_name,
+                        row[1],
+                        row[2],
+                        row[3],
+                        "taken",
+                        king_for_whom,
+                        today,
+                        geo_value,
+                        who_took_text
+                    ]]
+                )
+                mark_sheet_cache_stale(SHEET_KINGS)
+
+                if sync_id:
+                    sync_status_to_basebot(BASEBOT_SHEET_KINGS, sync_id, "taken")
+
+                append_king_to_issues_sheet(
+                    king_name=king_name,
+                    purchase_date=row[1],
+                    price=row[2],
+                    transfer_date=today,
+                    supplier=row[3],
+                    for_whom=king_for_whom
+                )
+
+                invalidate_stats_cache()
+
+                preview_message_id = state.get("king_preview_message_id")
+
+                set_state(user_id, {
+                    "mode": "king_octo_issued",
+                    "last_king_name": king_name,
+                    "last_king_data_text": data_text,
+                    "king_preview_message_id": preview_message_id,
+                })
+
+                if preview_message_id:
+                    mark_king_octo_preview_as_issued(
+                        chat_id=chat_id,
+                        message_id=preview_message_id,
+                        king_name=king_name,
+                        king_for_whom=king_for_whom,
+                        price=row[2],
+                        geo_value=parsed_king.get("geo", geo_value)
+                    )
+
+                download_token = save_king_download_bundle(
+                    owner_user_id=user_id,
+                    bundle_kind="king_single",
+                    items=[{
+                        "king_name": king_name,
+                        "data_text": data_text,
+                    }]
+                )
+
+                tg_send_inline_message(
+                    chat_id,
+                    f"✅ King заведен в Octo\n\n"
+                    f"✏️Название: {king_name}\n"
+                    f"👨‍💻Для кого: {king_for_whom}\n"
+                    f"💵Цена: {row[2]}\n"
+                    f"🌐Гео: {parsed_king.get('geo', geo_value)}",
+                    [[{
+                        "text": "📄 Скачать txt",
+                        "callback_data": f"dkst:{download_token}" if download_token else f"download_king_txt:{user_id}"
+                    }]]
+                )
+
+                cookies_json = str(parsed_king.get("cookies_json", "")).strip()
+
+                if cookies_json:
+                    if cookies_ok:
+                        tg_send_message(
+                            chat_id,
+                            "Куки вставлены✅\n\n"
+                            "После сохранения Куки открыв профиль на редактирование — куки не отображаются. И это нормально"
+                        )
+                    else:
+                        tg_send_long_message(
+                            chat_id,
+                            f"Куки не вставлены❌\n\n"
+                            f"Ошибка Octo:\n{cookies_msg or 'пустая ошибка'}"
+                        )
+
+                return
+
+            except Exception:
+                logging.exception("KING_SINGLE_PROXY crashed")
+                tg_send_message(chat_id, "Ошибка выдачи king. Попробуй ещё раз.")
+                send_kings_menu(chat_id, "Меню кингов:")
 
         if state.get("mode") == KING_OCTO_MODE_BULK_PROXY:
             process_kings_bulk_proxy_step(
@@ -19654,6 +20266,20 @@ def handle_callback_query(callback_query):
 
             state = get_state(user_id)
 
+            # === РЕЗЕРВИРОВАНИЕ: сразу занять все строки за этим пользователем ===
+            queue = state.get("farm_kings_bulk_queue", [])
+            row_indices = [item["row_index"] for item in queue if item.get("row_index")]
+            if row_indices and not reserve_farm_king_rows(user_id, row_indices):
+                tg_send_message(
+                    chat_id,
+                    "⚠️ Часть farm king уже была взята другим пользователем.\n"
+                    "Пожалуйста, начни выдачу заново."
+                )
+                clear_state(user_id)
+                send_farm_kings_menu(chat_id, "Меню Farm King:")
+                return jsonify({"ok": True})
+            # ====================================================================
+
             if message_id:
                 state["farm_kings_bulk_confirm_message_id"] = message_id
                 set_state_with_custom_ttl(user_id, state, FARM_KING_BULK_PROXY_TTL)
@@ -19676,6 +20302,8 @@ def handle_callback_query(callback_query):
                 return
 
             tg_answer_callback_query(callback_id, "Выдача отменена")
+            release_farm_king_rows(user_id)  # Снять резерв
+            fkq_leave(user_id)               # Освободить место в очереди
             clear_state(user_id)
 
             if message_id:
@@ -19683,6 +20311,61 @@ def handle_callback_query(callback_query):
                     chat_id,
                     message_id,
                     "❌ Выдача farm king отменена",
+                    inline_buttons=[]
+                )
+
+            send_farm_kings_menu(chat_id, "Меню Farm King:")
+            return jsonify({"ok": True})
+
+        if data.startswith("king_skip_proxy:"):
+            target_user_id = data.split(":", 1)[1]
+
+            if str(user_id) != str(target_user_id):
+                tg_answer_callback_query(callback_id, "Это не ваша кнопка")
+                return
+
+            tg_answer_callback_query(callback_id, "Прокси пропущены")
+
+            if message_id:
+                tg_edit_message_text(
+                    chat_id,
+                    message_id,
+                    "✅ Прокси пропущены",
+                    inline_buttons=[]
+                )
+
+            handle_message({
+                "chat": {"id": chat_id},
+                "from": {"id": user_id, "username": callback_query["from"].get("username", "")},
+                "text": "__SKIP_PROXY_KING_SINGLE__"
+            })
+            return jsonify({"ok": True})
+
+        if data.startswith("fkq_cancel:"):
+            target_user_id = int(data.split(":", 1)[1])
+
+            if user_id != target_user_id:
+                tg_answer_callback_query(callback_id, "Это не ваша кнопка")
+                return
+
+            tg_answer_callback_query(callback_id, "Вышел из очереди")
+
+            # Если был активным — освобождаем слот и передаём следующему
+            with farm_kings_queue_lock:
+                was_active = farm_kings_queue_active.get(user_id, False)
+
+            if was_active:
+                fkq_leave(user_id)
+                release_farm_king_rows(user_id)
+                clear_state(user_id)
+            else:
+                fkq_cancel_waiting(user_id)
+
+            if message_id:
+                tg_edit_message_text(
+                    chat_id,
+                    message_id,
+                    "❌ Ты вышел из очереди",
                     inline_buttons=[]
                 )
 
