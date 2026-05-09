@@ -48,7 +48,6 @@ OCTO_CRYPTO_EXTENSIONS = [
     "nmnnilimjhkbdmnpojpbihmnphkneckf@1.0.9",     # SMIT Connect
     "naciaagbkifhpnoodlkhbejjldaiffcm@1.6.9",     # Get Token Cookie
     "lopekoolgoijpmaidblgfgelbkfkgmod@0.6.0",     # Pass key
-    "hikeheopipicfonmagblhkcfdhpojpia@1.0",       # BM-verif remover
 ]
 
 OCTO_FARM_EXTENSIONS = [
@@ -60,7 +59,6 @@ OCTO_FARM_EXTENSIONS = [
     "nmnnilimjhkbdmnpojpbihmnphkneckf@1.0.9",     # SMIT Connect
     "naciaagbkifhpnoodlkhbejjldaiffcm@1.6.9",     # Get Token Cookie
     "lopekoolgoijpmaidblgfgelbkfkgmod@0.6.0",     # Pass key
-    "hikeheopipicfonmagblhkcfdhpojpia@1.0",       # BM-verif remover
 ]
 
 if not BOT_TOKEN:
@@ -8978,22 +8976,24 @@ def get_manager_stats_period():
     return start_date, end_date
 
 
-def get_manager_stats_counts(username, start_date=None, end_date=None):
+def get_manager_stats_counts(username):
+    start_date, end_date = get_manager_stats_period()
+
     if not username:
         return {
-            "kings": 0,
+            "username": "",
+            "start_date": start_date,
+            "end_date": end_date,
             "accounts": 0,
+            "kings": 0,
             "bms": 0,
             "fps": 0,
             "pixels": 0,
             "total": 0,
         }
 
-    username = username.strip().lstrip("@").lower()
+    username = str(username).strip().lstrip("@").lower()
     target_username = f"@{username}"
-
-    if start_date is None or end_date is None:
-        start_date, end_date = get_manager_stats_period()
 
     accounts_count = 0
     kings_count = 0
@@ -9061,26 +9061,27 @@ def get_manager_stats_counts(username, start_date=None, end_date=None):
         if transfer_date and start_date <= transfer_date < end_date:
             pixels_count += 1
 
-    total = kings_count + accounts_count + bms_count + fps_count + pixels_count
-
     return {
-        "kings": kings_count,
+        "username": target_username,
+        "start_date": start_date,
+        "end_date": end_date,
         "accounts": accounts_count,
+        "kings": kings_count,
         "bms": bms_count,
         "fps": fps_count,
         "pixels": pixels_count,
-        "total": total,
+        "total": accounts_count + kings_count + bms_count + fps_count + pixels_count,
     }
 
 
-def get_stats_period_display_label():
-    now = datetime.now(MOSCOW_TZ)
-    return "в прошлом месяце" if now.day < 10 else "в этом месяце"
+def get_farmer_stats_counts(username):
+    start_date, end_date = get_manager_stats_period()
 
-
-def get_farmer_stats_counts(username, start_date=None, end_date=None):
     if not username:
         return {
+            "username": "",
+            "start_date": start_date,
+            "end_date": end_date,
             "farm_kings": 0,
             "farm_bms": 0,
             "farm_fps": 0,
@@ -9089,9 +9090,6 @@ def get_farmer_stats_counts(username, start_date=None, end_date=None):
 
     username = str(username).strip().lstrip("@").lower()
     target_username = f"@{username}"
-
-    if start_date is None or end_date is None:
-        start_date, end_date = get_manager_stats_period()
 
     farm_kings_count = 0
     farm_bms_count = 0
@@ -9127,129 +9125,77 @@ def get_farmer_stats_counts(username, start_date=None, end_date=None):
         if transfer_date and start_date <= transfer_date < end_date:
             farm_fps_count += 1
 
-    total = farm_kings_count + farm_bms_count + farm_fps_count
-
     return {
+        "username": target_username,
+        "start_date": start_date,
+        "end_date": end_date,
         "farm_kings": farm_kings_count,
         "farm_bms": farm_bms_count,
         "farm_fps": farm_fps_count,
-        "total": total,
+        "total": farm_kings_count + farm_bms_count + farm_fps_count,
     }
 
 
-def build_best_accounts_stats_text():
-    start_date, end_date = get_manager_stats_period()
-    best_username = ""
-    best_counts = None
-    best_rank = None
+def build_best_accounts_leader_text():
+    if not ACCOUNTS_USERS:
+        return ""
+
+    best_stats = None
 
     for _, username in ACCOUNTS_USERS.items():
-        counts = get_manager_stats_counts(username, start_date, end_date)
-        uname = f"@{str(username).strip().lstrip('@').lower()}"
-        rank = (
-            counts["total"],
-            counts["kings"],
-            counts["accounts"],
-            counts["bms"],
-            counts["fps"],
-            counts["pixels"],
-            -len(uname),
-            uname,
-        )
+        stats = get_manager_stats_counts(username)
+        if best_stats is None or stats["total"] > best_stats["total"]:
+            best_stats = stats
 
-        if best_rank is None or rank > best_rank:
-            best_rank = rank
-            best_username = uname
-            best_counts = counts
+    if not best_stats:
+        return ""
 
-    lines = [
-        f"👑Лучший аккаунтер {get_stats_period_display_label()}👑",
-        f"Период: {start_date.strftime('%d/%m/%Y')} - {end_date.strftime('%d/%m/%Y')}",
-        "",
-    ]
+    if best_stats["total"] <= 0:
+        return "👑Лучший аккаунтер по этой статистике👑\nНет выдач за период."
 
-    if best_counts is None or best_counts["total"] <= 0:
-        lines.append("Нет выдач за этот период.")
-        return chr(10).join(lines)
-
-    lines.extend([
-        best_username,
-        "",
-        f"Всего выдач: {best_counts['total']}",
-        f"Кинги: {best_counts['kings']}",
-        f"Лички: {best_counts['accounts']}",
-        f"БМы: {best_counts['bms']}",
-        f"ФП: {best_counts['fps']}",
-        f"Пиксели: {best_counts['pixels']}",
-    ])
-    return chr(10).join(lines)
+    return (
+        "👑Лучший аккаунтер по этой статистике👑\n"
+        f"{best_stats['username']}"
+    )
 
 
-def build_best_farmers_stats_text():
-    start_date, end_date = get_manager_stats_period()
-    best_username = ""
-    best_counts = None
-    best_rank = None
+def build_best_farmers_leader_text():
+    if not FARMERS_USERS:
+        return ""
+
+    best_stats = None
 
     for _, username in FARMERS_USERS.items():
-        counts = get_farmer_stats_counts(username, start_date, end_date)
-        uname = f"@{str(username).strip().lstrip('@').lower()}"
-        rank = (
-            counts["total"],
-            counts["farm_kings"],
-            counts["farm_bms"],
-            counts["farm_fps"],
-            -len(uname),
-            uname,
-        )
+        stats = get_farmer_stats_counts(username)
+        if best_stats is None or stats["total"] > best_stats["total"]:
+            best_stats = stats
 
-        if best_rank is None or rank > best_rank:
-            best_rank = rank
-            best_username = uname
-            best_counts = counts
+    if not best_stats:
+        return ""
 
-    lines = [
-        f"👑Лучший фармер {get_stats_period_display_label()}👑",
-        f"Период: {start_date.strftime('%d/%m/%Y')} - {end_date.strftime('%d/%m/%Y')}",
-        "",
-    ]
+    if best_stats["total"] <= 0:
+        return "👑Лучший фармер по этой статистике👑\nНет выдач за период."
 
-    if best_counts is None or best_counts["total"] <= 0:
-        lines.append("Нет выдач за этот период.")
-        return chr(10).join(lines)
-
-    lines.extend([
-        best_username,
-        "",
-        f"Всего выдач: {best_counts['total']}",
-        f"Farm kings: {best_counts['farm_kings']}",
-        f"Farm BM: {best_counts['farm_bms']}",
-        f"Farm FP: {best_counts['farm_fps']}",
-    ])
-    return chr(10).join(lines)
-
+    return (
+        "👑Лучший фармер по этой статистике👑\n"
+        f"{best_stats['username']}"
+    )
 
 def build_manager_stats_summary_text(username):
     if not username:
         return "Не указан username."
 
-    username = username.strip().lstrip("@").lower()
-    target_username = f"@{username}"
+    stats = get_manager_stats_counts(username)
 
-    start_date, end_date = get_manager_stats_period()
-    counts = get_manager_stats_counts(username, start_date, end_date)
-
-    return chr(10).join([
-        f"Статистика accounts {target_username}",
-        f"Период: {start_date.strftime('%d/%m/%Y')} - {end_date.strftime('%d/%m/%Y')}",
-        "",
-        f"Кинги: {counts['kings']}",
-        f"Лички: {counts['accounts']}",
-        f"БМы: {counts['bms']}",
-        f"ФП: {counts['fps']}",
-        f"Пиксели: {counts['pixels']}",
-    ])
-
+    return (
+        f"Статистика accounts {stats['username']}\n"
+        f"Период: {stats['start_date'].strftime('%d/%m/%Y')} - {stats['end_date'].strftime('%d/%m/%Y')}\n\n"
+        f"Кинги: {stats['kings']}\n"
+        f"Лички: {stats['accounts']}\n"
+        f"БМы: {stats['bms']}\n"
+        f"ФП: {stats['fps']}\n"
+        f"Пиксели: {stats['pixels']}"
+    )
 
 def build_manager_stats_text(username):
     if not username:
@@ -9376,21 +9322,15 @@ def build_farmer_stats_summary_text(username):
     if not username:
         return "Не указан username."
 
-    username = username.strip().lstrip("@").lower()
-    target_username = f"@{username}"
+    stats = get_farmer_stats_counts(username)
 
-    start_date, end_date = get_manager_stats_period()
-    counts = get_farmer_stats_counts(username, start_date, end_date)
-
-    return chr(10).join([
-        f"Статистика farmer {target_username}",
-        f"Период: {start_date.strftime('%d/%m/%Y')} - {end_date.strftime('%d/%m/%Y')}",
-        "",
-        f"Farm kings: {counts['farm_kings']}",
-        f"Farm BM: {counts['farm_bms']}",
-        f"Farm FP: {counts['farm_fps']}",
-    ])
-
+    return (
+        f"Статистика farmer {stats['username']}\n"
+        f"Период: {stats['start_date'].strftime('%d/%m/%Y')} - {stats['end_date'].strftime('%d/%m/%Y')}\n\n"
+        f"Farm kings: {stats['farm_kings']}\n"
+        f"Farm BM: {stats['farm_bms']}\n"
+        f"Farm FP: {stats['farm_fps']}"
+    )
 
 def build_farmer_stats_text(username):
     if not username:
@@ -15039,7 +14979,9 @@ def build_all_users_stats_messages():
 
     if ACCOUNTS_USERS:
         messages.append("=== ACCOUNTS ===")
-        messages.append(build_best_accounts_stats_text())
+        best_accounts_text = build_best_accounts_leader_text()
+        if best_accounts_text:
+            messages.append(best_accounts_text)
         for user_id, username in ACCOUNTS_USERS.items():
             messages.append(build_manager_stats_text(username))
     else:
@@ -15048,7 +14990,9 @@ def build_all_users_stats_messages():
 
     if FARMERS_USERS:
         messages.append("=== FARMERS ===")
-        messages.append(build_best_farmers_stats_text())
+        best_farmers_text = build_best_farmers_leader_text()
+        if best_farmers_text:
+            messages.append(best_farmers_text)
         for user_id, username in FARMERS_USERS.items():
             messages.append(build_farmer_stats_text(username))
     else:
@@ -15057,13 +15001,14 @@ def build_all_users_stats_messages():
 
     return messages
 
-
 def send_all_users_stats(chat_id):
     tg_send_message(chat_id, "Статистика всех")
 
     if ACCOUNTS_USERS:
         tg_send_message(chat_id, "=== ACCOUNTS ===")
-        tg_send_message(chat_id, build_best_accounts_stats_text())
+        best_accounts_text = build_best_accounts_leader_text()
+        if best_accounts_text:
+            tg_send_message(chat_id, best_accounts_text)
         for user_id, username in ACCOUNTS_USERS.items():
             summary_text = build_manager_stats_summary_text(username)
 
@@ -15078,7 +15023,9 @@ def send_all_users_stats(chat_id):
 
     if FARMERS_USERS:
         tg_send_message(chat_id, "=== FARMERS ===")
-        tg_send_message(chat_id, build_best_farmers_stats_text())
+        best_farmers_text = build_best_farmers_leader_text()
+        if best_farmers_text:
+            tg_send_message(chat_id, best_farmers_text)
         for user_id, username in FARMERS_USERS.items():
             summary_text = build_farmer_stats_summary_text(username)
 
@@ -15090,7 +15037,7 @@ def send_all_users_stats(chat_id):
                     "callback_data": f"fullstats_farmers:{username}"
                 }]]
             )
-
+            
 # =========================
 # MESSAGE HANDLER
 # =========================            
