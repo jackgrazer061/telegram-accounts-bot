@@ -579,6 +579,10 @@ next_message_id = 1
 last_user_action = {}
 ACTION_COOLDOWN = 0.2
 
+king_search_edit_sessions = {}
+king_search_edit_lock = threading.Lock()
+KING_SEARCH_EDIT_TTL = 60 * 60 * 24
+
 STATE_TTL = 600  # обычный ttl
 
 CRYPTO_BULK_PROXY_TTL = 60 * 60 * 6  # 6 часов
@@ -2881,7 +2885,7 @@ def tg_download_photo_content(photo_list):
 
     return tg_download_file_content(file_id)
 
-def tg_send_document_bytes(chat_id, filename, content_bytes, caption=None):
+def tg_send_document_bytes(chat_id, filename, content_bytes, caption=None, inline_buttons=None):
     try:
         data = {
             "chat_id": str(chat_id)
@@ -2889,6 +2893,12 @@ def tg_send_document_bytes(chat_id, filename, content_bytes, caption=None):
 
         if caption:
             data["caption"] = str(caption)
+
+        if inline_buttons is not None:
+            data["reply_markup"] = json.dumps(
+                {"inline_keyboard": inline_buttons},
+                ensure_ascii=False
+            )
 
         files = {
             "document": (filename, content_bytes, "text/plain")
@@ -2903,9 +2913,23 @@ def tg_send_document_bytes(chat_id, filename, content_bytes, caption=None):
 
         if resp.status_code != 200:
             logging.warning(f"Telegram sendDocument failed: {resp.status_code} {resp.text}")
+            return None
+
+        try:
+            result = resp.json()
+        except Exception:
+            logging.warning("Telegram sendDocument returned non-JSON response")
+            return None
+
+        if not result.get("ok"):
+            logging.warning(f"Telegram sendDocument api error: {result}")
+            return None
+
+        return result
 
     except Exception as e:
         logging.error(f"tg_send_document_bytes error: {e}")
+        return None
 
 def make_safe_txt_filename(name, default_name="king"):
     raw = str(name or "").strip()
@@ -3395,22 +3419,23 @@ def finish_crypto_kings_bulk(chat_id, user_id):
 
     send_kings_menu(chat_id, "Выбери следующее действие:")
 
-def tg_send_king_data_as_txt(chat_id, king_name, data_text, caption=None):
+def tg_send_king_data_as_txt(chat_id, king_name, data_text, caption=None, inline_buttons=None):
     text = str(data_text or "").strip()
 
     if not text:
         tg_send_message(chat_id, "Данные кинга не найдены.")
-        return
+        return None
 
     filename = make_safe_txt_filename(king_name or "king", default_name="king")
-    tg_send_document_bytes(
+    return tg_send_document_bytes(
         chat_id=chat_id,
         filename=filename,
         content_bytes=text.encode("utf-8"),
-        caption=caption
+        caption=caption,
+        inline_buttons=inline_buttons
     )
 
-def tg_send_king_search_result_as_txt(chat_id, title, king_name, meta_text, data_text):
+def tg_send_king_search_result_as_txt(chat_id, title, king_name, meta_text, data_text, inline_buttons=None):
     meta_text = str(meta_text or "").strip()
     data_text = str(data_text or "").strip()
 
@@ -3418,10 +3443,295 @@ def tg_send_king_search_result_as_txt(chat_id, title, king_name, meta_text, data
     if data_text:
         full_text += f"\n\nДанные:\n{data_text}"
 
-    tg_send_king_data_as_txt(
+    return tg_send_king_data_as_txt(
         chat_id=chat_id,
         king_name=king_name or title or "king_search",
-        data_text=full_text
+        data_text=full_text,
+        inline_buttons=inline_buttons
+    )
+
+def cleanup_king_search_edit_sessions():
+    now = time.time()
+
+    with king_search_edit_lock:
+        expired_tokens = []
+
+        for token, payload in king_search_edit_sessions.items():
+            created_at = float(payload.get("created_at", 0) or 0)
+            updated_at = float(payload.get("updated_at", 0) or 0)
+            last_ts = max(created_at, updated_at)
+
+            if not last_ts or now - last_ts > KING_SEARCH_EDIT_TTL:
+                expired_tokens.append(token)
+
+        for token in expired_tokens:
+            king_search_edit_sessions.pop(token, None)
+
+
+def create_king_search_edit_session(user_id, result):
+    cleanup_king_search_edit_sessions()
+
+    token = uuid.uuid4().hex[:12]
+    payload = {
+        "user_id": int(user_id),
+        "sheet_name": str(result.get("sheet_name", "")).strip(),
+        "row_index": int(result.get("row_index", 0) or 0),
+        "king_name": str(result.get("king_name", "")).strip(),
+        "status": str(result.get("status", "")).strip(),
+        "for_whom": str(result.get("for_whom", "")).strip(),
+        "created_at": time.time(),
+        "updated_at": time.time(),
+    }
+
+    with king_search_edit_lock:
+        king_search_edit_sessions[token] = payload
+
+    return token
+
+
+def get_king_search_edit_session(token):
+    cleanup_king_search_edit_sessions()
+
+    with king_search_edit_lock:
+        payload = king_search_edit_sessions.get(str(token))
+        if not payload:
+            return None
+        return dict(payload)
+
+
+def update_king_search_edit_session(token, **kwargs):
+    with king_search_edit_lock:
+        payload = king_search_edit_sessions.get(str(token))
+        if not payload:
+            return False
+
+        payload.update(kwargs)
+        payload["updated_at"] = time.time()
+        king_search_edit_sessions[str(token)] = payload
+        return True
+
+
+def build_king_search_entry_inline_buttons(token):
+    return [[{
+        "text": "Изменить данные",
+        "callback_data": f"edit_king_data:{token}"
+    }]]
+
+
+def build_king_search_edit_inline_buttons(token):
+    return [
+        [{
+            "text": "Поменять название",
+            "callback_data": f"edit_king_rename:{token}"
+        }],
+        [{
+            "text": "Поменять байера",
+            "callback_data": f"edit_king_buyer:{token}"
+        }]
+    ]
+
+
+def build_king_search_buyer_department_inline_buttons(token):
+    return [
+        [
+            {
+                "text": DEPT_CRYPTO,
+                "callback_data": f"edit_king_buyer_dept:{token}:crypto"
+            },
+            {
+                "text": DEPT_GAMBLA,
+                "callback_data": f"edit_king_buyer_dept:{token}:gambla"
+            }
+        ],
+        [{
+            "text": "⬅️ Назад",
+            "callback_data": f"edit_king_data:{token}"
+        }]
+    ]
+
+
+def build_king_search_buyer_person_inline_buttons(token, department_key):
+    if department_key == "crypto":
+        names = CRYPTO_NAMES
+    elif department_key == "gambla":
+        names = GAMBLA_NAMES
+    else:
+        return build_king_search_buyer_department_inline_buttons(token)
+
+    keyboard = []
+    row = []
+
+    for idx, name in enumerate(names):
+        row.append({
+            "text": str(name),
+            "callback_data": f"edit_king_buyer_person:{token}:{department_key}:{idx}"
+        })
+
+        if len(row) == 2:
+            keyboard.append(row)
+            row = []
+
+    if row:
+        keyboard.append(row)
+
+    keyboard.append([{
+        "text": "⬅️ Назад",
+        "callback_data": f"edit_king_buyer:{token}"
+    }])
+
+    return keyboard
+
+
+def find_king_name_conflict_across_bases(king_name, ignore_sheet_name=None, ignore_row_index=None):
+    target = str(king_name or "").strip().lower()
+    if not target:
+        return None
+
+    for sheet_name in [SHEET_KINGS, SHEET_CRYPTO_KINGS]:
+        rows = get_sheet_rows_cached(sheet_name)
+
+        for idx, row in enumerate(rows[1:], start=2):
+            existing_name = str((row[0] if row else "") or "").strip().lower()
+            if existing_name != target:
+                continue
+
+            if sheet_name == ignore_sheet_name and int(idx) == int(ignore_row_index or 0):
+                continue
+
+            return {
+                "sheet_name": sheet_name,
+                "row_index": idx
+            }
+
+    return None
+
+
+def rename_searched_king(session_token, new_name):
+    session = get_king_search_edit_session(session_token)
+    if not session:
+        return False, "Кнопка устарела. Найди кинга заново."
+
+    sheet_name = str(session.get("sheet_name", "")).strip()
+    row_index = int(session.get("row_index", 0) or 0)
+    old_name = str(session.get("king_name", "")).strip()
+    new_name = str(new_name or "").strip()
+
+    if not sheet_name or not row_index or not old_name:
+        return False, "Не удалось определить кинга. Найди его заново."
+
+    if not new_name:
+        return False, "Название не должно быть пустым."
+
+    if new_name == old_name:
+        return False, "Это уже текущее название."
+
+    conflict = find_king_name_conflict_across_bases(
+        new_name,
+        ignore_sheet_name=sheet_name,
+        ignore_row_index=row_index
+    )
+    if conflict:
+        return False, f"Название '{new_name}' уже существует."
+
+    live_row = get_sheet_row_live(sheet_name, row_index, 13)
+    if not live_row or not any(str(x).strip() for x in live_row):
+        return False, "Строка кинга не найдена. Найди его заново."
+
+    live_row = ensure_row_len(live_row, 13)
+    current_name = str(live_row[0]).strip()
+
+    if not current_name or current_name.lower() != old_name.lower():
+        return False, "Данные кинга уже изменились. Найди его заново."
+
+    sheet_update_and_refresh(
+        sheet_name,
+        f"A{row_index}:A{row_index}",
+        [[new_name]]
+    )
+
+    issue_info = find_last_king_issue_row(old_name)
+    issue_updated = False
+
+    if issue_info:
+        sheet_update_and_refresh(
+            SHEET_ISSUES,
+            f"A{issue_info['row_index']}:A{issue_info['row_index']}",
+            [[new_name]]
+        )
+        issue_updated = True
+
+    update_king_search_edit_session(session_token, king_name=new_name)
+    invalidate_stats_cache()
+
+    if issue_updated:
+        return True, f"Название изменено: {old_name} → {new_name}"
+
+    return True, (
+        f"Название изменено: {old_name} → {new_name}\n"
+        f"Но строка в {SHEET_ISSUES} не найдена."
+    )
+
+
+def change_searched_king_buyer(session_token, new_for_whom):
+    session = get_king_search_edit_session(session_token)
+    if not session:
+        return False, "Кнопка устарела. Найди кинга заново."
+
+    sheet_name = str(session.get("sheet_name", "")).strip()
+    row_index = int(session.get("row_index", 0) or 0)
+    king_name = str(session.get("king_name", "")).strip()
+    new_for_whom = str(new_for_whom or "").strip()
+
+    if not sheet_name or not row_index or not king_name:
+        return False, "Не удалось определить кинга. Найди его заново."
+
+    if not new_for_whom:
+        return False, "Не удалось определить нового байера."
+
+    live_row = get_sheet_row_live(sheet_name, row_index, 13)
+    if not live_row or not any(str(x).strip() for x in live_row):
+        return False, "Строка кинга не найдена. Найди его заново."
+
+    live_row = ensure_row_len(live_row, 13)
+    current_name = str(live_row[0]).strip()
+    status = str(live_row[4]).strip().lower()
+    old_for_whom = str(live_row[5]).strip()
+
+    if not current_name or current_name.lower() != king_name.lower():
+        return False, "Данные кинга уже изменились. Найди его заново."
+
+    if status != "taken":
+        return False, "Байера можно менять только у выданного кинга."
+
+    if old_for_whom == new_for_whom:
+        return False, "Это уже текущий байер."
+
+    sheet_update_and_refresh(
+        sheet_name,
+        f"F{row_index}:F{row_index}",
+        [[new_for_whom]]
+    )
+
+    issue_info = find_last_king_issue_row(current_name)
+    issue_updated = False
+
+    if issue_info:
+        sheet_update_and_refresh(
+            SHEET_ISSUES,
+            f"G{issue_info['row_index']}:G{issue_info['row_index']}",
+            [[new_for_whom]]
+        )
+        issue_updated = True
+
+    update_king_search_edit_session(session_token, for_whom=new_for_whom)
+    invalidate_stats_cache()
+
+    if issue_updated:
+        return True, f"Байер изменён для '{current_name}': {old_for_whom or 'не указано'} → {new_for_whom}"
+
+    return True, (
+        f"Байер изменён для '{current_name}': {old_for_whom or 'не указано'} → {new_for_whom}\n"
+        f"Но строка в {SHEET_ISSUES} не найдена."
     )
 
 def extract_digits(text):
@@ -8975,25 +9285,14 @@ def get_manager_stats_period():
 
     return start_date, end_date
 
-
-def get_manager_stats_counts(username):
-    start_date, end_date = get_manager_stats_period()
-
+def build_manager_stats_summary_text(username):
     if not username:
-        return {
-            "username": "",
-            "start_date": start_date,
-            "end_date": end_date,
-            "accounts": 0,
-            "kings": 0,
-            "bms": 0,
-            "fps": 0,
-            "pixels": 0,
-            "total": 0,
-        }
+        return "Не указан username."
 
-    username = str(username).strip().lstrip("@").lower()
+    username = username.strip().lstrip("@").lower()
     target_username = f"@{username}"
+
+    start_date, end_date = get_manager_stats_period()
 
     accounts_count = 0
     kings_count = 0
@@ -9061,140 +9360,14 @@ def get_manager_stats_counts(username):
         if transfer_date and start_date <= transfer_date < end_date:
             pixels_count += 1
 
-    return {
-        "username": target_username,
-        "start_date": start_date,
-        "end_date": end_date,
-        "accounts": accounts_count,
-        "kings": kings_count,
-        "bms": bms_count,
-        "fps": fps_count,
-        "pixels": pixels_count,
-        "total": accounts_count + kings_count + bms_count + fps_count + pixels_count,
-    }
-
-
-def get_farmer_stats_counts(username):
-    start_date, end_date = get_manager_stats_period()
-
-    if not username:
-        return {
-            "username": "",
-            "start_date": start_date,
-            "end_date": end_date,
-            "farm_kings": 0,
-            "farm_bms": 0,
-            "farm_fps": 0,
-            "total": 0,
-        }
-
-    username = str(username).strip().lstrip("@").lower()
-    target_username = f"@{username}"
-
-    farm_kings_count = 0
-    farm_bms_count = 0
-    farm_fps_count = 0
-
-    farm_kings_rows = get_sheet_rows_cached(SHEET_FARM_KINGS)
-    for row in farm_kings_rows[1:]:
-        if len(row) < 12:
-            row = row + [''] * (12 - len(row))
-        if str(row[8]).strip().lower() != target_username:
-            continue
-        transfer_date = parse_sheet_date(str(row[6]).strip())
-        if transfer_date and start_date <= transfer_date < end_date:
-            farm_kings_count += 1
-
-    farm_bms_rows = get_sheet_rows_cached(SHEET_FARM_BMS)
-    for row in farm_bms_rows[1:]:
-        if len(row) < 9:
-            row = row + [''] * (9 - len(row))
-        if str(row[6]).strip().lower() != target_username:
-            continue
-        transfer_date = parse_sheet_date(str(row[7]).strip())
-        if transfer_date and start_date <= transfer_date < end_date:
-            farm_bms_count += 1
-
-    farm_fps_rows = get_sheet_rows_cached(SHEET_FARM_FPS)
-    for row in farm_fps_rows[1:]:
-        if len(row) < 9:
-            row = row + [''] * (9 - len(row))
-        if str(row[7]).strip().lower() != target_username:
-            continue
-        transfer_date = parse_sheet_date(str(row[8]).strip())
-        if transfer_date and start_date <= transfer_date < end_date:
-            farm_fps_count += 1
-
-    return {
-        "username": target_username,
-        "start_date": start_date,
-        "end_date": end_date,
-        "farm_kings": farm_kings_count,
-        "farm_bms": farm_bms_count,
-        "farm_fps": farm_fps_count,
-        "total": farm_kings_count + farm_bms_count + farm_fps_count,
-    }
-
-
-def build_best_accounts_leader_text():
-    if not ACCOUNTS_USERS:
-        return ""
-
-    best_stats = None
-
-    for _, username in ACCOUNTS_USERS.items():
-        stats = get_manager_stats_counts(username)
-        if best_stats is None or stats["total"] > best_stats["total"]:
-            best_stats = stats
-
-    if not best_stats:
-        return ""
-
-    if best_stats["total"] <= 0:
-        return "👑Лучший аккаунтер по этой статистике👑\nНет выдач за период."
-
     return (
-        "👑Лучший аккаунтер по этой статистике👑\n"
-        f"{best_stats['username']}"
-    )
-
-
-def build_best_farmers_leader_text():
-    if not FARMERS_USERS:
-        return ""
-
-    best_stats = None
-
-    for _, username in FARMERS_USERS.items():
-        stats = get_farmer_stats_counts(username)
-        if best_stats is None or stats["total"] > best_stats["total"]:
-            best_stats = stats
-
-    if not best_stats:
-        return ""
-
-    if best_stats["total"] <= 0:
-        return "👑Лучший фармер по этой статистике👑\nНет выдач за период."
-
-    return (
-        "👑Лучший фармер по этой статистике👑\n"
-        f"{best_stats['username']}"
-    )
-
-def build_manager_stats_summary_text(username):
-    if not username:
-        return "Не указан username."
-
-    stats = get_manager_stats_counts(username)
-
-    return (
-        f"Статистика accounts {stats['username']}\n"
-        f"Период: {stats['start_date'].strftime('%d/%m/%Y')} - {stats['end_date'].strftime('%d/%m/%Y')}\n\n"
-        f"Кинги: {stats['kings']}\n"
-        f"Лички: {stats['accounts']}\n"
-        f"БМы: {stats['bms']}\n"
-        f"ФП: {stats['fps']}\n"
-        f"Пиксели: {stats['pixels']}"
+        f"Статистика accounts {target_username}\n"
+        f"Период: {start_date.strftime('%d/%m/%Y')} - {end_date.strftime('%d/%m/%Y')}\n\n"
+        f"Кинги: {kings_count}\n"
+        f"Лички: {accounts_count}\n"
+        f"БМы: {bms_count}\n"
+        f"ФП: {fps_count}\n"
+        f"Пиксели: {pixels_count}"
     )
 
 def build_manager_stats_text(username):
@@ -9322,14 +9495,51 @@ def build_farmer_stats_summary_text(username):
     if not username:
         return "Не указан username."
 
-    stats = get_farmer_stats_counts(username)
+    username = username.strip().lstrip("@").lower()
+    target_username = f"@{username}"
+
+    start_date, end_date = get_manager_stats_period()
+
+    farm_kings_count = 0
+    farm_bms_count = 0
+    farm_fps_count = 0
+
+    farm_kings_rows = get_sheet_rows_cached(SHEET_FARM_KINGS)
+    for row in farm_kings_rows[1:]:
+        if len(row) < 12:
+            row = row + [''] * (12 - len(row))
+        if str(row[8]).strip().lower() != target_username:
+            continue
+        transfer_date = parse_sheet_date(str(row[6]).strip())
+        if transfer_date and start_date <= transfer_date < end_date:
+            farm_kings_count += 1
+
+    farm_bms_rows = get_sheet_rows_cached(SHEET_FARM_BMS)
+    for row in farm_bms_rows[1:]:
+        if len(row) < 9:
+            row = row + [''] * (9 - len(row))
+        if str(row[6]).strip().lower() != target_username:
+            continue
+        transfer_date = parse_sheet_date(str(row[7]).strip())
+        if transfer_date and start_date <= transfer_date < end_date:
+            farm_bms_count += 1
+
+    farm_fps_rows = get_sheet_rows_cached(SHEET_FARM_FPS)
+    for row in farm_fps_rows[1:]:
+        if len(row) < 9:
+            row = row + [''] * (9 - len(row))
+        if str(row[7]).strip().lower() != target_username:
+            continue
+        transfer_date = parse_sheet_date(str(row[8]).strip())
+        if transfer_date and start_date <= transfer_date < end_date:
+            farm_fps_count += 1
 
     return (
-        f"Статистика farmer {stats['username']}\n"
-        f"Период: {stats['start_date'].strftime('%d/%m/%Y')} - {stats['end_date'].strftime('%d/%m/%Y')}\n\n"
-        f"Farm kings: {stats['farm_kings']}\n"
-        f"Farm BM: {stats['farm_bms']}\n"
-        f"Farm FP: {stats['farm_fps']}"
+        f"Статистика farmer {target_username}\n"
+        f"Период: {start_date.strftime('%d/%m/%Y')} - {end_date.strftime('%d/%m/%Y')}\n\n"
+        f"Farm kings: {farm_kings_count}\n"
+        f"Farm BM: {farm_bms_count}\n"
+        f"Farm FP: {farm_fps_count}"
     )
 
 def build_farmer_stats_text(username):
@@ -13007,6 +13217,7 @@ def build_king_search_text(king_name):
 
     row = found["row"]
     sheet_name = found["sheet_name"]
+    row_index = int(found.get("row_index", 0) or 0)
 
     source_title = "Crypto king" if sheet_name == SHEET_CRYPTO_KINGS else "Кинг"
 
@@ -13037,9 +13248,13 @@ def build_king_search_text(king_name):
         "title": source_title,
         "king_name": name,
         "meta_text": meta_text,
-        "data_text": data_text
+        "data_text": data_text,
+        "sheet_name": sheet_name,
+        "row_index": row_index,
+        "status": status,
+        "for_whom": for_whom
     }
-    
+
 def build_stats_text():
 
     # ---------- КИНГИ ----------
@@ -14979,9 +15194,6 @@ def build_all_users_stats_messages():
 
     if ACCOUNTS_USERS:
         messages.append("=== ACCOUNTS ===")
-        best_accounts_text = build_best_accounts_leader_text()
-        if best_accounts_text:
-            messages.append(best_accounts_text)
         for user_id, username in ACCOUNTS_USERS.items():
             messages.append(build_manager_stats_text(username))
     else:
@@ -14990,9 +15202,6 @@ def build_all_users_stats_messages():
 
     if FARMERS_USERS:
         messages.append("=== FARMERS ===")
-        best_farmers_text = build_best_farmers_leader_text()
-        if best_farmers_text:
-            messages.append(best_farmers_text)
         for user_id, username in FARMERS_USERS.items():
             messages.append(build_farmer_stats_text(username))
     else:
@@ -15006,9 +15215,6 @@ def send_all_users_stats(chat_id):
 
     if ACCOUNTS_USERS:
         tg_send_message(chat_id, "=== ACCOUNTS ===")
-        best_accounts_text = build_best_accounts_leader_text()
-        if best_accounts_text:
-            tg_send_message(chat_id, best_accounts_text)
         for user_id, username in ACCOUNTS_USERS.items():
             summary_text = build_manager_stats_summary_text(username)
 
@@ -15023,9 +15229,6 @@ def send_all_users_stats(chat_id):
 
     if FARMERS_USERS:
         tg_send_message(chat_id, "=== FARMERS ===")
-        best_farmers_text = build_best_farmers_leader_text()
-        if best_farmers_text:
-            tg_send_message(chat_id, best_farmers_text)
         for user_id, username in FARMERS_USERS.items():
             summary_text = build_farmer_stats_summary_text(username)
 
@@ -18012,14 +18215,32 @@ def handle_message(msg):
                 send_kings_menu(chat_id, "Кинг не найден.")
                 return
 
+            edit_token = create_king_search_edit_session(user_id, result)
+
             tg_send_king_search_result_as_txt(
                 chat_id=chat_id,
                 title=result["title"],
                 king_name=result["king_name"],
                 meta_text=result["meta_text"],
-                data_text=result["data_text"]
+                data_text=result["data_text"],
+                inline_buttons=build_king_search_entry_inline_buttons(edit_token)
             )
 
+            send_kings_menu(chat_id, "Меню кингов:")
+            return
+
+        if state.get("mode") == "awaiting_king_search_edit_name":
+            new_king_name = text.strip()
+            session_token = str(state.get("king_search_edit_token", "")).strip()
+
+            if not new_king_name:
+                send_text_input_prompt(chat_id, "Напиши новое название для кинга.")
+                return
+
+            ok, message = rename_searched_king(session_token, new_king_name)
+            clear_state(user_id)
+
+            tg_send_message(chat_id, message)
             send_kings_menu(chat_id, "Меню кингов:")
             return
             
@@ -19942,6 +20163,133 @@ def handle_callback_query(callback_query):
                 logging.exception("msg_reply edit failed")
 
             tg_send_message(chat_id, "Отправь сообщение или стикер")
+            return jsonify({"ok": True})
+
+        if data.startswith("edit_king_data:"):
+            session_token = data.split(":", 1)[1]
+            session = get_king_search_edit_session(session_token)
+
+            if not session:
+                tg_answer_callback_query(callback_id, "Кнопка устарела. Найди кинга заново")
+                return jsonify({"ok": True})
+
+            if int(session.get("user_id", 0)) != int(user_id):
+                tg_answer_callback_query(callback_id, "Это не ваша кнопка")
+                return jsonify({"ok": True})
+
+            tg_answer_callback_query(callback_id, "Выбери, что изменить")
+            tg_edit_message_reply_markup(
+                chat_id,
+                message_id,
+                inline_buttons=build_king_search_edit_inline_buttons(session_token)
+            )
+            return jsonify({"ok": True})
+
+        if data.startswith("edit_king_rename:"):
+            session_token = data.split(":", 1)[1]
+            session = get_king_search_edit_session(session_token)
+
+            if not session:
+                tg_answer_callback_query(callback_id, "Кнопка устарела. Найди кинга заново")
+                return jsonify({"ok": True})
+
+            if int(session.get("user_id", 0)) != int(user_id):
+                tg_answer_callback_query(callback_id, "Это не ваша кнопка")
+                return jsonify({"ok": True})
+
+            tg_answer_callback_query(callback_id)
+            set_state(user_id, {
+                "mode": "awaiting_king_search_edit_name",
+                "king_search_edit_token": session_token
+            })
+            send_text_input_prompt(chat_id, "Напиши новое название для кинга.")
+            return jsonify({"ok": True})
+
+        if data.startswith("edit_king_buyer:"):
+            session_token = data.split(":", 1)[1]
+            session = get_king_search_edit_session(session_token)
+
+            if not session:
+                tg_answer_callback_query(callback_id, "Кнопка устарела. Найди кинга заново")
+                return jsonify({"ok": True})
+
+            if int(session.get("user_id", 0)) != int(user_id):
+                tg_answer_callback_query(callback_id, "Это не ваша кнопка")
+                return jsonify({"ok": True})
+
+            tg_answer_callback_query(callback_id, "Выбери отдел")
+            tg_edit_message_reply_markup(
+                chat_id,
+                message_id,
+                inline_buttons=build_king_search_buyer_department_inline_buttons(session_token)
+            )
+            return jsonify({"ok": True})
+
+        if data.startswith("edit_king_buyer_dept:"):
+            _, session_token, department_key = data.split(":", 2)
+            session = get_king_search_edit_session(session_token)
+
+            if not session:
+                tg_answer_callback_query(callback_id, "Кнопка устарела. Найди кинга заново")
+                return jsonify({"ok": True})
+
+            if int(session.get("user_id", 0)) != int(user_id):
+                tg_answer_callback_query(callback_id, "Это не ваша кнопка")
+                return jsonify({"ok": True})
+
+            if department_key not in ["crypto", "gambla"]:
+                tg_answer_callback_query(callback_id, "Неизвестный отдел")
+                return jsonify({"ok": True})
+
+            tg_answer_callback_query(callback_id, "Выбери байера")
+            tg_edit_message_reply_markup(
+                chat_id,
+                message_id,
+                inline_buttons=build_king_search_buyer_person_inline_buttons(session_token, department_key)
+            )
+            return jsonify({"ok": True})
+
+        if data.startswith("edit_king_buyer_person:"):
+            _, session_token, department_key, person_index_raw = data.split(":", 3)
+            session = get_king_search_edit_session(session_token)
+
+            if not session:
+                tg_answer_callback_query(callback_id, "Кнопка устарела. Найди кинга заново")
+                return jsonify({"ok": True})
+
+            if int(session.get("user_id", 0)) != int(user_id):
+                tg_answer_callback_query(callback_id, "Это не ваша кнопка")
+                return jsonify({"ok": True})
+
+            if department_key == "crypto":
+                names = CRYPTO_NAMES
+            elif department_key == "gambla":
+                names = GAMBLA_NAMES
+            else:
+                tg_answer_callback_query(callback_id, "Неизвестный отдел")
+                return jsonify({"ok": True})
+
+            try:
+                person_index = int(person_index_raw)
+            except Exception:
+                tg_answer_callback_query(callback_id, "Не удалось определить байера")
+                return jsonify({"ok": True})
+
+            if person_index < 0 or person_index >= len(names):
+                tg_answer_callback_query(callback_id, "Не удалось определить байера")
+                return jsonify({"ok": True})
+
+            buyer_name = normalize_person_name(names[person_index])
+            ok, message = change_searched_king_buyer(session_token, buyer_name)
+
+            tg_answer_callback_query(callback_id, "Байер изменён" if ok else "Не удалось изменить байера")
+
+            tg_edit_message_reply_markup(
+                chat_id,
+                message_id,
+                inline_buttons=build_king_search_edit_inline_buttons(session_token)
+            )
+            tg_send_message(chat_id, message)
             return jsonify({"ok": True})
 
         if data.startswith("backstats_farmers:"):
