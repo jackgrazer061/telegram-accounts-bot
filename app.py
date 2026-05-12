@@ -8702,6 +8702,78 @@ def parse_crypto_king_raw_data(raw_text):
         "raw_text": text_original,
     }
 
+    # ---------- FORMAT double-colon: email :: token :: UA :: :: [cookies] :: fb_pass :: email;fb_pass;email_pass;date;fb_login;... ----------
+    # Детектор: разделитель " :: " (с пробелами), первый элемент — email
+    if " :: " in text_original:
+        dc_parts = [x.strip() for x in text_original.split(" :: ")]
+        if len(dc_parts) >= 4 and _validate_email(dc_parts[0]):
+            result["email"] = _validate_email(dc_parts[0])
+
+            # Последний непустой блок с ";" — semicolon-separated: email;fb_pass;email_pass;date;fb_login;name;2fa;...
+            last_block = ""
+            for p in reversed(dc_parts):
+                if p and ";" in p:
+                    last_block = p
+                    break
+
+            if last_block:
+                sub = [x.strip() for x in last_block.split(";")]
+                # sub[0]=email, sub[1]=fb_pass, sub[2]=email_pass, sub[3]=date, sub[4]=fb_login
+                result["fb_password"] = sub[1].strip() if len(sub) > 1 and sub[1] and not _validate_email(sub[1]) else ""
+                result["email_password"] = sub[2].strip() if len(sub) > 2 else ""
+                fb_login_cand = sub[4].strip() if len(sub) > 4 else ""
+                if re.fullmatch(r"[0-9]{8,20}", fb_login_cand):
+                    result["fb_login"] = fb_login_cand
+
+                # 2FA: ищем в sub элемент похожий на 2FA url или base32
+                for s in sub:
+                    val = _validate_2fa(s.strip())
+                    if val:
+                        result["twofa"] = val
+                        break
+
+                # GEO: ищем "GEO xxx" в sub
+                for s in sub:
+                    m_geo = re.match(r"GEO\s+(.+)", s.strip(), re.IGNORECASE)
+                    if m_geo:
+                        result["geo"] = m_geo.group(1).strip()
+                        break
+
+                # DOC: ищем "DOC https://..."
+                for s in sub:
+                    m_doc = re.match(r"DOC\s+(https?://\S+)", s.strip(), re.IGNORECASE)
+                    if m_doc:
+                        result["docs_links"].append(m_doc.group(1).strip())
+                        break
+
+            # fb_password может быть в dc_parts[-2] (перед последним блоком) если не нашли в sub
+            if not result["fb_password"] and len(dc_parts) >= 2:
+                cand = dc_parts[-2].strip()
+                if cand and not _validate_email(cand) and not cand.startswith("http") and len(cand) <= 30:
+                    result["fb_password"] = cand
+
+            if not result["fb_login"] and result["email"]:
+                result["fb_login"] = result["email"]
+
+            result["cookies_json"] = _extract_cookie_json_block(text_original)
+            result["user_agent"] = _extract_user_agent(text_original)
+            result["bm_links"] = _extract_bm_links(text_original)
+            result["cookies_links"] = _extract_cookie_links(text_original)
+
+            if not result["twofa"]:
+                result["twofa"] = _validate_2fa(_extract_twofa_value(text_original))
+            if not result["cookies_json"]:
+                result["cookies_json"] = extract_cookie_json_from_raw_king_text(text_original)
+
+            result["fb_login"] = _sanitize_login(result["fb_login"])
+            result["email"] = _validate_email(result["email"])
+            result["twofa"] = _validate_2fa(result["twofa"])
+            if _validate_email(result["fb_password"]):
+                result["fb_password"] = ""
+            if _validate_email(result["email_password"]):
+                result["email_password"] = ""
+            return result
+
     # ---------- FORMAT COLON-SEPARATED: Name:email:fb_pass:email:email_pass:fb_login:UA::token:cookies (форматы 2, 7) ----------
     # Детектор: первая часть — имя с пробелом, вторая — email
     if ":" in text and "|" not in text:
