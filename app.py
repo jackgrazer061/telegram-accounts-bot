@@ -2,7 +2,7 @@ from flask_cors import CORS
 import os
 import json
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 import time
 import re
 from zoneinfo import ZoneInfo
@@ -339,6 +339,7 @@ ADMIN_BOT_CHECK = 'Проверка бота'
 ADMIN_BACKUP = 'Бэкап таблиц'
 ADMIN_UPDATE_5M = 'Обновление 5м'
 ADMIN_ALL_STATS = 'Статистика всех'
+ADMIN_CHECK_BANS = 'Проверить баны'
 SUBMENU_CRYPTO_KINGS = 'Крипта кинги'
 ADMIN_ADD_CRYPTO_KINGS = 'Добавить crypto king'
 
@@ -1952,6 +1953,7 @@ def send_admin_menu(chat_id, text="Меню Admin:", user_id=None):
     if user_id is not None and is_admin_farm(user_id):
         keyboard = [
             [{"text": ADMIN_FARMERS}, {"text": ADMIN_ALL_STATS}],
+            [{"text": ADMIN_CHECK_BANS}],
             [{"text": BTN_BACK_FROM_ADMIN}]
         ]
     else:
@@ -1959,6 +1961,7 @@ def send_admin_menu(chat_id, text="Меню Admin:", user_id=None):
             [{"text": ADMIN_BACKUP}, {"text": ADMIN_UPDATE_5M}],
             [{"text": ADMIN_ACCOUNTANTS}, {"text": ADMIN_FARMERS}],
             [{"text": ADMIN_ALL_STATS}, {"text": ADMIN_BOT_CHECK}],
+            [{"text": ADMIN_CHECK_BANS}],
             [{"text": ADMIN_SEND_STICKER}],
             [{"text": ADMIN_POLL}],
             [{"text": ADMIN_MESSAGE}],
@@ -9289,6 +9292,236 @@ def get_manager_stats_period():
 
     return start_date, end_date
 
+
+BAN_STORM_TYPES_ORDER = ["KING", "PIXEL", "БМ", "FP", "РК"]
+BAN_STORM_ALERT_THRESHOLDS = [30, 40, 50, 60, 70]
+BAN_STORM_ADMIN_IDS = [7573650707, 7681133609]
+SHEET_BAN_MONITOR = "Мониторинг банов"
+
+
+def normalize_ban_storm_issue_type(value):
+    raw = str(value or "").strip()
+    upper = raw.upper()
+
+    if upper == "KING":
+        return "KING"
+    if upper == "PIXEL":
+        return "PIXEL"
+    if raw in {"БМ", "бм"} or upper == "BM":
+        return "БМ"
+    if upper == "FP":
+        return "FP"
+    if raw in {"РК", "рк"} or upper == "RK":
+        return "РК"
+
+    return ""
+
+
+def ensure_ban_monitor_sheet_exists():
+    try:
+        with google_lock:
+            client = get_gspread_client()
+            spreadsheet = client.open_by_key(SPREADSHEET_ID)
+
+            try:
+                sheet = spreadsheet.worksheet(SHEET_BAN_MONITOR)
+            except gspread.exceptions.WorksheetNotFound:
+                sheet = spreadsheet.add_worksheet(title=SHEET_BAN_MONITOR, rows=500, cols=3)
+
+            rows = sheet.get_all_values()
+            need_init = False
+
+            if not rows:
+                need_init = True
+            elif len(rows[0]) < 3:
+                need_init = True
+            elif str(rows[0][0]).strip() != "key":
+                need_init = True
+
+            if need_init:
+                sheet.update("A1:C1", [["key", "value", "updated_at"]])
+
+            return sheet
+
+    except Exception:
+        logging.exception("ensure_ban_monitor_sheet_exists crashed")
+        raise
+
+
+def load_ban_monitor_state():
+    try:
+        sheet = ensure_ban_monitor_sheet_exists()
+        with google_lock:
+            rows = sheet.get_all_values()
+
+        state = {}
+        for raw_row in rows[1:]:
+            row = list(raw_row or [])
+            if len(row) < 2:
+                continue
+            key = str(row[0]).strip()
+            value = str(row[1]).strip()
+            if key:
+                state[key] = value
+
+        return state
+
+    except Exception:
+        logging.exception("load_ban_monitor_state crashed")
+        return {}
+
+
+def save_ban_monitor_state_value(key, value):
+    key = str(key or "").strip()
+    if not key:
+        return
+
+    value = str(value or "").strip()
+    updated_at = datetime.now(MOSCOW_TZ).strftime("%d/%m/%Y %H:%M:%S")
+
+    try:
+        sheet = ensure_ban_monitor_sheet_exists()
+
+        with google_lock:
+            rows = sheet.get_all_values()
+            target_row = None
+
+            for idx, raw_row in enumerate(rows[1:], start=2):
+                row_key = str(raw_row[0]).strip() if raw_row else ""
+                if row_key == key:
+                    target_row = idx
+                    break
+
+            if target_row:
+                sheet.update(f"B{target_row}:C{target_row}", [[value, updated_at]])
+            else:
+                sheet.append_row([key, value, updated_at], value_input_option="USER_ENTERED")
+
+    except Exception:
+        logging.exception(f"save_ban_monitor_state_value crashed: key={key}")
+
+
+def get_current_week_key(now=None):
+    now = now or datetime.now(MOSCOW_TZ)
+    week_start = now.date() - timedelta(days=now.weekday())
+    return week_start.strftime("%Y-%m-%d")
+
+
+def compute_ban_storm_stats(force=False):
+    rows = get_sheet_rows_cached(SHEET_ISSUES, force=force)
+
+    stats = {
+        issue_type: {
+            "total": 0,
+            "bans": 0,
+            "risk_percent": 0,
+        }
+        for issue_type in BAN_STORM_TYPES_ORDER
+    }
+
+    for raw_row in rows[1:]:
+        row = ensure_row_len(raw_row, 9)
+        issue_type = normalize_ban_storm_issue_type(row[1])
+        if not issue_type:
+            continue
+
+        stats[issue_type]["total"] += 1
+
+        target = str(row[6]).strip().lower()
+        if target == "ban":
+            stats[issue_type]["bans"] += 1
+
+    for issue_type in BAN_STORM_TYPES_ORDER:
+        total = stats[issue_type]["total"]
+        bans = stats[issue_type]["bans"]
+        risk_percent = int(round((bans / total) * 100)) if total > 0 else 0
+        stats[issue_type]["risk_percent"] = risk_percent
+
+    return stats
+
+
+def build_ban_storm_report_text(title="БАНЫ ЗА НЕДЕЛЮ", force=False):
+    stats = compute_ban_storm_stats(force=force)
+    lines = [str(title or "БАНЫ ЗА НЕДЕЛЮ").strip()]
+
+    for issue_type in BAN_STORM_TYPES_ORDER:
+        item = stats.get(issue_type, {})
+        bans = int(item.get("bans", 0) or 0)
+        risk_percent = int(item.get("risk_percent", 0) or 0)
+        lines.append(f"{issue_type} - {bans} ⚠️шанс шторма - {risk_percent}%")
+
+    return "\n".join(lines)
+
+
+def maybe_send_weekly_ban_storm_report():
+    now = datetime.now(MOSCOW_TZ)
+
+    if now.weekday() != 4:
+        return
+
+    if now.hour != 15:
+        return
+
+    week_key = get_current_week_key(now)
+    state = load_ban_monitor_state()
+    sent_key = f"weekly_report_sent:{week_key}"
+
+    if state.get(sent_key) == "1":
+        return
+
+    text = build_ban_storm_report_text("БАНЫ ЗА НЕДЕЛЮ", force=True)
+
+    for admin_id in BAN_STORM_ADMIN_IDS:
+        tg_send_message(admin_id, text)
+
+    save_ban_monitor_state_value(sent_key, "1")
+
+
+def maybe_send_ban_storm_threshold_alerts():
+    stats = compute_ban_storm_stats(force=False)
+    state = load_ban_monitor_state()
+
+    for issue_type in BAN_STORM_TYPES_ORDER:
+        risk_percent = int(stats.get(issue_type, {}).get("risk_percent", 0) or 0)
+        state_key = f"last_threshold:{issue_type}"
+
+        try:
+            last_threshold = int(state.get(state_key, "0") or 0)
+        except Exception:
+            last_threshold = 0
+
+        next_threshold = 0
+        for threshold in BAN_STORM_ALERT_THRESHOLDS:
+            if threshold > last_threshold and risk_percent >= threshold:
+                next_threshold = threshold
+
+        if not next_threshold:
+            continue
+
+        text = (
+            "⚠️ВНИМАНИЕ ШАНС ШТОРМА⚠️\n"
+            f"{issue_type} ⚠️шанс шторма - {next_threshold}%"
+        )
+
+        for admin_id in BAN_STORM_ADMIN_IDS:
+            tg_send_message(admin_id, text)
+
+        save_ban_monitor_state_value(state_key, str(next_threshold))
+
+
+def ban_storm_monitor_loop():
+    logging.info("ban_storm_monitor_loop started")
+
+    while True:
+        try:
+            touch_background_heartbeat()
+            maybe_send_ban_storm_threshold_alerts()
+            maybe_send_weekly_ban_storm_report()
+            time.sleep(60)
+        except Exception:
+            logging.exception("ban_storm_monitor_loop crashed")
+            time.sleep(60)
+
 def build_manager_stats_summary_text(username):
     if not username:
         return "Не указан username."
@@ -15818,6 +16051,15 @@ def handle_message(msg):
                 tg_send_message(chat_id, f"Ошибка в статистике всех:\n{e}")
             return
 
+        if text == ADMIN_CHECK_BANS:
+            if not is_admin(user_id):
+                tg_send_message(chat_id, "У вас нет доступа.")
+                return
+
+            tg_send_message(chat_id, build_ban_storm_report_text("БАНЫ ЗА ЭТУ НЕДЕЛЮ", force=True))
+            send_admin_menu(chat_id, "Меню Admin:", user_id=user_id)
+            return
+
         if text == ADMIN_BOT_CHECK:
             if not is_admin(user_id):
                 tg_send_message(chat_id, "У вас нет доступа.")
@@ -21542,6 +21784,9 @@ def start_background_threads_once():
 
         auto_health_thread = threading.Thread(target=auto_healthcheck_loop, daemon=True)
         auto_health_thread.start()
+
+        ban_storm_thread = threading.Thread(target=ban_storm_monitor_loop, daemon=True)
+        ban_storm_thread.start()
 
         if ENABLE_SCHEDULED_STICKER_BROADCAST:
             sticker_thread = threading.Thread(target=sticker_broadcast_loop, daemon=True)
