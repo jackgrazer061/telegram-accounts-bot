@@ -9296,6 +9296,7 @@ def get_manager_stats_period():
 BAN_STORM_TYPES_ORDER = ["KING", "PIXEL", "БМ", "FP", "РК"]
 BAN_STORM_ALERT_THRESHOLDS = [30, 40, 50, 60, 70]
 BAN_STORM_ADMIN_IDS = [7573650707, 7681133609]
+BAN_STORM_MIN_BASE_TOTAL = 30
 SHEET_BAN_MONITOR = "Мониторинг банов"
 
 
@@ -9401,19 +9402,27 @@ def save_ban_monitor_state_value(key, value):
         logging.exception(f"save_ban_monitor_state_value crashed: key={key}")
 
 
-def get_current_week_key(now=None):
+def get_current_week_period(now=None):
     now = now or datetime.now(MOSCOW_TZ)
-    week_start = now.date() - timedelta(days=now.weekday())
+    week_start_date = now.date() - timedelta(days=now.weekday())
+    week_start = datetime.combine(week_start_date, datetime.min.time())
+    week_end = week_start + timedelta(days=7)
+    return week_start, week_end
+
+
+def get_current_week_key(now=None):
+    week_start, _ = get_current_week_period(now)
     return week_start.strftime("%Y-%m-%d")
 
 
-def compute_ban_storm_stats(force=False):
+def compute_ban_storm_stats(force=False, now=None):
     rows = get_sheet_rows_cached(SHEET_ISSUES, force=force)
+    week_start, week_end = get_current_week_period(now)
 
     stats = {
         issue_type: {
-            "total": 0,
-            "bans": 0,
+            "total_rows": 0,
+            "weekly_bans": 0,
             "risk_percent": 0,
         }
         for issue_type in BAN_STORM_TYPES_ORDER
@@ -9425,28 +9434,33 @@ def compute_ban_storm_stats(force=False):
         if not issue_type:
             continue
 
-        stats[issue_type]["total"] += 1
+        stats[issue_type]["total_rows"] += 1
 
         target = str(row[6]).strip().lower()
-        if target == "ban":
-            stats[issue_type]["bans"] += 1
+        if target != "ban":
+            continue
+
+        transfer_date = parse_sheet_date(str(row[4]).strip())
+        if transfer_date and week_start <= transfer_date < week_end:
+            stats[issue_type]["weekly_bans"] += 1
 
     for issue_type in BAN_STORM_TYPES_ORDER:
-        total = stats[issue_type]["total"]
-        bans = stats[issue_type]["bans"]
-        risk_percent = int(round((bans / total) * 100)) if total > 0 else 0
+        total_rows = int(stats[issue_type]["total_rows"] or 0)
+        weekly_bans = int(stats[issue_type]["weekly_bans"] or 0)
+        effective_total = max(total_rows, BAN_STORM_MIN_BASE_TOTAL)
+        risk_percent = int(round((weekly_bans / effective_total) * 100)) if effective_total > 0 else 0
         stats[issue_type]["risk_percent"] = risk_percent
 
     return stats
 
 
-def build_ban_storm_report_text(title="БАНЫ ЗА НЕДЕЛЮ", force=False):
-    stats = compute_ban_storm_stats(force=force)
+def build_ban_storm_report_text(title="БАНЫ ЗА НЕДЕЛЮ", force=False, now=None):
+    stats = compute_ban_storm_stats(force=force, now=now)
     lines = [str(title or "БАНЫ ЗА НЕДЕЛЮ").strip()]
 
     for issue_type in BAN_STORM_TYPES_ORDER:
         item = stats.get(issue_type, {})
-        bans = int(item.get("bans", 0) or 0)
+        bans = int(item.get("weekly_bans", 0) or 0)
         risk_percent = int(item.get("risk_percent", 0) or 0)
         lines.append(f"{issue_type} - {bans} ⚠️шанс шторма - {risk_percent}%")
 
@@ -9469,7 +9483,7 @@ def maybe_send_weekly_ban_storm_report():
     if state.get(sent_key) == "1":
         return
 
-    text = build_ban_storm_report_text("БАНЫ ЗА НЕДЕЛЮ", force=True)
+    text = build_ban_storm_report_text("БАНЫ ЗА НЕДЕЛЮ", force=True, now=now)
 
     for admin_id in BAN_STORM_ADMIN_IDS:
         tg_send_message(admin_id, text)
@@ -9478,12 +9492,14 @@ def maybe_send_weekly_ban_storm_report():
 
 
 def maybe_send_ban_storm_threshold_alerts():
-    stats = compute_ban_storm_stats(force=False)
+    now = datetime.now(MOSCOW_TZ)
+    stats = compute_ban_storm_stats(force=True, now=now)
     state = load_ban_monitor_state()
+    week_key = get_current_week_key(now)
 
     for issue_type in BAN_STORM_TYPES_ORDER:
         risk_percent = int(stats.get(issue_type, {}).get("risk_percent", 0) or 0)
-        state_key = f"last_threshold:{issue_type}"
+        state_key = f"last_threshold:{week_key}:{issue_type}"
 
         try:
             last_threshold = int(state.get(state_key, "0") or 0)
@@ -10070,10 +10086,12 @@ def mark_issue_row_as_ban(issue_row_index, comment_text=""):
     if not issue_row_index:
         return
 
+    ban_date = datetime.now(MOSCOW_TZ).strftime("%d/%m/%Y")
+
     sheet_update_and_refresh(
         SHEET_ISSUES,
-        f"G{issue_row_index}:I{issue_row_index}",
-        [["ban", "", str(comment_text or "").strip()]]
+        f"E{issue_row_index}:I{issue_row_index}",
+        [[ban_date, "", "ban", "", str(comment_text or "").strip()]]
     )
 
 def set_issue_comment(issue_row_index, comment_text):
