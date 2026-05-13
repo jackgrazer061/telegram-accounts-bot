@@ -8405,6 +8405,14 @@ def _extract_docs_links(text):
     for mm in re.finditer(r"https?://drive\.google\.com/[^\s]+", text, re.IGNORECASE):
         docs.append(mm.group(0).strip())
 
+    # Формат B: URL в самом конце строки после 2FA (bridesbay.com, postimg.cc и т.п.)
+    # Паттерн: :BASE32_2FA:https://...  или  заканчивается на https://...
+    m_tail = re.search(r":[A-Z2-7]{16,}:(https?://[^\s\|:]+)", text)
+    if m_tail:
+        url = m_tail.group(1).strip()
+        if url not in docs:
+            docs.append(url)
+
     return _dedupe_keep_order(docs)
 
 
@@ -8699,6 +8707,38 @@ def parse_crypto_king_raw_data(raw_text):
                 if not result["cookies_json"]:
                     result["cookies_json"] = extract_cookie_json_from_raw_king_text(text_original)
                 return result
+
+    # ---------- FORMAT PIPE extended: id|pass|2fa|c_user=...cookie_str...|token|email|email_pass|service|... ----------
+    # Детектор: p[0]=числовой id, p[3] начинается с "c_user=" (куки как строка, не JSON-массив)
+    if "|" in text_original and text_original.count("|") >= 6:
+        _ep = [x.strip() for x in text_original.split("|")]
+        if (len(_ep) >= 7
+                and re.fullmatch(r"[0-9]{8,20}", _ep[0])
+                and _ep[3].startswith("c_user=")):
+            result["fb_login"] = _ep[0]
+            result["fb_password"] = _ep[1]
+            result["twofa"] = _validate_2fa(_ep[2])
+            result["cookies_json"] = _ep[3]  # cookie-строка: c_user=...;xs=...;fr=...
+            # _ep[4] — токен EAABs..., пропускаем
+            result["email"] = _validate_email(_ep[5]) if len(_ep) > 5 else ""
+            result["email_password"] = _ep[6].strip() if len(_ep) > 6 else ""
+            # _ep[7] — service (email), _ep[8] — длинный ключ, _ep[9] — uuid
+            svc = _ep[7].strip() if len(_ep) > 7 else ""
+            if svc and "@" in svc and not svc.startswith("M.C"):
+                result["service"] = svc
+
+            result["fb_login"] = _sanitize_login(result["fb_login"])
+            result["email"] = _validate_email(result["email"])
+            result["twofa"] = _validate_2fa(result["twofa"] or _extract_twofa_value(text_original))
+            result["docs_links"] = _extract_docs_links(text_original)
+            result["bm_links"] = _extract_bm_links(text_original)
+            result["user_agent"] = _extract_user_agent(text_original)
+            result["geo"] = _extract_geo_value(text_original)
+            if _validate_email(result["fb_password"]):
+                result["fb_password"] = ""
+            if _validate_email(result["email_password"]):
+                result["email_password"] = ""
+            return result
 
     # ---------- FORMAT PIPE (|) ----------
     # Форматы 5, 8, 14: id|pass|2fa|email|email_pass|service|...
