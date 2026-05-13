@@ -9429,12 +9429,16 @@ def format_ban_storm_short_date(value):
 
 def get_ban_storm_week_period(now=None):
     now = now or datetime.now(MOSCOW_TZ)
-    end_date = now.date()
-    start_date = end_date - timedelta(days=6)
-    start_dt = datetime.combine(start_date, datetime.min.time())
-    end_dt = datetime.combine(end_date + timedelta(days=1), datetime.min.time())
-    return start_dt, end_dt
+    current_date = now.date()
 
+    # Неделя мониторинга: с субботы по пятницу.
+    days_since_saturday = (current_date.weekday() - 5) % 7
+    start_date = current_date - timedelta(days=days_since_saturday)
+    end_date_inclusive = start_date + timedelta(days=6)
+
+    start_dt = datetime.combine(start_date, datetime.min.time())
+    end_dt = datetime.combine(end_date_inclusive + timedelta(days=1), datetime.min.time())
+    return start_dt, end_dt
 
 def get_ban_storm_month_period(now=None):
     now = now or datetime.now(MOSCOW_TZ)
@@ -9448,8 +9452,10 @@ def get_ban_storm_month_period(now=None):
 
 def get_ban_storm_week_key(now=None):
     now = now or datetime.now(MOSCOW_TZ)
-    return now.strftime("%Y-%m-%d")
-
+    start_dt, end_dt = get_ban_storm_week_period(now)
+    start_date = start_dt.date().strftime("%Y-%m-%d")
+    end_date = (end_dt - timedelta(days=1)).date().strftime("%Y-%m-%d")
+    return f"{start_date}_{end_date}"
 
 def get_ban_storm_month_key(now=None):
     now = now or datetime.now(MOSCOW_TZ)
@@ -9492,11 +9498,10 @@ def compute_ban_storm_stats(period_type="week", force=False, now=None):
 
     stats = {
         issue_type: {
-            "total_rows": 0,
-            "period_bans": 0,
+            "period_total_rows": 0,
+            "period_ban_rows": 0,
+            "period_ban_sum": 0.0,
             "risk_percent": 0,
-            "current_ban_rows": 0,
-            "current_ban_sum": 0.0,
             "effective_total": 0,
         }
         for issue_type in BAN_STORM_TYPES_ORDER
@@ -9508,32 +9513,32 @@ def compute_ban_storm_stats(period_type="week", force=False, now=None):
         if not issue_type:
             continue
 
-        stats[issue_type]["total_rows"] += 1
+        transfer_date = parse_sheet_date(str(row[4]).strip())
+        if not transfer_date or not (period_start <= transfer_date < period_end):
+            continue
+
+        stats[issue_type]["period_total_rows"] += 1
 
         target = str(row[6]).strip().lower()
         if target == "ban":
-            stats[issue_type]["current_ban_rows"] += 1
+            stats[issue_type]["period_ban_rows"] += 1
             price_value = parse_price(row[3])
             if price_value is not None:
-                stats[issue_type]["current_ban_sum"] += price_value
-
-            transfer_date = parse_sheet_date(str(row[4]).strip())
-            if transfer_date and period_start <= transfer_date < period_end:
-                stats[issue_type]["period_bans"] += 1
+                stats[issue_type]["period_ban_sum"] += price_value
 
     total_period_bans = 0
     total_effective_base = 0
 
     for issue_type in BAN_STORM_TYPES_ORDER:
-        total_rows = int(stats[issue_type]["total_rows"] or 0)
-        period_bans = int(stats[issue_type]["period_bans"] or 0)
-        effective_total = max(total_rows, BAN_STORM_MIN_BASE_TOTAL) if total_rows > 0 else BAN_STORM_MIN_BASE_TOTAL
-        risk_percent = int(round((period_bans / effective_total) * 100)) if effective_total > 0 else 0
+        period_total_rows = int(stats[issue_type]["period_total_rows"] or 0)
+        period_ban_rows = int(stats[issue_type]["period_ban_rows"] or 0)
+        effective_total = max(period_total_rows, BAN_STORM_MIN_BASE_TOTAL) if period_total_rows > 0 else BAN_STORM_MIN_BASE_TOTAL
+        risk_percent = int(round((period_ban_rows / effective_total) * 100)) if effective_total > 0 else 0
 
         stats[issue_type]["effective_total"] = effective_total
         stats[issue_type]["risk_percent"] = risk_percent
 
-        total_period_bans += period_bans
+        total_period_bans += period_ban_rows
         total_effective_base += effective_total
 
     overall_risk_percent = int(round((total_period_bans / total_effective_base) * 100)) if total_effective_base > 0 else 0
@@ -9548,13 +9553,12 @@ def compute_ban_storm_stats(period_type="week", force=False, now=None):
         "total_effective_base": total_effective_base,
     }
 
-
 def build_ban_storm_report_text(period_type="week", now=None, force=False, title_override=None):
     now = now or datetime.now(MOSCOW_TZ)
     report = compute_ban_storm_stats(period_type=period_type, force=force, now=now)
     stats = report["types"]
 
-    lines = [title_override or get_ban_storm_period_label(period_type, now)]
+    lines = [title_override or get_ban_storm_period_label(period_type, now), ""]
 
     for issue_type in BAN_STORM_TYPES_ORDER:
         meta = BAN_STORM_TYPE_META.get(issue_type, {})
@@ -9562,17 +9566,19 @@ def build_ban_storm_report_text(period_type="week", now=None, force=False, title
         details_word = meta.get("details", issue_type)
         item = stats.get(issue_type, {})
         risk_percent = int(item.get("risk_percent", 0) or 0)
-        total_rows = int(item.get("total_rows", 0) or 0)
-        current_ban_rows = int(item.get("current_ban_rows", 0) or 0)
-        current_ban_sum = format_ban_storm_amount(item.get("current_ban_sum", 0.0) or 0.0)
+        period_total_rows = int(item.get("period_total_rows", 0) or 0)
+        period_ban_rows = int(item.get("period_ban_rows", 0) or 0)
+        period_ban_sum = format_ban_storm_amount(item.get("period_ban_sum", 0.0) or 0.0)
 
         lines.append(f"{icon}{issue_type} ⚠️шанс шторма - {risk_percent}%")
-        lines.append(f"{details_word} всего {total_rows}, в бане {current_ban_rows} на сумму {current_ban_sum}")
+        lines.append(
+            f"❗️{details_word} всего за период {period_total_rows}, "
+            f"в бане {period_ban_rows} на сумму {period_ban_sum}💰"
+        )
+        lines.append("")
 
-    lines.append("")
     lines.append(f"❓общий шанс шторма - {int(report.get('overall_risk_percent', 0) or 0)}%")
     return "\n".join(lines).strip()
-
 
 def build_combined_ban_storm_report_text(now=None, force=False):
     now = now or datetime.now(MOSCOW_TZ)
