@@ -9339,6 +9339,11 @@ def normalize_ban_storm_issue_type(value):
     return ""
 
 
+def is_ban_storm_excluded_target(value):
+    target = str(value or "").strip().lower()
+    return target == "farm"
+
+
 def ensure_ban_monitor_sheet_exists():
     try:
         with google_lock:
@@ -9513,13 +9518,16 @@ def compute_ban_storm_stats(period_type="week", force=False, now=None):
         if not issue_type:
             continue
 
+        target = str(row[6]).strip().lower()
+        if is_ban_storm_excluded_target(target):
+            continue
+
         transfer_date = parse_sheet_date(str(row[4]).strip())
         if not transfer_date or not (period_start <= transfer_date < period_end):
             continue
 
         stats[issue_type]["period_total_rows"] += 1
 
-        target = str(row[6]).strip().lower()
         if target == "ban":
             stats[issue_type]["period_ban_rows"] += 1
             price_value = parse_price(row[3])
