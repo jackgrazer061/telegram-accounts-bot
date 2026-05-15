@@ -276,6 +276,7 @@ MENU_BMS = 'БМ'
 MENU_FPS = 'ФП'
 MENU_STATS = 'Статистика'
 MENU_MANAGER_STATS = 'Статистика менеджера'
+MENU_ISSUED_TO_BUYER = 'Выдано байеру'
 MENU_FARMER_STATS = 'Статистика фармера'
 MENU_ADMIN = 'Admin'
 MENU_CANCEL = 'Отмена'
@@ -291,6 +292,7 @@ SUBMENU_BACK_MAIN = 'В меню'
 
 DEPT_CRYPTO = '🪙Крипта'
 DEPT_GAMBLA = '🎰Гембла'
+DEPT_OTHER = '📦Прочее'
 
 CRYPTO_NAMES = [
     '№3 DS78', '№5 MCH79', '№20 MS77',
@@ -306,6 +308,46 @@ GAMBLA_NAMES = [
     '№000 richard', '№55 AL102', '№56 IC1', '№58 KM2', '№59 AH6', '№43 MD9', '№45 AA8', '№61 SN11',
     '№63 ED123', '№64 SA122', '№65 BS125', '№66 AD129', '№67 AG135'
 ]
+
+OTHER_NAMES = [
+    'ACC DEP', 'TEST ACC DEP'
+]
+
+BTN_RETURN_FP_BAN_ALL = '🚫В бан всю ФП'
+
+
+def get_supported_departments():
+    return [DEPT_CRYPTO, DEPT_GAMBLA, DEPT_OTHER]
+
+
+def get_department_people(department):
+    if department == DEPT_CRYPTO:
+        return CRYPTO_NAMES
+    if department == DEPT_GAMBLA:
+        return GAMBLA_NAMES
+    if department == DEPT_OTHER:
+        return OTHER_NAMES
+    return []
+
+
+def get_department_people_by_key(department_key):
+    if department_key == 'crypto':
+        return CRYPTO_NAMES
+    if department_key == 'gambla':
+        return GAMBLA_NAMES
+    if department_key == 'misc':
+        return OTHER_NAMES
+    return []
+
+
+def get_department_title(department):
+    if department == DEPT_CRYPTO:
+        return 'Выбери человека из отдела Крипта:'
+    if department == DEPT_GAMBLA:
+        return 'Выбери человека из отдела Гембла:'
+    if department == DEPT_OTHER:
+        return 'Выбери человека из отдела Прочее:'
+    return ''
 
 SUBMENU_GET = '➡️Выдать лички'
 SUBMENU_QUICK_GET = '⏭️Быстро выдать личку'
@@ -1847,12 +1889,23 @@ def send_return_action_menu(chat_id, what_text):
     ]
     tg_send_message(chat_id, f"Что сделать с {what_text}?", keyboard)
 
+
+def send_fp_return_action_menu(chat_id, farm=False):
+    what_text = 'farm FP' if farm else 'ФП'
+    keyboard = [
+        [{"text": BTN_RETURN_TO_BAN}, {"text": BTN_RETURN_TO_FREE}],
+        [{"text": BTN_RETURN_FP_BAN_ALL}],
+        [{"text": BTN_BACK_STEP}, {"text": MENU_CANCEL}]
+    ]
+    tg_send_message(chat_id, f"Что сделать с {what_text}?", keyboard)
+
 def send_accounts_main_menu(chat_id, text="Меню Accounts:"):
     keyboard = [
         [{"text": SUBMENU_ACCOUNTS_MAIN}, {"text": MENU_KINGS}],
         [{"text": MENU_BMS}, {"text": MENU_FPS}],
         [{"text": MENU_PIXELS}],
         [{"text": MENU_MANAGER_STATS}],
+        [{"text": MENU_ISSUED_TO_BUYER}],
         [{"text": SUBMENU_BACK_MAIN}]
     ]
     tg_send_message(chat_id, text, keyboard)
@@ -3440,6 +3493,10 @@ def build_king_search_buyer_department_inline_buttons(token):
             }
         ],
         [{
+            "text": DEPT_OTHER,
+            "callback_data": f"edit_king_buyer_dept:{token}:misc"
+        }],
+        [{
             "text": "⬅️ Назад",
             "callback_data": f"edit_king_data:{token}"
         }]
@@ -3447,11 +3504,8 @@ def build_king_search_buyer_department_inline_buttons(token):
 
 
 def build_king_search_buyer_person_inline_buttons(token, department_key):
-    if department_key == "crypto":
-        names = CRYPTO_NAMES
-    elif department_key == "gambla":
-        names = GAMBLA_NAMES
-    else:
+    names = get_department_people_by_key(department_key)
+    if not names:
         return build_king_search_buyer_department_inline_buttons(token)
 
     keyboard = []
@@ -4543,18 +4597,16 @@ def send_currency_options(chat_id, currencies):
 def send_department_menu(chat_id, title="Выбери отдел:"):
     keyboard = [
         [{"text": DEPT_CRYPTO}, {"text": DEPT_GAMBLA}],
+        [{"text": DEPT_OTHER}],
         [{"text": BTN_BACK_STEP}, {"text": MENU_CANCEL}]
     ]
     tg_send_message(chat_id, title, keyboard)
 
 def send_person_menu(chat_id, department):
-    if department == DEPT_CRYPTO:
-        names = CRYPTO_NAMES
-        title = "Выбери человека из отдела Крипта:"
-    elif department == DEPT_GAMBLA:
-        names = GAMBLA_NAMES
-        title = "Выбери человека из отдела Гембла:"
-    else:
+    names = get_department_people(department)
+    title = get_department_title(department)
+
+    if not names or not title:
         tg_send_message(chat_id, "Неизвестный отдел.")
         return
 
@@ -4949,6 +5001,116 @@ def return_fp_to_free(fp_link):
 
     invalidate_stats_cache()
     return True, "ФП возвращено в free."
+
+def return_fp_warehouse_to_ban(warehouse_name, comment_text="", farm=False):
+    warehouse_name = str(warehouse_name or "").strip()
+    if not warehouse_name:
+        return False, "Название склада не указано."
+
+    target_sheet = SHEET_FARM_FPS if farm else SHEET_FPS
+    rows = get_sheet_rows_cached(target_sheet)
+    ban_date = datetime.now(MOSCOW_TZ).strftime("%d/%m/%Y")
+
+    matching = []
+    for idx, raw_row in enumerate(rows[1:], start=2):
+        row = list(raw_row)
+        if len(row) < 9:
+            row += [''] * (9 - len(row))
+        if str(row[4]).strip() == warehouse_name:
+            matching.append((idx, row))
+
+    if not matching:
+        prefix = "farm FP" if farm else "ФП"
+        return False, f"Склад {prefix} '{warehouse_name}' не найден."
+
+    updated_count = 0
+    total_count = len(matching)
+    total_sum = 0.0
+    issue_rows_to_append = []
+
+    with issue_lock:
+        current_rows = get_sheet_rows_cached(target_sheet, force=True)
+
+        for row_index, _ in matching:
+            if row_index - 1 >= len(current_rows):
+                continue
+
+            row = list(current_rows[row_index - 1])
+            if len(row) < 9:
+                row += [''] * (9 - len(row))
+
+            if str(row[4]).strip() != warehouse_name:
+                continue
+
+            price_value = parse_price(row[2]) or 0.0
+            status = str(row[5]).strip().lower()
+            if status != "ban":
+                sheet_update_raw(
+                    target_sheet,
+                    f"F{row_index}:G{row_index}",
+                    [["ban", "ban"]]
+                )
+                updated_count += 1
+                total_sum += price_value
+
+            issue_info = find_last_fp_issue_row(row[0])
+            if issue_info:
+                mark_issue_row_as_ban(issue_info["row_index"], comment_text)
+            else:
+                issue_rows_to_append.append([
+                    row[0],
+                    "FP",
+                    row[1],
+                    normalize_numeric_for_sheet(row[2]),
+                    ban_date,
+                    row[3],
+                    "ban",
+                    "",
+                    str(comment_text or "").strip(),
+                ])
+
+        if issue_rows_to_append:
+            sheet_append_rows_and_refresh(
+                SHEET_ISSUES,
+                issue_rows_to_append,
+                value_input_option="USER_ENTERED"
+            )
+
+        refresh_sheet_cache(target_sheet)
+
+    king_message = ""
+    if farm:
+        king_ok, king_result = return_farm_king_to_ban(warehouse_name, comment_text)
+        if king_ok:
+            king_message = f"Farm king склада '{warehouse_name}' переведён в ban."
+        elif "не найден" not in str(king_result).lower():
+            king_message = str(king_result)
+    else:
+        king_ok, king_result = return_king_to_ban(warehouse_name, comment_text)
+        if king_ok:
+            king_message = f"Кинг склада '{warehouse_name}' переведён в ban."
+        elif "не найден" not in str(king_result).lower():
+            king_message = str(king_result)
+
+    invalidate_stats_cache()
+
+    prefix = "farm FP" if farm else "ФП"
+    text_parts = [
+        "Готово ✅",
+        f"Склад: {warehouse_name}",
+        f"{prefix} найдено: {total_count}",
+        f"Переведено в ban: {updated_count}",
+        f"Сумма в ban: {format_ban_storm_amount(total_sum)}",
+    ]
+
+    if issue_rows_to_append:
+        text_parts.append(f"Добавлено в {SHEET_ISSUES}: {len(issue_rows_to_append)}")
+
+    if king_message:
+        text_parts.append(king_message)
+
+    return True, "\n".join(text_parts)
+
 
 def extract_warehouse_sort_key(warehouse_name):
     text = str(warehouse_name or "").strip().lower()
@@ -9895,6 +10057,79 @@ def build_manager_stats_text(username):
     text_parts.extend(pixels_lines if pixels_lines else ["нет выдач"])
 
     return "\n".join(text_parts)
+
+
+BUYER_ISSUED_TYPE_ORDER = ["KING", "РК", "FP", "PIXEL"]
+BUYER_ISSUED_TYPE_META = {
+    "KING": {"icon": "👑", "title": "Кинги"},
+    "РК": {"icon": "🪧", "title": "Лички"},
+    "FP": {"icon": "📑", "title": "ФП"},
+    "PIXEL": {"icon": "🌀", "title": "Пиксели"},
+}
+
+
+def build_issued_to_buyer_report_text(buyer_name):
+    buyer_name = normalize_person_name(buyer_name)
+    target = str(buyer_name or "").strip().lower()
+
+    if not target:
+        return "Не удалось определить байера."
+
+    rows = get_sheet_rows_cached(SHEET_ISSUES)
+    grouped = {issue_type: [] for issue_type in BUYER_ISSUED_TYPE_ORDER}
+
+    for raw_row in rows[1:]:
+        row = list(raw_row)
+        if len(row) < 7:
+            row += [''] * (7 - len(row))
+
+        issue_type = normalize_ban_storm_issue_type(row[1])
+        if issue_type not in grouped:
+            continue
+
+        row_for_whom = normalize_person_name(row[6]).strip().lower()
+        if row_for_whom != target:
+            continue
+
+        transfer_text = str(row[4] or '').strip()
+        transfer_dt = parse_sheet_date(transfer_text) or datetime.min
+
+        grouped[issue_type].append({
+            "name": str(row[0] or "").strip() or "без названия",
+            "price": row[3] if len(row) > 3 else "",
+            "transfer_text": transfer_text or "не указана",
+            "transfer_dt": transfer_dt,
+            "supplier": str(row[5] or "").strip() or "не указан",
+        })
+
+    total_items = sum(len(items) for items in grouped.values())
+    if total_items == 0:
+        return f"По байеру {buyer_name} ничего не найдено."
+
+    lines = [
+        f"📦 Выдано байеру: {buyer_name}",
+        "",
+    ]
+
+    for issue_type in BUYER_ISSUED_TYPE_ORDER:
+        items = grouped[issue_type]
+        if not items:
+            continue
+
+        items.sort(key=lambda x: (x["transfer_dt"], x["name"]), reverse=True)
+        meta = BUYER_ISSUED_TYPE_META[issue_type]
+        lines.append(f"{meta['icon']} {meta['title']} — {len(items)}")
+
+        for idx, item in enumerate(items, start=1):
+            lines.append(f"{idx}. {item['name']}")
+            lines.append(f"   💵 Цена: {format_issue_price(item['price'])}")
+            lines.append(f"   📅 Дата передачи: {item['transfer_text']}")
+            lines.append(f"   👤 Кто передал: {item['supplier']}")
+
+        lines.append("")
+
+    return "\n".join(lines).strip()
+
 
 def build_farmer_stats_summary_text(username):
     if not username:
@@ -15846,6 +16081,14 @@ def handle_message(msg):
                 send_person_menu(chat_id, prev_state.get("issue_department"))
                 return
 
+            if mode == "awaiting_buyer_issued_department":
+                send_department_menu(chat_id, "Выбери отдел байера:")
+                return
+
+            if mode == "awaiting_buyer_issued_person":
+                send_person_menu(chat_id, prev_state.get("buyer_report_department"))
+                return
+
             if mode == "awaiting_account_return_action":
                 send_return_action_menu(chat_id, "личкой")
                 return
@@ -15979,12 +16222,36 @@ def handle_message(msg):
                 send_department_menu(chat_id, "Выбери для кого ФП:")
                 return
 
+            if mode == "awaiting_fp_return_action":
+                send_fp_return_action_menu(chat_id, farm=False)
+                return
+
+            if mode == "awaiting_farm_fp_return_action":
+                send_fp_return_action_menu(chat_id, farm=True)
+                return
+
             if mode == "awaiting_return_fp_ban":
                 send_text_input_prompt(chat_id, "Впиши ссылку ФП, которую нужно перевести в ban.")
                 return
 
+            if mode == "awaiting_return_fp_ban_warehouse":
+                send_text_input_prompt(chat_id, "Впиши название склада ФП, который нужно целиком перевести в ban.")
+                return
+
+            if mode == "awaiting_ban_reason_fp_warehouse":
+                send_text_input_prompt(chat_id, "Напиши причину бана для всего склада ФП.")
+                return
+
             if mode == "awaiting_farm_return_fp_ban":
                 send_text_input_prompt(chat_id, "Впиши ссылку farm FP, которую нужно перевести в ban.")
+                return
+
+            if mode == "awaiting_farm_return_fp_ban_warehouse":
+                send_text_input_prompt(chat_id, "Впиши название склада farm FP, который нужно целиком перевести в ban.")
+                return
+
+            if mode == "awaiting_ban_reason_farm_fp_warehouse":
+                send_text_input_prompt(chat_id, "Напиши причину бана для всего склада farm FP.")
                 return
 
             if mode == "awaiting_fp_for_whom":
@@ -16111,6 +16378,12 @@ def handle_message(msg):
             )
 
             send_accounts_main_menu(chat_id, "Меню Accounts:")
+            return
+
+        if text == MENU_ISSUED_TO_BUYER:
+            clear_state(user_id)
+            update_state(user_id, mode="awaiting_buyer_issued_department")
+            send_department_menu(chat_id, "Выбери отдел байера:")
             return
 
         if text == MENU_FARMER_STATS:
@@ -17038,7 +17311,7 @@ def handle_message(msg):
 
         if text == SUBMENU_RETURN_FP:
             update_state(user_id, mode="awaiting_fp_return_action")
-            send_return_action_menu(chat_id, "ФП")
+            send_fp_return_action_menu(chat_id, farm=False)
             return
 
         if text == SUBMENU_GET_FP:
@@ -17172,7 +17445,7 @@ def handle_message(msg):
 
         if text == FARM_SUBMENU_RETURN_FP:
             update_state(user_id, mode="awaiting_farm_fp_return_action")
-            send_return_action_menu(chat_id, "farm FP")
+            send_fp_return_action_menu(chat_id, farm=True)
             return
 
         if text == BTN_FARM_KINGS_PARTIAL_CONFIRM:
@@ -17385,7 +17658,12 @@ def handle_message(msg):
                 send_text_input_prompt(chat_id, "Впиши ссылку ФП, которую нужно вернуть.")
                 return
 
-            send_return_action_menu(chat_id, "ФП")
+            if text == BTN_RETURN_FP_BAN_ALL:
+                update_state(user_id, mode="awaiting_return_fp_ban_warehouse")
+                send_text_input_prompt(chat_id, "Впиши название склада ФП, который нужно целиком перевести в ban.")
+                return
+
+            send_fp_return_action_menu(chat_id, farm=False)
             return
 
         if state.get("mode") == "awaiting_bm_return_action":
@@ -17413,7 +17691,12 @@ def handle_message(msg):
                 send_text_input_prompt(chat_id, "Впиши ссылку farm FP, которую нужно вернуть.")
                 return
 
-            send_return_action_menu(chat_id, "farm FP")
+            if text == BTN_RETURN_FP_BAN_ALL:
+                update_state(user_id, mode="awaiting_farm_return_fp_ban_warehouse")
+                send_text_input_prompt(chat_id, "Впиши название склада farm FP, который нужно целиком перевести в ban.")
+                return
+
+            send_fp_return_action_menu(chat_id, farm=True)
             return
 
         if state.get("mode") == "awaiting_farm_bm_return_action":
@@ -17651,9 +17934,35 @@ def handle_message(msg):
             send_accounts_main_menu(chat_id, "Меню Accounts:")
             return
 
+        # ========= СОСТОЯНИЯ: ВЫДАЧА БАЙЕРУ =========
+        if state.get("mode") == "awaiting_buyer_issued_department":
+            if text not in get_supported_departments():
+                send_department_menu(chat_id, "Нужно выбрать отдел кнопкой:")
+                return
+
+            state["mode"] = "awaiting_buyer_issued_person"
+            state["buyer_report_department"] = text
+            set_state(user_id, state)
+
+            send_person_menu(chat_id, text)
+            return
+
+        if state.get("mode") == "awaiting_buyer_issued_person":
+            allowed_names = get_department_people(state.get("buyer_report_department"))
+
+            if text not in allowed_names:
+                send_person_menu(chat_id, state.get("buyer_report_department"))
+                return
+
+            buyer_name = normalize_person_name(text)
+            clear_state(user_id)
+            tg_send_long_message(chat_id, build_issued_to_buyer_report_text(buyer_name))
+            send_accounts_main_menu(chat_id, "Меню Accounts:")
+            return
+
         # ========= СОСТОЯНИЯ: ВЫДАЧА ЛИЧЕК =========
         if state.get("mode") == "awaiting_issue_department":
-            if text not in [DEPT_CRYPTO, DEPT_GAMBLA]:
+            if text not in get_supported_departments():
                 send_department_menu(chat_id, "Нужно выбрать отдел кнопкой:")
                 return
 
@@ -17665,12 +17974,7 @@ def handle_message(msg):
             return
 
         if state.get("mode") == "awaiting_issue_for_whom":
-            allowed_names = []
-
-            if state.get("issue_department") == DEPT_CRYPTO:
-                allowed_names = CRYPTO_NAMES
-            elif state.get("issue_department") == DEPT_GAMBLA:
-                allowed_names = GAMBLA_NAMES
+            allowed_names = get_department_people(state.get("issue_department"))
 
             if text not in allowed_names:
                 send_person_menu(chat_id, state.get("issue_department"))
@@ -17808,7 +18112,7 @@ def handle_message(msg):
             return
 
         if state.get("mode") == "awaiting_quick_issue_department":
-            if text not in [DEPT_CRYPTO, DEPT_GAMBLA]:
+            if text not in get_supported_departments():
                 send_department_menu(chat_id, "Нужно выбрать отдел кнопкой:")
                 return
 
@@ -17820,12 +18124,7 @@ def handle_message(msg):
             return
 
         if state.get("mode") == "awaiting_quick_issue_for_whom":
-            allowed_names = []
-
-            if state.get("issue_department") == DEPT_CRYPTO:
-                allowed_names = CRYPTO_NAMES
-            elif state.get("issue_department") == DEPT_GAMBLA:
-                allowed_names = GAMBLA_NAMES
+            allowed_names = get_department_people(state.get("issue_department"))
 
             if text not in allowed_names:
                 send_person_menu(chat_id, state.get("issue_department"))
@@ -17899,7 +18198,7 @@ def handle_message(msg):
             return
 
         if state.get("mode") == KING_OCTO_MODE_DEPARTMENT:
-            if text not in [DEPT_CRYPTO, DEPT_GAMBLA]:
+            if text not in get_supported_departments():
                 send_department_menu(chat_id, "Нужно выбрать отдел кнопкой:")
                 return
 
@@ -17913,11 +18212,7 @@ def handle_message(msg):
         if state.get("mode") == KING_OCTO_MODE_PERSON:
             department = state.get("king_department")
 
-            allowed_names = []
-            if department == DEPT_CRYPTO:
-                allowed_names = CRYPTO_NAMES
-            elif department == DEPT_GAMBLA:
-                allowed_names = GAMBLA_NAMES
+            allowed_names = get_department_people(department)
 
             if text not in allowed_names:
                 send_person_menu(chat_id, department)
@@ -18107,11 +18402,7 @@ def handle_message(msg):
         if state.get("mode") == "awaiting_crypto_king_person_bulk":
             department = state.get("crypto_bulk_department")
 
-            allowed_names = []
-            if department == DEPT_CRYPTO:
-                allowed_names = CRYPTO_NAMES
-            elif department == DEPT_GAMBLA:
-                allowed_names = GAMBLA_NAMES
+            allowed_names = get_department_people(department)
 
             if text not in allowed_names:
                 send_person_menu(chat_id, department)
@@ -18473,7 +18764,7 @@ def handle_message(msg):
             return
 
         if state.get("mode") == "awaiting_king_department":
-            if text not in [DEPT_CRYPTO, DEPT_GAMBLA]:
+            if text not in get_supported_departments():
                 send_department_menu(chat_id, "Нужно выбрать отдел кнопкой:")
                 return
 
@@ -18485,12 +18776,7 @@ def handle_message(msg):
             return
 
         if state.get("mode") == "awaiting_king_for_whom":
-            allowed_names = []
-
-            if state.get("king_department") == DEPT_CRYPTO:
-                allowed_names = CRYPTO_NAMES
-            elif state.get("king_department") == DEPT_GAMBLA:
-                allowed_names = GAMBLA_NAMES
+            allowed_names = get_department_people(state.get("king_department"))
 
             if text not in allowed_names:
                 send_person_menu(chat_id, state.get("king_department"))
@@ -18730,7 +19016,7 @@ def handle_message(msg):
 
         # ========= СОСТОЯНИЯ: БМы =========
         if state.get("mode") == "awaiting_bm_department":
-            if text not in [DEPT_CRYPTO, DEPT_GAMBLA]:
+            if text not in get_supported_departments():
                 send_department_menu(chat_id, "Нужно выбрать отдел кнопкой:")
                 return
 
@@ -18742,12 +19028,7 @@ def handle_message(msg):
             return
 
         if state.get("mode") == "awaiting_bm_for_whom":
-            allowed_names = []
-
-            if state.get("bm_department") == DEPT_CRYPTO:
-                allowed_names = CRYPTO_NAMES
-            elif state.get("bm_department") == DEPT_GAMBLA:
-                allowed_names = GAMBLA_NAMES
+            allowed_names = get_department_people(state.get("bm_department"))
 
             if text not in allowed_names:
                 send_person_menu(chat_id, state.get("bm_department"))
@@ -18943,7 +19224,7 @@ def handle_message(msg):
             return
 
         if state.get("mode") == "awaiting_pixel_department":
-            if text not in [DEPT_CRYPTO, DEPT_GAMBLA]:
+            if text not in get_supported_departments():
                 send_department_menu(chat_id, "Нужно выбрать отдел кнопкой:")
                 return
 
@@ -18956,12 +19237,7 @@ def handle_message(msg):
 
 
         if state.get("mode") == "awaiting_pixel_for_whom":
-            allowed_names = []
-
-            if state.get("pixel_department") == DEPT_CRYPTO:
-                allowed_names = CRYPTO_NAMES
-            elif state.get("pixel_department") == DEPT_GAMBLA:
-                allowed_names = GAMBLA_NAMES
+            allowed_names = get_department_people(state.get("pixel_department"))
 
             if text not in allowed_names:
                 send_person_menu(chat_id, state.get("pixel_department"))
@@ -19018,7 +19294,7 @@ def handle_message(msg):
             return
 
         if state.get("mode") == "awaiting_fp_department":
-            if text not in [DEPT_CRYPTO, DEPT_GAMBLA]:
+            if text not in get_supported_departments():
                 send_department_menu(chat_id, "Нужно выбрать отдел кнопкой:")
                 return
 
@@ -19030,12 +19306,7 @@ def handle_message(msg):
             return
 
         if state.get("mode") == "awaiting_fp_for_whom":
-            allowed_names = []
-
-            if state.get("fp_department") == DEPT_CRYPTO:
-                allowed_names = CRYPTO_NAMES
-            elif state.get("fp_department") == DEPT_GAMBLA:
-                allowed_names = GAMBLA_NAMES
+            allowed_names = get_department_people(state.get("fp_department"))
 
             if text not in allowed_names:
                 send_person_menu(chat_id, state.get("fp_department"))
@@ -19762,6 +20033,34 @@ def handle_message(msg):
             send_farm_fps_menu(chat_id, "Выбери следующее действие:")
             return
 
+        if state.get("mode") == "awaiting_return_fp_ban_warehouse":
+            warehouse_name = text.strip()
+
+            if not warehouse_name:
+                send_text_input_prompt(chat_id, "Впиши название склада ФП, который нужно целиком перевести в ban.")
+                return
+
+            set_state(user_id, {
+                "mode": "awaiting_ban_reason_fp_warehouse",
+                "return_fp_warehouse": warehouse_name
+            })
+            send_text_input_prompt(chat_id, f"Напиши причину бана для всего склада ФП '{warehouse_name}'.")
+            return
+
+        if state.get("mode") == "awaiting_farm_return_fp_ban_warehouse":
+            warehouse_name = text.strip()
+
+            if not warehouse_name:
+                send_text_input_prompt(chat_id, "Впиши название склада farm FP, который нужно целиком перевести в ban.")
+                return
+
+            set_state(user_id, {
+                "mode": "awaiting_ban_reason_farm_fp_warehouse",
+                "return_fp_warehouse": warehouse_name
+            })
+            send_text_input_prompt(chat_id, f"Напиши причину бана для всего склада farm FP '{warehouse_name}'.")
+            return
+
         if state.get("mode") == "awaiting_ban_reason_account":
             comment_text = text.strip()
             account_numbers = list(state.get("return_account_numbers") or [])
@@ -19885,6 +20184,30 @@ def handle_message(msg):
 
             fp_link = state.get("return_fp_link", "")
             ok, message = return_farm_fp_to_ban(fp_link, comment_text)
+            clear_state(user_id)
+            send_farm_fps_menu(chat_id, message)
+            return
+
+        if state.get("mode") == "awaiting_ban_reason_fp_warehouse":
+            comment_text = text.strip()
+            if not comment_text:
+                send_text_input_prompt(chat_id, "Напиши причину бана для всего склада ФП.")
+                return
+
+            warehouse_name = state.get("return_fp_warehouse", "")
+            ok, message = return_fp_warehouse_to_ban(warehouse_name, comment_text, farm=False)
+            clear_state(user_id)
+            send_fps_menu(chat_id, message)
+            return
+
+        if state.get("mode") == "awaiting_ban_reason_farm_fp_warehouse":
+            comment_text = text.strip()
+            if not comment_text:
+                send_text_input_prompt(chat_id, "Напиши причину бана для всего склада farm FP.")
+                return
+
+            warehouse_name = state.get("return_fp_warehouse", "")
+            ok, message = return_fp_warehouse_to_ban(warehouse_name, comment_text, farm=True)
             clear_state(user_id)
             send_farm_fps_menu(chat_id, message)
             return
@@ -20629,7 +20952,7 @@ def handle_callback_query(callback_query):
                 tg_answer_callback_query(callback_id, "Это не ваша кнопка")
                 return jsonify({"ok": True})
 
-            if department_key not in ["crypto", "gambla"]:
+            if department_key not in ["crypto", "gambla", "misc"]:
                 tg_answer_callback_query(callback_id, "Неизвестный отдел")
                 return jsonify({"ok": True})
 
@@ -20653,11 +20976,8 @@ def handle_callback_query(callback_query):
                 tg_answer_callback_query(callback_id, "Это не ваша кнопка")
                 return jsonify({"ok": True})
 
-            if department_key == "crypto":
-                names = CRYPTO_NAMES
-            elif department_key == "gambla":
-                names = GAMBLA_NAMES
-            else:
+            names = get_department_people_by_key(department_key)
+            if not names:
                 tg_answer_callback_query(callback_id, "Неизвестный отдел")
                 return jsonify({"ok": True})
 
