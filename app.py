@@ -5041,6 +5041,8 @@ def return_fp_warehouse_to_ban(warehouse_name, comment_text="", farm=False):
     if not warehouse_name:
         return False, "Название склада не указано."
 
+    current_open_before = get_current_open_farm_fp_warehouse() if farm else get_current_open_fp_warehouse()
+
     target_sheet = SHEET_FARM_FPS if farm else SHEET_FPS
     rows = get_sheet_rows_cached(target_sheet)
     ban_date = datetime.now(MOSCOW_TZ).strftime("%d/%m/%Y")
@@ -5133,6 +5135,32 @@ def return_fp_warehouse_to_ban(warehouse_name, comment_text="", farm=False):
         else:
             king_message = f"Кинг склада '{warehouse_name}' переведён в ban."
 
+    remaining_free = count_free_farm_fp_in_warehouse(warehouse_name) if farm else count_free_fp_in_warehouse(warehouse_name)
+    opened_next_warehouse = ""
+    next_open_message = ""
+
+    should_open_next = (
+        str(current_open_before or "").strip() == warehouse_name
+        and remaining_free == 0
+    )
+
+    if should_open_next:
+        try:
+            if farm:
+                opened_next_warehouse = str(get_next_farm_fp_warehouse_name(warehouse_name) or "").strip()
+                notify_admin_farm_fp_warehouse_finished(warehouse_name)
+            else:
+                opened_next_warehouse = str(get_next_fp_warehouse_name(warehouse_name) or "").strip()
+                notify_admin_fp_warehouse_finished(warehouse_name)
+
+            if opened_next_warehouse:
+                next_open_message = f"Открыт следующий склад: {opened_next_warehouse}"
+            else:
+                next_open_message = "Следующий склад для выдачи не найден."
+        except Exception:
+            logging.exception("notify_admin warehouse finished after warehouse ban crashed")
+            next_open_message = "Не удалось автоматически открыть следующий склад."
+
     invalidate_stats_cache()
 
     prefix = "farm FP" if farm else "ФП"
@@ -5149,6 +5177,9 @@ def return_fp_warehouse_to_ban(warehouse_name, comment_text="", farm=False):
 
     if king_message:
         text_parts.append(king_message)
+
+    if next_open_message:
+        text_parts.append(next_open_message)
 
     return True, "\n".join(text_parts)
 
@@ -5210,6 +5241,27 @@ def count_free_fp_in_warehouse(warehouse_name):
             count += 1
 
     return count
+
+
+def get_current_open_fp_warehouse():
+    rows = get_sheet_rows_cached(SHEET_FPS)
+
+    free_warehouses = set()
+    for row in rows[1:]:
+        if len(row) < 9:
+            row = row + [''] * (9 - len(row))
+
+        warehouse = str(row[4]).strip()
+        status = str(row[5]).strip().lower()
+
+        if warehouse and status == "free":
+            free_warehouses.add(warehouse)
+
+    if not free_warehouses:
+        return None
+
+    ordered = sorted(free_warehouses, key=extract_warehouse_sort_key)
+    return ordered[0]
 
 
 def notify_admin_fp_warehouse_finished(warehouse_name):
