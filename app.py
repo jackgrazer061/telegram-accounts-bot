@@ -10674,11 +10674,16 @@ def mark_issue_row_as_ban(issue_row_index, comment_text=""):
         return
 
     ban_date = datetime.now(MOSCOW_TZ).strftime("%d/%m/%Y")
+    current_row = get_sheet_row_live(SHEET_ISSUES, int(issue_row_index), 9)
+    current_row = ensure_row_len(current_row, 9)
+
+    supplier = str(current_row[5] or "").strip()
+    who_issued = str(current_row[7] or "").strip()
 
     sheet_update_and_refresh(
         SHEET_ISSUES,
         f"E{issue_row_index}:I{issue_row_index}",
-        [[ban_date, "", "ban", "", str(comment_text or "").strip()]]
+        [[ban_date, supplier, "ban", who_issued, str(comment_text or "").strip()]]
     )
 
 def set_issue_comment(issue_row_index, comment_text):
@@ -16782,6 +16787,14 @@ def handle_message(msg):
         if text == BTN_BACK_TO_MENU:
             last_accounts_section = state.get("last_accounts_section", "")
             last_farmers_section = state.get("last_farmers_section", "")
+            current_mode = str(state.get("mode", "") or "").strip()
+
+            # Если это верхнее меню раздела без активного сценария, возвращаем в главное меню.
+            if not current_mode:
+                clear_state(user_id)
+                send_main_menu(chat_id, user_id=user_id)
+                return
+
             clear_state(user_id)
 
             if last_farmers_section == "kings":
