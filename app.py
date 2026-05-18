@@ -2070,17 +2070,20 @@ def send_add_kings_instructions(chat_id):
     tg_send_message(chat_id, text)
 
 def send_add_bms_instructions(chat_id):
-    text = (
-        "Пришли БМы сообщением.\n\n"
-        "Формат:\n"
-        "номер) id БМа; дата покупки; цена; у кого купили\n"
-        "инвайт ссылка на БМ.\n\n"
-        "Пример:\n"
-        "1) 123456789; 15/02/2026; 300; WD\n"
-        "https://business.facebook.com/invitation/?token=......\n\n"
-        "2) 987654321; 18/02/2026; 500; TT\n"
-        "https://business.facebook.com/invitation/?token=......"
-    )
+    text = """Пришли БМы сообщением блоками.
+
+Формат одного блока:
+дата покупки; цена; поставщик
+dанные БМа
+
+Потом пустая строка и следующий БМ.
+
+Пример:
+15/02/2026; 300; WD
+данные бм
+
+18/02/2026; 500; TT
+данные бм"""
     tg_send_message(chat_id, text)
 
 def send_add_fps_instructions(chat_id):
@@ -4030,46 +4033,75 @@ def is_bm_header_line(line):
     return re.match(r'^\d+[.)]\s+', line) is not None
 
 
+def _normalize_bm_header_line(line):
+    return re.sub(r'^\s*\d+[.)]\s*', '', str(line or '')).strip()
+
+
+def _is_bm_header_line(line):
+    header = _normalize_bm_header_line(line)
+    parts = [x.strip() for x in header.split(';')]
+
+    if len(parts) == 4:
+        return bool(parse_date(parts[1])) and parse_price(parts[2]) is not None and bool(parts[3])
+
+    if len(parts) == 3:
+        return bool(parse_date(parts[0])) and parse_price(parts[1]) is not None and bool(parts[2])
+
+    return False
+
+
 def parse_bms_txt(text):
-    lines = text.splitlines()
+    text = str(text or '').strip()
+    if not text:
+        return [], ['Пустой текст.']
+
+    raw_lines = [line.rstrip() for line in text.splitlines()]
 
     blocks = []
-    current_header = None
-    current_data_lines = []
+    current_block = []
 
-    for raw_line in lines:
+    for raw_line in raw_lines:
         line = raw_line.rstrip()
 
         if not line.strip():
-            if current_header is not None:
-                current_data_lines.append("")
+            if current_block:
+                blocks.append("\n".join(current_block).strip())
+                current_block = []
             continue
 
-        if is_bm_header_line(line):
-            if current_header is not None:
-                blocks.append((current_header, current_data_lines))
-
-            current_header = line.strip()
-            current_data_lines = []
+        if _is_bm_header_line(line) and current_block:
+            blocks.append("\n".join(current_block).strip())
+            current_block = [line.strip()]
         else:
-            if current_header is not None:
-                current_data_lines.append(line)
+            current_block.append(line.strip())
 
-    if current_header is not None:
-        blocks.append((current_header, current_data_lines))
+    if current_block:
+        blocks.append("\n".join(current_block).strip())
 
     parsed = []
     errors = []
 
-    for idx, (header, data_lines) in enumerate(blocks, start=1):
-        header_clean = re.sub(r'^\d+[.)]\s*', '', header).strip()
-        parts = [x.strip() for x in header_clean.split(";")]
-
-        if len(parts) != 4:
-            errors.append(f"Блок {idx}: нужно 4 поля: id БМа; дата покупки; цена; у кого купили")
+    for idx, block in enumerate(blocks, start=1):
+        lines = [x.rstrip() for x in block.splitlines() if x.strip()]
+        if len(lines) < 2:
+            errors.append(f"Блок {idx}: нет данных БМа")
             continue
 
-        bm_id, purchase_date_raw, price_raw, supplier = parts
+        header_clean = _normalize_bm_header_line(lines[0])
+        parts = [x.strip() for x in header_clean.split(';')]
+
+        bm_id = ""
+
+        if len(parts) == 4:
+            bm_id, purchase_date_raw, price_raw, supplier = parts
+            if not bm_id:
+                errors.append(f"Блок {idx}: пустой id БМа")
+                continue
+        elif len(parts) == 3:
+            purchase_date_raw, price_raw, supplier = parts
+        else:
+            errors.append(f"Блок {idx}: нужен формат 'дата покупки; цена; поставщик' или старый формат с id БМа")
+            continue
 
         purchase_date = parse_date(purchase_date_raw)
         if not purchase_date:
@@ -4081,16 +4113,11 @@ def parse_bms_txt(text):
             errors.append(f"Блок {idx}: неверная цена '{price_raw}'")
             continue
 
-        if not bm_id:
-            errors.append(f"Блок {idx}: пустой id БМа")
-            continue
-
         if not supplier:
             errors.append(f"Блок {idx}: не указан поставщик")
             continue
 
-        data_text = "\n".join(data_lines).strip()
-
+        data_text = "\n".join(lines[1:]).strip()
         if not data_text:
             errors.append(f"Блок {idx}: нет данных БМа")
             continue
@@ -7660,6 +7687,52 @@ def issue_farm_kings(chat_id, user_id, username, king_names):
     send_farm_kings_menu(chat_id, "Выбери следующее действие:")
 
 
+def extract_bm_id_from_data_text(data_text):
+    text = str(data_text or "")
+    if not text:
+        return ""
+
+    patterns = [
+        r"business_id=(\d{6,25})",
+        r"\b(?:bm|business(?:\s+manager)?|id)\s*[:#-]?\s*(\d{6,25})\b",
+        r"\b(\d{6,25})\b",
+    ]
+
+    for pattern in patterns:
+        m = re.search(pattern, text, re.IGNORECASE)
+        if m:
+            return m.group(1).strip()
+
+    return ""
+
+
+def get_bm_effective_id_from_row(row):
+    row = ensure_row_len(list(row or []), 9)
+    direct_id = str(row[0] or "").strip()
+    if direct_id:
+        return direct_id
+    return extract_bm_id_from_data_text(row[8])
+
+
+def bm_row_matches_query(row, query, allow_data_contains=False):
+    q = str(query or "").strip().lower()
+    if not q:
+        return False
+
+    row = ensure_row_len(list(row or []), 9)
+    direct_id = str(row[0] or "").strip().lower()
+    effective_id = str(get_bm_effective_id_from_row(row) or "").strip().lower()
+    data_text = str(row[8] or "").strip().lower()
+
+    if q == direct_id or q == effective_id:
+        return True
+
+    if allow_data_contains and q in data_text:
+        return True
+
+    return False
+
+
 def count_free_farm_bms():
     rows = get_sheet_rows_cached(SHEET_FARM_BMS)
 
@@ -7680,11 +7753,10 @@ def find_free_farm_bm(exclude_bm_id=None):
     candidates = []
 
     for idx, row in enumerate(rows[1:], start=2):
-        if len(row) < 9:
-            row = row + [''] * (9 - len(row))
+        row = ensure_row_len(row, 9)
 
-        bm_id = str(row[0]).strip()
-        if exclude_bm_id and bm_id == exclude_bm_id:
+        effective_bm_id = get_bm_effective_id_from_row(row)
+        if exclude_bm_id and effective_bm_id == str(exclude_bm_id).strip():
             continue
 
         if str(row[4]).strip().lower() != "free":
@@ -7702,45 +7774,46 @@ def find_free_farm_bm(exclude_bm_id=None):
 
     candidates.sort(key=lambda x: x["purchase_date_obj"])
     item = candidates[0]
-    row = item["row"]
+    row = ensure_row_len(item["row"], 9)
 
     return {
         "row_index": item["row_index"],
-        "bm_id": row[0],
+        "bm_id": get_bm_effective_id_from_row(row),
         "purchase_date": row[1],
         "price": row[2],
         "supplier": row[3],
         "data_text": row[8]
     }
 
-
 def find_farm_bm_in_base(bm_id):
     rows = get_sheet_rows_cached(SHEET_FARM_BMS)
+    target = str(bm_id or "").strip()
+
+    if not target:
+        return None
 
     for idx, row in enumerate(rows[1:], start=2):
-        if len(row) < 9:
-            row = row + [''] * (9 - len(row))
+        row = ensure_row_len(row, 9)
+        if bm_row_matches_query(row, target, allow_data_contains=False):
+            return {"row_index": idx, "row": row}
 
-        if str(row[0]).strip() == str(bm_id).strip():
-            return {
-                "row_index": idx,
-                "row": row
-            }
+    for idx, row in enumerate(rows[1:], start=2):
+        row = ensure_row_len(row, 9)
+        if bm_row_matches_query(row, target, allow_data_contains=True):
+            return {"row_index": idx, "row": row}
 
     return None
-
 
 def build_farm_bm_search_text(bm_id):
     found = find_farm_bm_in_base(bm_id)
     if not found:
         return None
 
-    row = found["row"]
-    if len(row) < 9:
-        row = row + [''] * (9 - len(row))
+    row = ensure_row_len(found["row"], 9)
+    effective_bm_id = get_bm_effective_id_from_row(row) or "не найден"
 
     return (
-        f"ID BM: {row[0]}\n"
+        f"ID BM: {effective_bm_id}\n"
         f"Дата покупки: {row[1] or 'не указана'}\n"
         f"Цена: {row[2] or 'не указана'}\n"
         f"Статус: {row[4] or 'не указан'}\n"
@@ -7755,64 +7828,48 @@ def return_farm_bm_to_ban(bm_id, comment_text=""):
     if not found:
         return False, "BM не найден в База фарм бм."
 
-    row = found["row"]
-    if len(row) < 9:
-        row = row + [''] * (9 - len(row))
+    row = ensure_row_len(found["row"], 10)
+    effective_bm_id = get_bm_effective_id_from_row(row) or str(bm_id).strip()
 
     status = str(row[4]).strip().lower()
-
     if status == "ban":
         return False, "Этот BM уже в ban."
 
-    sheet_update_and_refresh(
-        SHEET_FARM_BMS,
-        f"E{found['row_index']}:F{found['row_index']}",
-        [["ban", "ban"]]
-    )
+    sheet_update_and_refresh(SHEET_FARM_BMS, f"E{found['row_index']}:F{found['row_index']}", [["ban", "ban"]])
 
-    row = ensure_row_len(row, 26)
     sync_id = row[9]
-    
     if sync_id:
         sync_status_to_basebot(BASEBOT_SHEET_FARM_BMS, sync_id, "ban")
 
-    issue_info = find_last_bm_issue_row(bm_id)
+    issue_info = find_last_bm_issue_row(effective_bm_id)
     if issue_info:
         mark_issue_row_as_ban(issue_info["row_index"], comment_text)
 
     invalidate_stats_cache()
-    return True, f"BM '{bm_id}' переведён в ban."
+    return True, f"BM '{effective_bm_id}' переведён в ban."
 
 def return_farm_bm_to_free(bm_id):
     found = find_farm_bm_in_base(bm_id)
     if not found:
         return False, "BM не найден в База фарм бм."
 
-    row = found["row"]
-    if len(row) < 9:
-        row = row + [''] * (9 - len(row))
+    row = ensure_row_len(found["row"], 10)
+    effective_bm_id = get_bm_effective_id_from_row(row) or str(bm_id).strip()
 
     status = str(row[4]).strip().lower()
-
     if status == "free":
         return False, "Этот farm BM уже free."
 
-    sheet_update_and_refresh(
-        SHEET_FARM_BMS,
-        f"E{found['row_index']}:H{found['row_index']}",
-        [["free", "", "", ""]]
-    )
+    sheet_update_and_refresh(SHEET_FARM_BMS, f"E{found['row_index']}:H{found['row_index']}", [["free", "", "", ""]])
 
-    row = ensure_row_len(row, 26)
     sync_id = row[9]
-    
     if sync_id:
         sync_status_to_basebot(BASEBOT_SHEET_FARM_BMS, sync_id, "free")
 
-    delete_last_bm_issue_row(bm_id)
+    delete_last_bm_issue_row(effective_bm_id)
 
     invalidate_stats_cache()
-    return True, f"Farm BM '{bm_id}' возвращён в free."
+    return True, f"Farm BM '{effective_bm_id}' возвращён в free."
 
 def issue_farm_bm(chat_id, user_id, username):
     today = datetime.now(MOSCOW_TZ).strftime("%d/%m/%Y")
@@ -7820,42 +7877,36 @@ def issue_farm_bm(chat_id, user_id, username):
 
     with issue_lock:
         found = find_free_farm_bm()
-
         if not found:
             send_farm_bms_menu(chat_id, "Свободных фарм BMов сейчас нет.")
             return
 
         row_index = found["row_index"]
         rows = get_sheet_rows_cached(SHEET_FARM_BMS)
-
         if row_index - 1 >= len(rows):
             send_farm_bms_menu(chat_id, "BM не найден в таблице.")
             return
 
-        row = rows[row_index - 1]
-        row = ensure_row_len(row, 10)
+        row = ensure_row_len(rows[row_index - 1], 10)
         sync_id = row[9]
 
         if str(row[4]).strip().lower() != "free":
             send_farm_bms_menu(chat_id, "Этот BM уже занят.")
             return
 
+        effective_bm_id = get_bm_effective_id_from_row(row)
+
         sheet_update_and_refresh(
             SHEET_FARM_BMS,
             f"E{row_index}:H{row_index}",
-            [[
-                "taken",
-                "farm",
-                who_took_text,
-                today
-            ]]
+            [["taken", "farm", who_took_text, today]]
         )
 
         if sync_id:
             sync_status_to_basebot(BASEBOT_SHEET_FARM_BMS, sync_id, "taken")
 
         append_issue_row_fixed([
-            row[0],
+            effective_bm_id,
             "БМ",
             row[1],
             normalize_numeric_for_sheet(row[2]),
@@ -7866,12 +7917,7 @@ def issue_farm_bm(chat_id, user_id, username):
 
         invalidate_stats_cache()
 
-    tg_send_message(
-        chat_id,
-        f"Готово ✅\n\n"
-        f"BM выдан.\n"
-        f"🔥ID BM: {row[0]}"
-    )
+    tg_send_message(chat_id, f"Готово ✅\n\nBM выдан.\n🔥ID BM: {effective_bm_id or 'не найден'}")
 
     if len(row) > 8 and row[8]:
         tg_send_message(chat_id, row[8])
@@ -7879,7 +7925,6 @@ def issue_farm_bm(chat_id, user_id, username):
         tg_send_message(chat_id, "Данные BM не найдены.")
 
     send_farm_bms_menu(chat_id, "Выбери следующее действие:")
-
 
 def find_free_farm_fps(count_needed):
     rows = get_sheet_rows_cached(SHEET_FARM_FPS)
@@ -12632,10 +12677,9 @@ def find_free_bm(exclude_bm_id=None):
     candidates = []
 
     for idx, row in enumerate(rows[1:], start=2):
-        if len(row) < 9:
-            row = row + [''] * (9 - len(row))
+        row = ensure_row_len(row, 9)
 
-        bm_id = str(row[0]).strip()
+        effective_bm_id = get_bm_effective_id_from_row(row)
         purchase_date_raw = str(row[1]).strip()
         status = str(row[4]).strip().lower()
         data_text = str(row[8]).strip()
@@ -12643,14 +12687,13 @@ def find_free_bm(exclude_bm_id=None):
         if status != "free":
             continue
 
-        if exclude_bm_id and bm_id == exclude_bm_id:
+        if exclude_bm_id and effective_bm_id == str(exclude_bm_id).strip():
             continue
 
         purchase_date = parse_date(purchase_date_raw) or datetime.max
-
         candidates.append({
             "row_index": idx,
-            "bm_id": bm_id,
+            "bm_id": effective_bm_id,
             "purchase_date_obj": purchase_date,
             "purchase_date": purchase_date_raw,
             "price": row[2],
@@ -12680,32 +12723,30 @@ def count_free_bms():
 
 def find_bm_in_base(bm_id):
     rows = get_sheet_rows_cached(SHEET_BMS)
+    target = str(bm_id or "").strip()
+
+    if not target:
+        return None
 
     for idx, row in enumerate(rows[1:], start=2):
-        if len(row) < 9:
-            row = row + [''] * (9 - len(row))
+        row = ensure_row_len(row, 9)
+        if bm_row_matches_query(row, target, allow_data_contains=False):
+            return {"row_index": idx, "row": row}
 
-        if str(row[0]).strip() == str(bm_id).strip():
-            return {
-                "row_index": idx,
-                "row": row
-            }
+    for idx, row in enumerate(rows[1:], start=2):
+        row = ensure_row_len(row, 9)
+        if bm_row_matches_query(row, target, allow_data_contains=True):
+            return {"row_index": idx, "row": row}
 
     return None
 
-
 def build_bm_search_text(bm_id):
     bm_info = find_bm_in_base(bm_id)
-
     if not bm_info:
         return None
 
-    row = bm_info["row"]
-
-    if len(row) < 9:
-        row = row + [''] * (9 - len(row))
-
-    bm_id = row[0]
+    row = ensure_row_len(bm_info["row"], 9)
+    effective_bm_id = get_bm_effective_id_from_row(row) or "не найден"
     purchase_date = row[1] or "не указана"
     price = row[2] or "не указана"
     status = row[4] or "не указан"
@@ -12714,8 +12755,8 @@ def build_bm_search_text(bm_id):
     issue_date = row[7] or "не указана"
     data_text = row[8] or "нет данных"
 
-    text = (
-        f"ID БМа: {bm_id}\n"
+    return (
+        f"ID БМа: {effective_bm_id}\n"
         f"Дата покупки: {purchase_date}\n"
         f"Цена: {price}\n"
         f"Статус: {status}\n"
@@ -12725,71 +12766,53 @@ def build_bm_search_text(bm_id):
         f"Данные:\n{data_text}"
     )
 
-    return text
-
 def return_bm_to_ban(bm_id, comment_text=""):
     bm_info = find_bm_in_base(bm_id)
     if not bm_info:
         return False, "БМ не найден в База_БМ."
 
-    row = bm_info["row"]
-    if len(row) < 9:
-        row = row + [''] * (9 - len(row))
+    row = ensure_row_len(bm_info["row"], 10)
+    effective_bm_id = get_bm_effective_id_from_row(row) or str(bm_id).strip()
 
     status = str(row[4]).strip().lower()
-
     if status == "ban":
         return False, "Этот БМ уже в ban."
 
-    sheet_update_and_refresh(
-        SHEET_BMS,
-        f"E{bm_info['row_index']}:F{bm_info['row_index']}",
-        [["ban", "ban"]]
-    )
+    sheet_update_and_refresh(SHEET_BMS, f"E{bm_info['row_index']}:F{bm_info['row_index']}", [["ban", "ban"]])
 
-    row = ensure_row_len(row, 26)
     sync_id = row[9]
-    
     if sync_id:
         sync_status_to_basebot(BASEBOT_SHEET_BMS, sync_id, "ban")
 
-    issue_info = find_last_bm_issue_row(bm_id)
+    issue_info = find_last_bm_issue_row(effective_bm_id)
     if issue_info:
         mark_issue_row_as_ban(issue_info["row_index"], comment_text)
 
     invalidate_stats_cache()
-    return True, f"БМ '{bm_id}' переведён в ban."
+    return True, f"БМ '{effective_bm_id}' переведён в ban."
 
 def return_bm_to_free(bm_id):
     bm_info = find_bm_in_base(bm_id)
     if not bm_info:
         return False, "БМ не найден в База_БМ."
 
-    row = bm_info["row"]
-    if len(row) < 9:
-        row = row + [''] * (9 - len(row))
+    row = ensure_row_len(bm_info["row"], 10)
+    effective_bm_id = get_bm_effective_id_from_row(row) or str(bm_id).strip()
 
     status = str(row[4]).strip().lower()
-
     if status == "free":
         return False, "Этот БМ уже free."
 
-    sheet_update_and_refresh(
-        SHEET_BMS,
-        f"E{bm_info['row_index']}:H{bm_info['row_index']}",
-        [["free", "", "", ""]]
-    )
+    sheet_update_and_refresh(SHEET_BMS, f"E{bm_info['row_index']}:H{bm_info['row_index']}", [["free", "", "", ""]])
 
-    row = ensure_row_len(row, 26)
     sync_id = row[9]
-
     if sync_id:
         sync_status_to_basebot(BASEBOT_SHEET_BMS, sync_id, "free")
 
-    delete_last_bm_issue_row(bm_id)
+    delete_last_bm_issue_row(effective_bm_id)
 
     invalidate_stats_cache()
-    return True, f"БМ '{bm_id}' возвращён в free."
+    return True, f"БМ '{effective_bm_id}' возвращён в free."
 
 def show_found_bm(chat_id, user_id, found):
     state = get_state(user_id)
@@ -12797,9 +12820,11 @@ def show_found_bm(chat_id, user_id, found):
     state["bm_row"] = found["row_index"]
     set_state(user_id, state)
 
+    display_bm_id = found.get("bm_id") or "не найден"
+
     text = (
         "🔍Найден БМ:\n\n"
-        f"🔥ID БМа: {found['bm_id']}\n"
+        f"🔥ID БМа: {display_bm_id}\n"
         f"💵цена: {found['price']}\n"
         f"👨‍💻Для кого: {state.get('bm_for_whom', 'не указано')}"
     )
@@ -12810,7 +12835,6 @@ def show_found_bm(chat_id, user_id, found):
     ]
 
     tg_send_message(chat_id, text, keyboard)
-
 
 def confirm_bm_issue(chat_id, user_id, username):
     try:
@@ -12834,77 +12858,47 @@ def confirm_bm_issue(chat_id, user_id, username):
                 return
 
             rows = get_sheet_rows_cached(SHEET_BMS, force=True)
-
             if row_index - 1 >= len(rows):
                 clear_state(user_id)
                 send_bms_menu(chat_id, "БМ не найден в таблице. Начни заново.")
                 return
 
-            row = rows[row_index - 1]
-            row = ensure_row_len(row, 10)
+            row = ensure_row_len(rows[row_index - 1], 10)
             sync_id = row[9]
-
             status = str(row[4]).strip().lower()
 
             if status == "taken":
                 clear_state(user_id)
                 send_bms_menu(chat_id, "Этот БМ уже занят.")
                 return
-
             if status == "ban":
                 clear_state(user_id)
                 send_bms_menu(chat_id, "Этот БМ уже в ban.")
                 return
-
             if status != "free":
                 clear_state(user_id)
                 send_bms_menu(chat_id, "Этот БМ недоступен.")
                 return
 
-            bm_id = row[0]
+            bm_id = get_bm_effective_id_from_row(row)
             purchase_date = row[1]
             price = row[2]
-            supplier = row[3]
             data_text = row[8]
 
             today = datetime.now(MOSCOW_TZ).strftime("%d/%m/%Y")
             who_took_text = f"@{username}" if username else "без username"
 
-            sheet_update_and_refresh(
-                SHEET_BMS,
-                f"E{row_index}:H{row_index}",
-                [[
-                    "taken",
-                    bm_for_whom,
-                    who_took_text,
-                    today
-                ]]
-            )
+            sheet_update_and_refresh(SHEET_BMS, f"E{row_index}:H{row_index}", [["taken", bm_for_whom, who_took_text, today]])
 
             if sync_id:
                 sync_status_to_basebot(BASEBOT_SHEET_BMS, sync_id, "taken")
 
-            append_issue_row_fixed([
-                bm_id,
-                "БМ",
-                purchase_date,
-                normalize_numeric_for_sheet(price),
-                today,
-                supplier,
-                bm_for_whom
-            ])
+            append_issue_row_fixed([bm_id, "БМ", purchase_date, normalize_numeric_for_sheet(price), today, row[3], bm_for_whom])
 
             invalidate_stats_cache()
             clear_state(user_id)
 
-        tg_send_message(
-            chat_id,
-            f"Готово ✅\n\n"
-            f"БМ выдан.\n"
-            f"🔥ID БМа: {bm_id}\n"
-            f"💵Цена: {format_issue_price(price)}\n"
-            f"👨‍💻Для кого: {bm_for_whom}"
-        )
+        tg_send_message(chat_id, f"Готово ✅\n\nБМ выдан.\n🔥ID БМа: {bm_id or 'не найден'}\n💵Цена: {format_issue_price(price)}\n👨‍💻Для кого: {bm_for_whom}")
 
         if data_text:
             tg_send_message(chat_id, data_text)
@@ -12936,12 +12930,9 @@ def issue_bms_bulk(chat_id, user_id, username, count_needed):
         candidates = []
 
         for idx, row in enumerate(rows[1:], start=2):
-            if len(row) < 9:
-                row = row + [''] * (9 - len(row))
-
+            row = ensure_row_len(row, 9)
             if str(row[4]).strip().lower() != "free":
                 continue
-
             purchase_date = parse_date(row[1]) or datetime.max
             candidates.append((idx, purchase_date, row))
 
@@ -12968,56 +12959,27 @@ def issue_bms_bulk(chat_id, user_id, username, count_needed):
                     send_bms_menu(chat_id, "Один из БМов пропал из таблицы. Начни заново.")
                     return
 
-                row = current_rows[row_index - 1]
-                row = ensure_row_len(row, 26)
-                sync_id = row[9]
-
+                row = ensure_row_len(current_rows[row_index - 1], 10)
                 if str(row[4]).strip().lower() != "free":
                     clear_state(user_id)
                     send_bms_menu(chat_id, "Один из БМов уже не свободен. Начни заново.")
                     return
 
             for row_index, _, _ in selected:
-                row = current_rows[row_index - 1]
-                if len(row) < 9:
-                    row = row + [''] * (9 - len(row))
+                row = ensure_row_len(current_rows[row_index - 1], 10)
+                sync_id = row[9]
+                effective_bm_id = get_bm_effective_id_from_row(row)
 
-                sheet_update_raw(
-                    SHEET_BMS,
-                    f"E{row_index}:H{row_index}",
-                    [[
-                        "taken",
-                        bm_for_whom,
-                        who_took_text,
-                        today
-                    ]]
-                )
+                sheet_update_raw(SHEET_BMS, f"E{row_index}:H{row_index}", [["taken", bm_for_whom, who_took_text, today]])
 
-                issue_rows.append([
-                    row[0],
-                    "БМ",
-                    row[1],
-                    normalize_numeric_for_sheet(row[2]),
-                    today,
-                    row[3],
-                    bm_for_whom
-                ])
+                issue_rows.append([effective_bm_id, "БМ", row[1], normalize_numeric_for_sheet(row[2]), today, row[3], bm_for_whom])
 
-                issued_items.append({
-                    "bm_id": row[0],
-                    "price": row[2],
-                    "data_text": row[8] if len(row) > 8 else "",
-                    "sync_id": sync_id
-                })
+                issued_items.append({"bm_id": effective_bm_id, "price": row[2], "data_text": row[8] if len(row) > 8 else "", "sync_id": sync_id})
 
             refresh_sheet_cache(SHEET_BMS)
 
             if issue_rows:
-                sheet_append_rows_and_refresh(
-                    SHEET_ISSUES,
-                    issue_rows,
-                    value_input_option="USER_ENTERED"
-                )
+                sheet_append_rows_and_refresh(SHEET_ISSUES, issue_rows, value_input_option="USER_ENTERED")
 
             for item in issued_items:
                 if item["sync_id"]:
@@ -13028,16 +12990,7 @@ def issue_bms_bulk(chat_id, user_id, username, count_needed):
         clear_state(user_id)
 
         for item in issued_items:
-            tg_send_message(
-                chat_id,
-                f"Готово ✅\n\n"
-                f"БМ выдан.\n"
-                f"ID БМа: {item['bm_id']}\n"
-                f"Цена: {format_issue_price(item.get('price', ''))}\n"
-                f"Для кого: {bm_for_whom}\n"
-                f"Кто взял в боте: {who_took_text}"
-            )
-
+            tg_send_message(chat_id, f"Готово ✅\n\nБМ выдан.\nID БМа: {item['bm_id'] or 'не найден'}\nЦена: {format_issue_price(item.get('price', ''))}\nДля кого: {bm_for_whom}\nКто взял в боте: {who_took_text}")
             if item["data_text"]:
                 tg_send_message(chat_id, item["data_text"])
             else:
@@ -13049,7 +13002,7 @@ def issue_bms_bulk(chat_id, user_id, username, count_needed):
         logging.exception("issue_bms_bulk crashed")
         tg_send_message(chat_id, "Ошибка массовой выдачи БМов. Попробуй ещё раз.")
         send_accounts_main_menu(chat_id, "Меню Accounts:")
-    
+
 def show_found_king(chat_id, user_id, found):
     state = get_state(user_id)
 
