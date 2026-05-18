@@ -5002,6 +5002,40 @@ def return_fp_to_free(fp_link):
     invalidate_stats_cache()
     return True, "ФП возвращено в free."
 
+FP_WAREHOUSE_LINKED_KING_ACCOUNT_RECIPIENTS = {"team"} | {str(x).strip().lower() for x in OTHER_NAMES}
+FP_WAREHOUSE_LINKED_KING_FARM_RECIPIENTS = {"farm"}
+
+
+def mark_fp_warehouse_linked_king_issue_rows_as_ban(warehouse_name, comment_text="", farm=False):
+    target_name = str(warehouse_name or "").strip().lower()
+    if not target_name:
+        return 0
+
+    recipients = FP_WAREHOUSE_LINKED_KING_FARM_RECIPIENTS if farm else FP_WAREHOUSE_LINKED_KING_ACCOUNT_RECIPIENTS
+    rows = get_sheet_rows_cached(SHEET_ISSUES, force=True)
+    marked = 0
+
+    for idx, raw_row in enumerate(rows[1:], start=2):
+        row = list(raw_row)
+        if len(row) < 9:
+            row += [''] * (9 - len(row))
+
+        if normalize_ban_storm_issue_type(row[1]) != "KING":
+            continue
+
+        if str(row[0] or "").strip().lower() != target_name:
+            continue
+
+        issue_for_whom = str(row[6] or "").strip().lower()
+        if issue_for_whom and issue_for_whom not in recipients:
+            continue
+
+        mark_issue_row_as_ban(idx, comment_text)
+        marked += 1
+
+    return marked
+
+
 def return_fp_warehouse_to_ban(warehouse_name, comment_text="", farm=False):
     warehouse_name = str(warehouse_name or "").strip()
     if not warehouse_name:
@@ -5091,6 +5125,13 @@ def return_fp_warehouse_to_ban(warehouse_name, comment_text="", farm=False):
             king_message = f"Кинг склада '{warehouse_name}' переведён в ban."
         elif "не найден" not in str(king_result).lower():
             king_message = str(king_result)
+
+    linked_issue_rows_marked = mark_fp_warehouse_linked_king_issue_rows_as_ban(warehouse_name, comment_text, farm=farm)
+    if linked_issue_rows_marked and not king_message:
+        if farm:
+            king_message = f"Farm king склада '{warehouse_name}' переведён в ban."
+        else:
+            king_message = f"Кинг склада '{warehouse_name}' переведён в ban."
 
     invalidate_stats_cache()
 
@@ -10059,6 +10100,104 @@ def build_manager_stats_text(username):
     return "\n".join(text_parts)
 
 
+def _normalize_issued_to_buyer_date_key(value):
+    dt = parse_sheet_date(value)
+    if dt:
+        return dt.strftime("%d/%m/%Y")
+    return str(value or "").strip()
+
+
+def _normalize_issued_to_buyer_key(value):
+    return str(value or "").strip().lower()
+
+
+def build_issued_to_buyer_manager_indexes():
+    indexes = {
+        "РК": {},
+        "KING": {},
+        "FP": {},
+        "PIXEL": {},
+    }
+
+    accounts_rows = get_sheet_rows_cached(SHEET_ACCOUNTS)
+    for raw_row in accounts_rows[1:]:
+        row = list(raw_row)
+        if len(row) < 12:
+            row += [''] * (12 - len(row))
+
+        key = (
+            _normalize_issued_to_buyer_key(row[0]),
+            normalize_person_name(row[9]).strip().lower(),
+            _normalize_issued_to_buyer_date_key(row[10]),
+        )
+        who_took = str(row[11] or "").strip()
+        if all(key) and who_took:
+            indexes["РК"][key] = who_took
+
+    for sheet_name in [SHEET_KINGS, SHEET_CRYPTO_KINGS]:
+        rows = get_sheet_rows_cached(sheet_name)
+        for raw_row in rows[1:]:
+            row = list(raw_row)
+            if len(row) < 12:
+                row += [''] * (12 - len(row))
+
+            key = (
+                _normalize_issued_to_buyer_key(row[0]),
+                normalize_person_name(row[5]).strip().lower(),
+                _normalize_issued_to_buyer_date_key(row[6]),
+            )
+            who_took = str(row[8] or "").strip()
+            if all(key) and who_took:
+                indexes["KING"][key] = who_took
+
+    fps_rows = get_sheet_rows_cached(SHEET_FPS)
+    for raw_row in fps_rows[1:]:
+        row = list(raw_row)
+        if len(row) < 9:
+            row += [''] * (9 - len(row))
+
+        key = (
+            _normalize_issued_to_buyer_key(row[0]),
+            normalize_person_name(row[6]).strip().lower(),
+            _normalize_issued_to_buyer_date_key(row[8]),
+        )
+        who_took = str(row[7] or "").strip()
+        if all(key) and who_took:
+            indexes["FP"][key] = who_took
+
+    pixels_rows = get_sheet_rows_cached(SHEET_PIXELS)
+    for raw_row in pixels_rows[1:]:
+        row = list(raw_row)
+        if len(row) < 8:
+            row += [''] * (8 - len(row))
+
+        data_text = row[7] if len(row) > 7 else ""
+        pixel_name = extract_pixel_name_from_data(data_text)
+        pixel_id = extract_pixel_id_from_data(data_text)
+        issue_pixel_value = pixel_id or pixel_name
+
+        key = (
+            _normalize_issued_to_buyer_key(issue_pixel_value),
+            normalize_person_name(row[4]).strip().lower(),
+            _normalize_issued_to_buyer_date_key(row[5]),
+        )
+        who_took = str(row[6] or "").strip()
+        if all(key) and who_took:
+            indexes["PIXEL"][key] = who_took
+
+    return indexes
+
+
+def get_issue_transfer_manager_from_indexes(indexes, issue_type, item_name, buyer_name, transfer_text):
+    issue_key = normalize_ban_storm_issue_type(issue_type)
+    key = (
+        _normalize_issued_to_buyer_key(item_name),
+        normalize_person_name(buyer_name).strip().lower(),
+        _normalize_issued_to_buyer_date_key(transfer_text),
+    )
+    return str((indexes.get(issue_key) or {}).get(key) or "").strip()
+
+
 BUYER_ISSUED_TYPE_ORDER = ["KING", "РК", "FP", "PIXEL"]
 BUYER_ISSUED_TYPE_META = {
     "KING": {"icon": "👑", "title": "Кинги"},
@@ -10077,6 +10216,7 @@ def build_issued_to_buyer_report_text(buyer_name):
 
     rows = get_sheet_rows_cached(SHEET_ISSUES)
     grouped = {issue_type: [] for issue_type in BUYER_ISSUED_TYPE_ORDER}
+    manager_indexes = build_issued_to_buyer_manager_indexes()
 
     for raw_row in rows[1:]:
         row = list(raw_row)
@@ -10093,13 +10233,21 @@ def build_issued_to_buyer_report_text(buyer_name):
 
         transfer_text = str(row[4] or '').strip()
         transfer_dt = parse_sheet_date(transfer_text) or datetime.min
+        item_name = str(row[0] or "").strip() or "без названия"
+        manager_name = get_issue_transfer_manager_from_indexes(
+            manager_indexes,
+            issue_type,
+            item_name,
+            buyer_name,
+            transfer_text,
+        ) or "не указан"
 
         grouped[issue_type].append({
-            "name": str(row[0] or "").strip() or "без названия",
+            "name": item_name,
             "price": row[3] if len(row) > 3 else "",
             "transfer_text": transfer_text or "не указана",
             "transfer_dt": transfer_dt,
-            "supplier": str(row[5] or "").strip() or "не указан",
+            "manager": manager_name,
         })
 
     total_items = sum(len(items) for items in grouped.values())
@@ -10124,7 +10272,7 @@ def build_issued_to_buyer_report_text(buyer_name):
             lines.append(f"{idx}. {item['name']}")
             lines.append(f"   💵 Цена: {format_issue_price(item['price'])}")
             lines.append(f"   📅 Дата передачи: {item['transfer_text']}")
-            lines.append(f"   👤 Кто передал: {item['supplier']}")
+            lines.append(f"   👤 Кто передал: {item['manager']}")
 
         lines.append("")
 
