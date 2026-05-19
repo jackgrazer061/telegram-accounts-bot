@@ -1940,8 +1940,7 @@ def send_main_menu(chat_id, text="Главное меню:", user_id=None):
         keyboard.append([{"text": MENU_ACCOUNTS}, {"text": MENU_FARMERS}])
         keyboard.append([{"text": MENU_STATS}])
 
-        if can_see_misc(user_id):
-            keyboard.append([{"text": MENU_MISC}])
+        keyboard.append([{"text": MENU_MISC}])
 
         keyboard.append([{"text": MENU_ADMIN}])
         keyboard.append([{"text": MENU_CANCEL}])
@@ -1950,8 +1949,7 @@ def send_main_menu(chat_id, text="Главное меню:", user_id=None):
         keyboard.append([{"text": MENU_ACCOUNTS}])
         keyboard.append([{"text": MENU_STATS}])
 
-        if can_see_misc(user_id):
-            keyboard.append([{"text": MENU_MISC}])
+        keyboard.append([{"text": MENU_MISC}])
 
         keyboard.append([{"text": MENU_CANCEL}])
 
@@ -1959,8 +1957,7 @@ def send_main_menu(chat_id, text="Главное меню:", user_id=None):
         keyboard.append([{"text": MENU_FARMERS}])
         keyboard.append([{"text": MENU_STATS}])
 
-        if can_see_misc(user_id):
-            keyboard.append([{"text": MENU_MISC}])
+        keyboard.append([{"text": MENU_MISC}])
 
         keyboard.append([{"text": MENU_CANCEL}])
 
@@ -2101,7 +2098,6 @@ def send_admin_menu(chat_id, text="Меню Admin:", user_id=None):
     if user_id is not None and is_admin_farm(user_id):
         keyboard = [
             [{"text": ADMIN_FARMERS}, {"text": ADMIN_ALL_STATS}],
-            [{"text": ADMIN_CHECK_BANS}],
             [{"text": BTN_BACK_FROM_ADMIN}]
         ]
     else:
@@ -2109,7 +2105,6 @@ def send_admin_menu(chat_id, text="Меню Admin:", user_id=None):
             [{"text": ADMIN_BACKUP}, {"text": ADMIN_UPDATE_5M}],
             [{"text": ADMIN_ACCOUNTANTS}, {"text": ADMIN_FARMERS}],
             [{"text": ADMIN_ALL_STATS}, {"text": ADMIN_BOT_CHECK}],
-            [{"text": ADMIN_CHECK_BANS}],
             [{"text": ADMIN_SEND_STICKER}],
             [{"text": ADMIN_POLL}],
             [{"text": ADMIN_MESSAGE}],
@@ -2118,11 +2113,15 @@ def send_admin_menu(chat_id, text="Меню Admin:", user_id=None):
 
     tg_send_message(chat_id, text, keyboard)
 
-def send_misc_menu(chat_id, text="Меню Прочее:"):
+def send_misc_menu(chat_id, text="Меню Прочее:", user_id=None):
     keyboard = [
-        [{"text": ADMIN_ADD_STICKERS}],
-        [{"text": BTN_BACK_FROM_MISC}]
+        [{"text": ADMIN_CHECK_BANS}],
     ]
+
+    if user_id is not None and can_see_misc(user_id):
+        keyboard.append([{"text": ADMIN_ADD_STICKERS}])
+
+    keyboard.append([{"text": BTN_BACK_FROM_MISC}])
     tg_send_message(chat_id, text, keyboard)
 
 def send_admin_farmers_menu(chat_id, text="Admin / Фармеры:"):
@@ -16144,7 +16143,7 @@ def handle_message(msg):
             FARM_MENU_KING, FARM_MENU_BM, FARM_MENU_FP,
             BTN_BACK_TO_FARMERS, BTN_BACK_FROM_ADMIN, BTN_BACK_FROM_ACCOUNTANTS,
             BTN_BACK_FROM_ADMIN_FARMERS, MENU_CANCEL,
-            MENU_MISC, BTN_BACK_FROM_MISC, ADMIN_ADD_STICKERS
+            MENU_MISC, BTN_BACK_FROM_MISC, ADMIN_ADD_STICKERS, ADMIN_CHECK_BANS
         }
 
         now = time.time()
@@ -16573,12 +16572,12 @@ def handle_message(msg):
             return
 
         if text == MENU_MISC:
-            if not can_see_misc(user_id):
+            if not has_access(user_id):
                 send_main_menu(chat_id, "Главное меню:", user_id=user_id)
                 return
 
             clear_state(user_id)
-            send_misc_menu(chat_id, "Меню Прочее:")
+            send_misc_menu(chat_id, "Меню Прочее:", user_id=user_id)
             return
 
         if text == ADMIN_ADD_STICKERS:
@@ -16736,12 +16735,12 @@ def handle_message(msg):
             return
 
         if text == ADMIN_CHECK_BANS:
-            if not is_admin(user_id):
+            if not has_access(user_id):
                 tg_send_message(chat_id, "У вас нет доступа.")
                 return
 
             tg_send_message(chat_id, build_combined_ban_storm_report_text(force=True))
-            send_admin_menu(chat_id, "Меню Admin:", user_id=user_id)
+            send_misc_menu(chat_id, "Меню Прочее:", user_id=user_id)
             return
 
         if text == ADMIN_BOT_CHECK:
