@@ -2117,12 +2117,8 @@ def send_admin_menu(chat_id, text="Меню Admin:", user_id=None):
 def send_misc_menu(chat_id, text="Меню Прочее:", user_id=None):
     keyboard = [
         [{"text": ADMIN_CHECK_BANS}],
+        [{"text": BTN_BACK_FROM_MISC}],
     ]
-
-    if user_id is not None and can_see_misc(user_id):
-        keyboard.append([{"text": ADMIN_ADD_STICKERS}])
-
-    keyboard.append([{"text": BTN_BACK_FROM_MISC}])
     tg_send_message(chat_id, text, keyboard)
 
 def send_admin_farmers_menu(chat_id, text="Admin / Фармеры:"):
@@ -9904,6 +9900,7 @@ def compute_ban_storm_stats(period_type="week", force=False, now=None):
 
     total_period_bans = 0
     total_effective_base = 0
+    total_period_ban_sum = 0.0
 
     for issue_type in BAN_STORM_TYPES_ORDER:
         period_total_rows = int(stats[issue_type]["period_total_rows"] or 0)
@@ -9916,6 +9913,7 @@ def compute_ban_storm_stats(period_type="week", force=False, now=None):
 
         total_period_bans += period_ban_rows
         total_effective_base += effective_total
+        total_period_ban_sum += float(stats[issue_type].get("period_ban_sum", 0.0) or 0.0)
 
     overall_risk_percent = int(round((total_period_bans / total_effective_base) * 100)) if total_effective_base > 0 else 0
 
@@ -9927,6 +9925,7 @@ def compute_ban_storm_stats(period_type="week", force=False, now=None):
         "overall_risk_percent": overall_risk_percent,
         "total_period_bans": total_period_bans,
         "total_effective_base": total_effective_base,
+        "total_period_ban_sum": total_period_ban_sum,
     }
 
 def build_ban_storm_report_text(period_type="week", now=None, force=False, title_override=None):
@@ -9953,7 +9952,14 @@ def build_ban_storm_report_text(period_type="week", now=None, force=False, title
         )
         lines.append("")
 
-    lines.append(f"❓общий шанс шторма - {int(report.get('overall_risk_percent', 0) or 0)}%")
+    overall_risk = int(report.get('overall_risk_percent', 0) or 0)
+    total_sum = format_ban_storm_amount(report.get('total_period_ban_sum', 0.0) or 0.0)
+
+    lines.append(f"❓общий шанс шторма - {overall_risk}%")
+    if period_type == "month":
+        lines.append(f"💰общая сумма за месяц - {total_sum}")
+    else:
+        lines.append(f"💰общая сумма за неделю - {total_sum}")
     return "\n".join(lines).strip()
 
 def build_combined_ban_storm_report_text(now=None, force=False):
