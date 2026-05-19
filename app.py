@@ -119,6 +119,7 @@ ACCOUNTS_USERS = {
     8035275476: "SeanConneryManager",
     8435159019: "Robert_Pattinson_Account_Manager",
     7045494795: "TessaYang_Accmanager",
+    8309499971: "petedavidson_accountmanager",
 }
 
 FARMERS_USERS = {
@@ -246,6 +247,14 @@ LIMIT_OPTIONS = ['-250', '250-500', '500-1200', '1200-1500', 'unlim']
 THRESHOLD_OPTIONS = ['0-49', '50-99', '100-199', '200-499', '500+']
 GMT_OPTIONS = ['-10', '-9', '-8', '-7', '-6', '-5', '-4', '-3', '-2', '-1', '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', '10']
 ACCOUNT_CURRENCY_COL = 12  # M колонка в База_личек
+REQUEST_COL_NAME = "Заявка"
+ISSUES_REQUEST_COL_NUM = 10
+KINGS_REQUEST_COL_NUM = 14
+BMS_REQUEST_COL_NUM = 11
+FPS_REQUEST_COL_NUM = 10
+PIXELS_REQUEST_COL_NUM = 10
+ACCOUNTS_REQUEST_COL_NUM = 15
+
 
 MENU_ACCOUNTS = 'Accounts'
 MENU_PIXELS = 'Пиксели'
@@ -719,43 +728,129 @@ def sheet_update_and_refresh(sheet_name, cell_range, values):
     google_write_with_retry(_do)
     mark_sheet_cache_stale(sheet_name)
 
-def append_issue_row_fixed(row):
-    rows = get_sheet_rows_cached(SHEET_ISSUES, force=True)
 
-    next_row = len(rows) + 1
+def col_to_letter(col_num):
+    result = ""
+    while col_num > 0:
+        col_num, rem = divmod(col_num - 1, 26)
+        result = chr(65 + rem) + result
+    return result
+
+
+def detect_sheet_header_row_index(rows, hints=None):
+    hints = [str(x).strip().lower() for x in (hints or []) if str(x).strip()]
+    best_idx = None
+    best_score = -1
+
+    for idx, row in enumerate((rows or [])[:5], start=1):
+        values = [str(x).strip().lower() for x in (row or []) if str(x).strip()]
+        if not values:
+            continue
+
+        score = sum(1 for h in hints if h in values) if hints else 1
+        if score > best_score:
+            best_score = score
+            best_idx = idx
+
+    return best_idx or 1
+
+
+def ensure_sheet_request_column(sheet_name, target_col_num, header_hints=None):
+    def _do():
+        with google_lock:
+            sheet = get_sheet(sheet_name)
+            rows = sheet.get_all_values()
+            header_row_idx = detect_sheet_header_row_index(rows, header_hints)
+            header = rows[header_row_idx - 1] if header_row_idx - 1 < len(rows) else []
+
+            for idx, value in enumerate(header, start=1):
+                if str(value).strip().lower() == REQUEST_COL_NAME.lower():
+                    return idx
+
+            chosen_col = target_col_num
+            existing = str(header[chosen_col - 1]).strip() if len(header) >= chosen_col else ""
+            if existing and existing.lower() != REQUEST_COL_NAME.lower():
+                last_nonempty = 0
+                for i, value in enumerate(header, start=1):
+                    if str(value).strip():
+                        last_nonempty = i
+                chosen_col = max(last_nonempty + 1, chosen_col)
+
+            sheet.update(f"{col_to_letter(chosen_col)}{header_row_idx}", [[REQUEST_COL_NAME]])
+            return chosen_col
+
+    col_num = google_write_with_retry(_do)
+    mark_sheet_cache_stale(sheet_name)
+    return col_num
+
+
+def ensure_request_columns_ready():
+    ensure_sheet_request_column(SHEET_ISSUES, ISSUES_REQUEST_COL_NUM, header_hints=["тип", "комментарии"])
+    ensure_sheet_request_column(SHEET_ACCOUNTS, ACCOUNTS_REQUEST_COL_NUM)
+    ensure_sheet_request_column(SHEET_KINGS, KINGS_REQUEST_COL_NUM)
+    ensure_sheet_request_column(SHEET_CRYPTO_KINGS, KINGS_REQUEST_COL_NUM)
+    ensure_sheet_request_column(SHEET_FARM_KINGS, KINGS_REQUEST_COL_NUM)
+    ensure_sheet_request_column(SHEET_BMS, BMS_REQUEST_COL_NUM)
+    ensure_sheet_request_column(SHEET_FARM_BMS, BMS_REQUEST_COL_NUM)
+    ensure_sheet_request_column(SHEET_FPS, FPS_REQUEST_COL_NUM)
+    ensure_sheet_request_column(SHEET_FARM_FPS, FPS_REQUEST_COL_NUM)
+    ensure_sheet_request_column(SHEET_PIXELS, PIXELS_REQUEST_COL_NUM)
+
+
+def normalize_issue_row_for_append(row):
     values = list(row or [])
-
     if len(values) < 7:
-        values = values + [""] * (7 - len(values))
+        values += [""] * (7 - len(values))
+    if len(values) < 10:
+        values += [""] * (10 - len(values))
     else:
-        values = values[:7]
+        values = values[:10]
+    return values
 
-    sheet_update_and_refresh(
-        SHEET_ISSUES,
-        f"A{next_row}:G{next_row}",
-        [values]
-    )
+
+def get_request_value_by_index(row, index_0_based):
+    row = list(row or [])
+    if index_0_based < 0 or len(row) <= index_0_based:
+        return ""
+    return str(row[index_0_based] or "").strip()
+
+
+def get_request_from_accounts_row(row):
+    return get_request_value_by_index(row, ACCOUNTS_REQUEST_COL_NUM - 1)
+
+
+def get_request_from_king_row(row):
+    return get_request_value_by_index(row, KINGS_REQUEST_COL_NUM - 1)
+
+
+def get_request_from_bm_row(row):
+    return get_request_value_by_index(row, BMS_REQUEST_COL_NUM - 1)
+
+
+def get_request_from_fp_row(row):
+    return get_request_value_by_index(row, FPS_REQUEST_COL_NUM - 1)
+
+
+def get_request_from_pixel_row(row):
+    return get_request_value_by_index(row, PIXELS_REQUEST_COL_NUM - 1)
+
+
+def append_issue_row_fixed(row):
+    ensure_sheet_request_column(SHEET_ISSUES, ISSUES_REQUEST_COL_NUM, header_hints=["тип", "комментарии"])
+    rows = get_sheet_rows_cached(SHEET_ISSUES, force=True)
+    next_row = len(rows) + 1
+    values = normalize_issue_row_for_append(row)
+    sheet_update_and_refresh(SHEET_ISSUES, f"A{next_row}:J{next_row}", [values])
 
 def append_issue_rows_fixed(rows_to_add):
-    rows = [list(x or [])[:7] for x in (rows_to_add or []) if x]
+    rows = [normalize_issue_row_for_append(x) for x in (rows_to_add or []) if x]
     if not rows:
         return
-
-    normalized = []
-    for row in rows:
-        if len(row) < 7:
-            row = row + [""] * (7 - len(row))
-        normalized.append(row[:7])
-
+    ensure_sheet_request_column(SHEET_ISSUES, ISSUES_REQUEST_COL_NUM, header_hints=["тип", "комментарии"])
     current_rows = get_sheet_rows_cached(SHEET_ISSUES, force=True)
     start_row = len(current_rows) + 1
-    end_row = start_row + len(normalized) - 1
-
-    sheet_update_and_refresh(
-        SHEET_ISSUES,
-        f"A{start_row}:G{end_row}",
-        normalized
-    )
+    end_row = start_row + len(rows) - 1
+    sheet_update_and_refresh(SHEET_ISSUES, f"A{start_row}:J{end_row}", rows)
 
 def sheet_update_raw(sheet_name, cell_range, values):
     def _do():
@@ -2048,69 +2143,76 @@ def send_admin_accountants_menu(chat_id, text="Меню Акаунтеры:"):
     tg_send_message(chat_id, text, keyboard)
 
 def send_add_kings_instructions(chat_id):
-    text = (
-        "Пришли Кинги txt файлом.\n\n"
-        "Формат:\n"
-        "номер) дата покупки; цена; поставщик; гео\n"
-        "данные кинга.\n\n"
-        "Пример:\n"
-        "1) 15/02/2026; 300; WD; usa\n"
-        "login - example1\n"
-        "password - 12345\n"
-        "cookie - abcdef\n\n"
-        "2) 16/02/2026; 500; WD; uk\n"
-        "login - example2\n"
-        "password - 67890\n"
-        "cookie - ghijkl\n\n"
-        "3) 17/02/2026; 250; WD; italy\n"
-        "login - example3\n"
-        "password - 11111\n"
-        "cookie - zzzzzz"
-    )
+    text = """Пришли Кинги txt файлом.
+
+Формат:
+номер) дата покупки; цена; поставщик; гео; номер заявки
+данные кинга.
+
+Пример:
+1) 15/02/2026; 300; WD; usa; 2870
+login - example1
+password - 12345
+cookie - abcdef
+
+2) 16/02/2026; 500; WD; uk; 2871
+login - example2
+password - 67890
+cookie - ghijkl
+
+Номер заявки — это заявка из PaymentsRMBot, где вы оплатили этот расходник."""
     tg_send_message(chat_id, text)
 
 def send_add_bms_instructions(chat_id):
     text = """Пришли БМы сообщением блоками.
 
 Формат одного блока:
-дата покупки; цена; поставщик
-dанные БМа
+дата покупки; цена; поставщик; номер заявки
+данные БМа
 
 Потом пустая строка и следующий БМ.
 
 Пример:
-15/02/2026; 300; WD
+15/02/2026; 300; WD; 2870
 данные бм
 
-18/02/2026; 500; TT
-данные бм"""
+18/02/2026; 500; TT; 2871
+данные бм
+
+Номер заявки — это заявка из PaymentsRMBot, где вы оплатили этот расходник."""
     tg_send_message(chat_id, text)
 
 def send_add_fps_instructions(chat_id):
-    text = (
-        "Пришли ФП сообщением, каждая с новой строки.\n\n"
-        "Формат:\n"
-        "ссылка; дата покупки; цена; у кого купили; склад\n\n"
-        "Пример:\n"
-        "https://facebook.com/profile.php?id=123; 15/02/2026; 300; WD; sklad1\n"
-        "https://facebook.com/profile.php?id=456; 16/02/2026; 500; TT; sklad2"
-    )
+    text = """Пришли ФП сообщением, каждая с новой строки.
+
+Формат:
+ссылка; дата покупки; цена; у кого купили; склад; номер заявки
+
+Пример:
+https://facebook.com/profile.php?id=123; 15/02/2026; 300; WD; sklad1; 2870
+https://facebook.com/profile.php?id=456; 16/02/2026; 500; TT; sklad2; 2871
+
+Номер заявки — это заявка из PaymentsRMBot, где вы оплатили этот расходник."""
     tg_send_message(chat_id, text)
 
 def send_add_pixels_instructions(chat_id):
-    text = (
-        "Пришли Пиксели сообщением блоками.\n\n"
-        "Формат одного блока:\n"
-        "дата покупки; цена; поставщик\n"
-        "данные пикселя\n\n"
-        "Потом пустая строка и следующий пиксель.\n\n"
-        "Пример:\n"
-        "15/02/2026; 300; WD\n"
-        "pixel data 1 line 1\n"
-        "pixel data 1 line 2\n\n"
-        "16/02/2026; 500; TT\n"
-        "pixel data 2"
-    )
+    text = """Пришли Пиксели сообщением блоками.
+
+Формат одного блока:
+дата покупки; цена; поставщик; номер заявки
+данные пикселя
+
+Потом пустая строка и следующий пиксель.
+
+Пример:
+15/02/2026; 300; WD; 2870
+pixel data 1 line 1
+pixel data 1 line 2
+
+16/02/2026; 500; TT; 2871
+pixel data 2
+
+Номер заявки — это заявка из PaymentsRMBot, где вы оплатили этот расходник."""
     tg_send_message(chat_id, text)
 
 def send_octo_king_data_instructions(chat_id, warehouse_name=""):
@@ -3970,7 +4072,6 @@ def parse_kings_txt(text):
 
     for raw_line in lines:
         line = clean_text_for_parsing(raw_line).rstrip()
-
         if not line.strip():
             if current_header is not None:
                 current_data_lines.append("")
@@ -3979,7 +4080,6 @@ def parse_kings_txt(text):
         if re.match(r'^\d+[.)]\s+', line.strip()):
             if current_header is not None:
                 blocks.append((current_header, current_data_lines))
-
             current_header = line.strip()
             current_data_lines = []
         else:
@@ -3996,11 +4096,15 @@ def parse_kings_txt(text):
         header_clean = re.sub(r'^\d+[.)]\s*', '', header).strip()
         parts = [x.strip() for x in header_clean.split(';')]
 
-        if len(parts) != 4:
-            errors.append(f"Блок {idx}: нужно 4 поля: дата; цена; поставщик; гео")
+        if len(parts) not in [4, 5]:
+            errors.append(f"Блок {idx}: нужно 5 полей: дата; цена; поставщик; гео; номер заявки")
             continue
 
-        purchase_date_raw, price_raw, supplier, geo = parts
+        if len(parts) == 4:
+            purchase_date_raw, price_raw, supplier, geo = parts
+            request_number = ""
+        else:
+            purchase_date_raw, price_raw, supplier, geo, request_number = parts
 
         purchase_date = parse_date(purchase_date_raw)
         if not purchase_date:
@@ -4013,7 +4117,6 @@ def parse_kings_txt(text):
             continue
 
         data_text = "\n".join(data_lines).strip()
-
         if not data_text:
             errors.append(f"Блок {idx}: нет данных кинга")
             continue
@@ -4023,6 +4126,7 @@ def parse_kings_txt(text):
             "price": price,
             "supplier": supplier,
             "geo": geo,
+            "request_number": str(request_number or "").strip(),
             "data_text": data_text
         })
 
@@ -4041,14 +4145,18 @@ def _is_bm_header_line(line):
     header = _normalize_bm_header_line(line)
     parts = [x.strip() for x in header.split(';')]
 
+    if len(parts) == 5:
+        return bool(parts[0]) and bool(parse_date(parts[1])) and parse_price(parts[2]) is not None and bool(parts[3])
+
     if len(parts) == 4:
-        return bool(parse_date(parts[1])) and parse_price(parts[2]) is not None and bool(parts[3])
+        if parse_date(parts[0]):
+            return parse_price(parts[1]) is not None and bool(parts[2])
+        return bool(parts[0]) and bool(parse_date(parts[1])) and parse_price(parts[2]) is not None and bool(parts[3])
 
     if len(parts) == 3:
         return bool(parse_date(parts[0])) and parse_price(parts[1]) is not None and bool(parts[2])
 
     return False
-
 
 def parse_bms_txt(text):
     text = str(text or '').strip()
@@ -4056,13 +4164,11 @@ def parse_bms_txt(text):
         return [], ['Пустой текст.']
 
     raw_lines = [line.rstrip() for line in text.splitlines()]
-
     blocks = []
     current_block = []
 
     for raw_line in raw_lines:
         line = raw_line.rstrip()
-
         if not line.strip():
             if current_block:
                 blocks.append("\n".join(current_block).strip())
@@ -4091,16 +4197,25 @@ def parse_bms_txt(text):
         parts = [x.strip() for x in header_clean.split(';')]
 
         bm_id = ""
+        request_number = ""
 
-        if len(parts) == 4:
-            bm_id, purchase_date_raw, price_raw, supplier = parts
+        if len(parts) == 5:
+            bm_id, purchase_date_raw, price_raw, supplier, request_number = parts
             if not bm_id:
                 errors.append(f"Блок {idx}: пустой id БМа")
                 continue
+        elif len(parts) == 4:
+            if parse_date(parts[0]):
+                purchase_date_raw, price_raw, supplier, request_number = parts
+            else:
+                bm_id, purchase_date_raw, price_raw, supplier = parts
+                if not bm_id:
+                    errors.append(f"Блок {idx}: пустой id БМа")
+                    continue
         elif len(parts) == 3:
             purchase_date_raw, price_raw, supplier = parts
         else:
-            errors.append(f"Блок {idx}: нужен формат 'дата покупки; цена; поставщик' или старый формат с id БМа")
+            errors.append(f"Блок {idx}: нужен формат 'дата покупки; цена; поставщик; номер заявки' или старый формат с id БМа")
             continue
 
         purchase_date = parse_date(purchase_date_raw)
@@ -4127,6 +4242,7 @@ def parse_bms_txt(text):
             "purchase_date": purchase_date.strftime("%d/%m/%Y"),
             "price": price,
             "supplier": supplier,
+            "request_number": str(request_number or "").strip(),
             "data_text": data_text
         })
 
@@ -4160,6 +4276,7 @@ def get_full_king_data_from_row(row):
     return part_j + part_k + part_l
 
 def add_kings_from_txt_content(file_text, target_sheet=SHEET_KINGS):
+    ensure_sheet_request_column(target_sheet, KINGS_REQUEST_COL_NUM)
     rows, errors = parse_kings_txt(file_text)
 
     if not rows:
@@ -4168,34 +4285,29 @@ def add_kings_from_txt_content(file_text, target_sheet=SHEET_KINGS):
         return "Ничего не добавил. Не удалось разобрать файл."
 
     to_append = []
-
     for idx, item in enumerate(rows, start=1):
         part_j, part_k, part_l = split_text_for_three_cells(item["data_text"], max_len=50000)
-
         if part_j is None:
-            errors.append(
-                f"Блок {idx}: Данные кинга слишком большие даже для трёх ячеек: {len(item['data_text'])} символов"
-            )
+            errors.append(f"Блок {idx}: Данные кинга слишком большие даже для трёх ячеек: {len(item['data_text'])} символов")
             continue
 
         sync_id = make_sync_id("king")
-
         row_to_add = [
-            "",                     # A название кинга — пока пусто
-            item["purchase_date"],  # B дата покупки
-            item["price"],          # C цена
-            item["supplier"],       # D у кого купили
-            "free",                 # E статус
-            "",                     # F кому выдали
-            "",                     # G дата взятия
-            item["geo"],            # H гео
-            "",                     # I кто взял
-            part_j,                 # J данные часть 1
-            part_k,                 # K данные часть 2
-            part_l,                 # L данные часть 3
-            sync_id                 # M sync_id
+            "",
+            item["purchase_date"],
+            item["price"],
+            item["supplier"],
+            "free",
+            "",
+            "",
+            item["geo"],
+            "",
+            part_j,
+            part_k,
+            part_l,
+            sync_id,
+            item.get("request_number", "")
         ]
-
         to_append.append(row_to_add)
 
     if to_append:
@@ -4218,33 +4330,28 @@ def add_kings_from_txt_content(file_text, target_sheet=SHEET_KINGS):
             basebot_rows = []
             for row in to_append:
                 basebot_rows.append([
-                    sync_prefix,  # тип
-                    row[3],       # supplier
-                    row[4],       # status
-                    row[7],       # geo
-                    row[9],       # data1
-                    row[10],      # data2
-                    row[11],      # data3
-                    row[12],      # sync_id (M)
+                    sync_prefix,
+                    row[3],
+                    row[4],
+                    row[7],
+                    row[9],
+                    row[10],
+                    row[11],
+                    row[12],
                 ])
             basebot_append_rows(basebot_sheet, basebot_rows)
 
         invalidate_stats_cache()
 
-    message = (
-        f"Готово ✅\n"
-        f"Добавлено king: {len(to_append)}\n"
-        f"Ошибок: {len(errors)}"
-    )
-
+    message = f"Готово ✅\nДобавлено king: {len(to_append)}\nОшибок: {len(errors)}"
     if errors:
         message += "\n\nОшибки:\n" + "\n".join(errors[:10])
         if len(errors) > 10:
             message += f"\n... и ещё {len(errors) - 10}"
-
     return message
 
 def add_bms_from_txt_content(file_text, target_sheet=SHEET_BMS):
+    ensure_sheet_request_column(target_sheet, BMS_REQUEST_COL_NUM)
     rows, errors = parse_bms_txt(file_text)
 
     if not rows:
@@ -4253,23 +4360,21 @@ def add_bms_from_txt_content(file_text, target_sheet=SHEET_BMS):
         return "Ничего не добавил. Не удалось разобрать файл."
 
     to_append = []
-
     for idx, item in enumerate(rows, start=1):
         sync_id = make_sync_id("bm")
-
         row_to_add = [
-            item["bm_id"],           # A bm id
-            item["purchase_date"],   # B дата покупки
-            item["price"],           # C цена
-            item["supplier"],        # D у кого купили
-            "free",                  # E статус
-            "",                      # F кому выдали
-            "",                      # G дата выдачи
-            "",                      # H кто выдал / кто взял
-            item["data_text"],       # I данные
-            sync_id                  # J sync_id
+            item["bm_id"],
+            item["purchase_date"],
+            item["price"],
+            item["supplier"],
+            "free",
+            "",
+            "",
+            "",
+            item["data_text"],
+            sync_id,
+            item.get("request_number", "")
         ]
-
         to_append.append(row_to_add)
 
     if to_append:
@@ -4289,33 +4394,25 @@ def add_bms_from_txt_content(file_text, target_sheet=SHEET_BMS):
             basebot_rows = []
             for row in to_append:
                 basebot_rows.append([
-                    bm_type,  # тип
-                    row[3],   # supplier
-                    row[4],   # status
-                    "",       # geo
-                    row[8],   # data
-                    "",       # data2
-                    "",       # data3
-                    row[9],   # sync_id (J)
+                    bm_type,
+                    row[3],
+                    row[4],
+                    "",
+                    row[8],
+                    "",
+                    "",
+                    row[9],
                 ])
-
             basebot_append_rows(basebot_sheet, basebot_rows)
 
         invalidate_stats_cache()
 
     label = "farm BM" if target_sheet == SHEET_FARM_BMS else "BM"
-
-    message = (
-        f"Готово ✅\n"
-        f"Добавлено {label}: {len(to_append)}\n"
-        f"Ошибок: {len(errors)}"
-    )
-
+    message = f"Готово ✅\nДобавлено {label}: {len(to_append)}\nОшибок: {len(errors)}"
     if errors:
         message += "\n\nОшибки:\n" + "\n".join(errors[:10])
         if len(errors) > 10:
             message += f"\n... и ещё {len(errors) - 10}"
-
     return message
 
 def handle_document_message(msg):
@@ -4675,45 +4772,40 @@ def append_auto_warehouse_rows_for_new_fps(added_items):
         return 0
 
     grouped = {}
-
     for item in added_items:
         warehouse = str(item.get("warehouse", "")).strip()
         if not warehouse:
             continue
-
         if warehouse not in grouped:
             grouped[warehouse] = item
 
     rows_to_append = []
-
     for warehouse, item in grouped.items():
         purchase_date = item.get("purchase_date", "")
         supplier = item.get("supplier", "")
+        request_number = str(item.get("request_number", "") or "").strip()
         transfer_date = datetime.now(MOSCOW_TZ).strftime("%d/%m/%Y")
-    
         rows_to_append.append([
-            warehouse,          # A
-            "KING",             # B
-            purchase_date,      # C дата покупки
-            35,                 # D цена склада
-            transfer_date,      # E дата передачи
-            supplier,           # F поставщик
-            "TEAM"              # G кому передали
+            warehouse,
+            "KING",
+            purchase_date,
+            35,
+            transfer_date,
+            supplier,
+            "TEAM",
+            "",
+            "",
+            request_number
         ])
 
     if rows_to_append:
-        sheet_append_rows_and_refresh(
-            SHEET_ISSUES,
-            rows_to_append,
-            value_input_option="USER_ENTERED"
-        )
-
+        append_issue_rows_fixed(rows_to_append)
     return len(rows_to_append)
 
 def add_fps_from_text(text, target_sheet=SHEET_FPS):
+    ensure_sheet_request_column(target_sheet, FPS_REQUEST_COL_NUM)
     existing_rows = get_sheet_rows_cached(target_sheet)
     existing_links = set()
-
     for row in existing_rows[1:]:
         if row and row[0].strip():
             existing_links.add(row[0].strip())
@@ -4726,16 +4818,19 @@ def add_fps_from_text(text, target_sheet=SHEET_FPS):
 
     for i, line in enumerate(lines, start=1):
         fields = [x.strip() for x in line.split(";")]
-        if len(fields) != 5:
-            errors.append(f"Строка {i}: должно быть 5 полей через ';'")
+        if len(fields) not in [5, 6]:
+            errors.append(f"Строка {i}: должно быть 6 полей через ';'")
             continue
 
-        fp_link, purchase_date_raw, price_raw, supplier, warehouse = fields
+        if len(fields) == 5:
+            fp_link, purchase_date_raw, price_raw, supplier, warehouse = fields
+            request_number = ""
+        else:
+            fp_link, purchase_date_raw, price_raw, supplier, warehouse, request_number = fields
 
         if not fp_link:
             errors.append(f"Строка {i}: пустая ссылка ФП")
             continue
-
         if fp_link in existing_links:
             duplicates += 1
             continue
@@ -4751,30 +4846,14 @@ def add_fps_from_text(text, target_sheet=SHEET_FPS):
             continue
 
         purchase_date_str = purchase_date.strftime("%d/%m/%Y")
+        request_number = str(request_number or "").strip()
 
-        to_append.append([
-            fp_link,
-            purchase_date_str,
-            price,
-            supplier,
-            warehouse,
-            "free",
-            "",
-            "",
-            ""
-        ])
-
-        added_items.append({
-            "warehouse": warehouse,
-            "purchase_date": purchase_date_str,
-            "supplier": supplier
-        })
-
+        to_append.append([fp_link, purchase_date_str, price, supplier, warehouse, "free", "", "", "", request_number])
+        added_items.append({"warehouse": warehouse, "purchase_date": purchase_date_str, "supplier": supplier, "request_number": request_number})
         existing_links.add(fp_link)
 
     warehouse_rows_added = 0
     new_warehouses = octo_extract_unique_warehouses(added_items)
-    
     if to_append:
         sheet_append_rows_and_refresh(target_sheet, to_append)
         warehouse_rows_added = append_auto_warehouse_rows_for_new_fps(added_items)
@@ -4788,16 +4867,11 @@ def add_fps_from_text(text, target_sheet=SHEET_FPS):
         f"Дубликатов пропущено: {duplicates}\n"
         f"Ошибок: {len(errors)}"
     )
-
     if errors:
         message += "\n\nОшибки:\n" + "\n".join(errors[:10])
         if len(errors) > 10:
             message += f"\n... и ещё {len(errors) - 10}"
-
-    return {
-        "message": message,
-        "new_warehouses": new_warehouses
-    }
+    return {"message": message, "new_warehouses": new_warehouses}
 
 def parse_pixel_line(block_text):
     text = str(block_text or "").strip()
@@ -4816,26 +4890,24 @@ def parse_pixel_line(block_text):
     purchase_date = parts[0]
     price = parts[1].replace(",", ".").strip()
     supplier = parts[2]
+    request_number = parts[3] if len(parts) > 3 else ""
 
-    # Берём весь хвост блока после первой строки как есть,
-    # чтобы не потерять "Токен cAPI" и длинный токен
-    data_lines = lines[1:]
-    data_text = "\n".join(data_lines).strip()
-
+    data_text = "\n".join(lines[1:]).strip()
     return {
         "purchase_date": purchase_date,
         "price": price,
         "supplier": supplier,
+        "request_number": str(request_number or "").strip(),
         "data_text": data_text
     }
 
 def add_pixels_from_text(file_text):
+    ensure_sheet_request_column(SHEET_PIXELS, PIXELS_REQUEST_COL_NUM)
     text = str(file_text or "").strip()
     if not text:
         return "Ничего не добавил. Пустой текст."
 
     raw_lines = [line.rstrip() for line in text.splitlines()]
-
     blocks = []
     current_block = []
 
@@ -4846,69 +4918,47 @@ def add_pixels_from_text(file_text):
                 current_block = [line.strip()]
             else:
                 current_block.append(line.strip())
-
     if current_block:
         blocks.append("\n".join(current_block).strip())
 
     errors = []
     to_append = []
-
     for idx, block in enumerate(blocks, start=1):
         try:
             parsed = parse_pixel_line(block)
             if not parsed:
                 errors.append(f"Строка {idx}: не удалось разобрать пиксель")
                 continue
-
             sync_id = make_sync_id("pixel")
-
             row_to_add = [
-                parsed["purchase_date"],  # A дата покупки
-                parsed["price"],          # B цена
-                parsed["supplier"],       # C у кого купили
-                "free",                   # D статус
-                "",                       # E кому выдали
-                "",                       # F дата выдачи
-                "",                       # G кто выдал / кто взял
-                parsed["data_text"],      # H данные пикселя
-                sync_id                   # I sync_id
+                parsed["purchase_date"],
+                parsed["price"],
+                parsed["supplier"],
+                "free",
+                "",
+                "",
+                "",
+                parsed["data_text"],
+                sync_id,
+                parsed.get("request_number", "")
             ]
-
             to_append.append(row_to_add)
-
         except Exception as e:
             errors.append(f"Строка {idx}: {e}")
 
     if to_append:
         sheet_append_rows_and_refresh(SHEET_PIXELS, to_append)
-
         basebot_rows = []
         for row in to_append:
-            basebot_rows.append([
-                "pixel",  # тип
-                row[2],   # supplier
-                row[3],   # status
-                "",       # geo
-                row[7],   # data
-                "",       # data2
-                "",       # data3
-                row[8],   # sync_id (I)
-            ])
-
+            basebot_rows.append(["pixel", row[2], row[3], "", row[7], "", "", row[8]])
         basebot_append_rows(BASEBOT_SHEET_PIXELS, basebot_rows)
         invalidate_stats_cache()
 
-    message = (
-        f"Готово ✅\n"
-        f"Добавлено пикселей: {len(to_append)}\n"
-        f"Ошибок: {len(errors)}"
-    )
-
+    message = f"Готово ✅\nДобавлено пикселей: {len(to_append)}\nОшибок: {len(errors)}"
     if errors:
         message += "\n\nОшибки:\n" + "\n".join(errors[:10])
         if len(errors) > 10:
             message += f"\n... и ещё {len(errors) - 10}"
-
     return message
 
 def find_fp_in_base(fp_link):
@@ -5130,14 +5180,11 @@ def return_fp_warehouse_to_ban(warehouse_name, comment_text="", farm=False):
                     "ban",
                     "",
                     str(comment_text or "").strip(),
+                    get_request_from_fp_row(row),
                 ])
 
         if issue_rows_to_append:
-            sheet_append_rows_and_refresh(
-                SHEET_ISSUES,
-                issue_rows_to_append,
-                value_input_option="USER_ENTERED"
-            )
+            append_issue_rows_fixed(issue_rows_to_append)
 
         refresh_sheet_cache(target_sheet)
 
@@ -5682,7 +5729,10 @@ def issue_fps_bulk(chat_id, user_id, username, count_needed):
                     normalize_numeric_for_sheet(row[2]),
                     today,
                     row[3],
-                    fp_for_whom
+                    fp_for_whom,
+                    "",
+                    "",
+                    get_request_from_fp_row(row)
                 ])
 
                 issued_items.append({
@@ -5809,7 +5859,10 @@ def confirm_pixel_issue(chat_id, user_id, username):
                 normalize_numeric_for_sheet(row[1]),
                 today,
                 row[2],
-                pixel_for_whom
+                pixel_for_whom,
+                "",
+                "",
+                get_request_from_pixel_row(row)
             ])
 
             invalidate_stats_cache()
@@ -5934,7 +5987,10 @@ def issue_pixels_bulk(chat_id, user_id, username, count_needed):
                     normalize_numeric_for_sheet(row[1]),
                     today,
                     row[2],
-                    pixel_for_whom
+                    pixel_for_whom,
+                    "",
+                    "",
+                    get_request_from_pixel_row(row)
                 ])
 
                 issued_messages.append({
@@ -7154,7 +7210,10 @@ def process_farm_kings_bulk_proxy_step_background(chat_id, user_id, username):
         normalize_numeric_for_sheet(row[2]),
         today,
         row[3],
-        "farm"
+        "farm",
+        "",
+        "",
+        get_request_from_king_row(row)
     ])
 
     results.append({
@@ -7602,7 +7661,10 @@ def issue_farm_kings(chat_id, user_id, username, king_names):
                 normalize_numeric_for_sheet(row[2]),
                 today,
                 row[3],
-                "farm"
+                "farm",
+                "",
+                "",
+                get_request_from_king_row(row)
             ])
 
             issued_items.append({
@@ -7912,7 +7974,10 @@ def issue_farm_bm(chat_id, user_id, username):
             normalize_numeric_for_sheet(row[2]),
             today,
             row[3],
-            "farm"
+            "farm",
+            "",
+            "",
+            get_request_from_bm_row(row)
         ])
 
         invalidate_stats_cache()
@@ -8136,7 +8201,10 @@ def issue_farm_fps(chat_id, user_id, username, count_needed):
                     normalize_numeric_for_sheet(row[2]),
                     today,
                     row[3],
-                    "farm"
+                    "farm",
+                    "",
+                    "",
+                    get_request_from_fp_row(row)
                 ])
 
                 messages.append(f"Ссылка: {row[0]}")
@@ -11038,21 +11106,22 @@ def send_free_accounts(chat_id, selected_filter):
 # ADD ACCOUNTS
 # =========================
 def send_bulk_add_instructions(chat_id):
-    text = (
-        "Отправь лички сообщением, каждая с новой строки.\n\n"
-        "Формат:\n"
-        "номер; дата покупки; цена; поставщик; склады\n\n"
-        "Пример:\n"
-        "RK001; 15/02/2026; 300; WD; sklad1,sklad2\n"
-        "RK002; 16/02/2026; 500; WD; sklad3"
-    )
+    text = """Отправь лички сообщением, каждая с новой строки.
+
+Формат:
+номер; дата покупки; цена; поставщик; склады; номер заявки
+
+Пример:
+RK001; 15/02/2026; 300; WD; sklad1,sklad2; 2870
+RK002; 16/02/2026; 500; WD; sklad3; 2871
+
+Номер заявки — это заявка из PaymentsRMBot, где вы оплатили этот расходник."""
     tg_send_message(chat_id, text)
 
-
 def add_accounts_from_text(text):
+    ensure_sheet_request_column(SHEET_ACCOUNTS, ACCOUNTS_REQUEST_COL_NUM)
     existing_rows = get_sheet_rows_cached(SHEET_ACCOUNTS)
     existing_accounts = set()
-
     for row in existing_rows[1:]:
         if row and row[0].strip():
             existing_accounts.add(row[0].strip())
@@ -11064,16 +11133,19 @@ def add_accounts_from_text(text):
 
     for i, line in enumerate(lines, start=1):
         fields = [x.strip() for x in line.split(";")]
-        if len(fields) != 5:
-            errors.append(f"Строка {i}: должно быть 5 полей через ';'")
+        if len(fields) not in [5, 6]:
+            errors.append(f"Строка {i}: должно быть 6 полей через ';'")
             continue
 
-        account_number, purchase_date_raw, price_raw, supplier, warehouses = fields
+        if len(fields) == 5:
+            account_number, purchase_date_raw, price_raw, supplier, warehouses = fields
+            request_number = ""
+        else:
+            account_number, purchase_date_raw, price_raw, supplier, warehouses, request_number = fields
 
         if not account_number:
             errors.append(f"Строка {i}: пустой номер лички")
             continue
-
         if account_number in existing_accounts:
             duplicates += 1
             continue
@@ -11088,19 +11160,23 @@ def add_accounts_from_text(text):
             errors.append(f"Строка {i}: неверная цена '{price_raw}'")
             continue
 
+        request_number = str(request_number or "").strip()
         to_append.append([
-            account_number,                         # A номер
-            purchase_date.strftime("%d/%m/%Y"),    # B дата покупки
-            price,                                 # C цена
-            supplier,                              # D поставщик
-            "",                                    # E лимит
-            "",                                    # F трешхолд
-            "",                                    # G GMT
-            warehouses,                            # H склады
-            "free",                                # I статус
-            "",                                    # J кому выдали
-            "",                                    # K дата взятия
-            ""                                     # L кто взял
+            account_number,
+            purchase_date.strftime("%d/%m/%Y"),
+            price,
+            supplier,
+            "",
+            "",
+            "",
+            warehouses,
+            "free",
+            "",
+            "",
+            "",
+            "",
+            "",
+            request_number,
         ])
         existing_accounts.add(account_number)
 
@@ -11108,18 +11184,11 @@ def add_accounts_from_text(text):
         sheet_append_rows_and_refresh(SHEET_ACCOUNTS, to_append)
         invalidate_stats_cache()
 
-    message = (
-        f"Готово.\n"
-        f"Добавлено: {len(to_append)}\n"
-        f"Дубликатов пропущено: {duplicates}\n"
-        f"Ошибок: {len(errors)}"
-    )
-
+    message = f"Готово.\nДобавлено: {len(to_append)}\nДубликатов пропущено: {duplicates}\nОшибок: {len(errors)}"
     if errors:
         message += "\n\nОшибки:\n" + "\n".join(errors[:10])
         if len(errors) > 10:
             message += f"\n... и ещё {len(errors) - 10}"
-
     return message
 
 def find_oldest_free_account(exclude_account=None):
@@ -11243,20 +11312,19 @@ def show_found_account(chat_id, user_id, found):
     tg_send_message(chat_id, text, keyboard)
 
 
-def append_issue_row(account_number, purchase_date, price, transfer_date, supplier, for_whom):
-    sheet_append_row_and_refresh(
-        SHEET_ISSUES,
-        [
-            account_number,
-            "РК",
-            purchase_date,
-            normalize_numeric_for_sheet(price),
-            transfer_date,
-            supplier,
-            for_whom
-        ],
-        value_input_option="USER_ENTERED"
-    )
+def append_issue_row(account_number, purchase_date, price, transfer_date, supplier, for_whom, request_number=""):
+    append_issue_row_fixed([
+        account_number,
+        "РК",
+        purchase_date,
+        normalize_numeric_for_sheet(price),
+        transfer_date,
+        supplier,
+        for_whom,
+        "",
+        "",
+        str(request_number or "").strip(),
+    ])
 
 def issue_accounts_bulk(account_numbers, for_whom, username):
     today = datetime.now(MOSCOW_TZ).strftime("%d/%m/%Y")
@@ -11320,7 +11388,10 @@ def issue_accounts_bulk(account_numbers, for_whom, username):
                 normalize_numeric_for_sheet(row[2]),
                 today,
                 row[3],
-                for_whom
+                for_whom,
+                "",
+                "",
+                get_request_from_accounts_row(row)
             ])
 
             issued.append({
@@ -11401,7 +11472,8 @@ def issue_next_quick_account_for_person(for_whom, username):
             row[2],
             today,
             row[3],
-            for_whom
+            for_whom,
+            get_request_from_accounts_row(row)
         )
 
         invalidate_stats_cache()
@@ -12260,7 +12332,8 @@ def process_kings_bulk_proxy_step(chat_id, user_id, username, proxy_text):
                         price=row[2],
                         transfer_date=today,
                         supplier=row[3],
-                        for_whom=state.get("king_for_whom", "")
+                        for_whom=state.get("king_for_whom", ""),
+                        request_number=get_request_from_king_row(row)
                     )
 
                     invalidate_stats_cache()
@@ -12472,7 +12545,8 @@ def process_farm_kings_bulk_proxy_step(chat_id, user_id, username, proxy_text):
             price=row[2],
             transfer_date=today,
             supplier=row[3],
-            for_whom="farm"
+            for_whom="farm",
+            request_number=get_request_from_king_row(row)
         )
 
         results.append({
@@ -12893,7 +12967,7 @@ def confirm_bm_issue(chat_id, user_id, username):
             if sync_id:
                 sync_status_to_basebot(BASEBOT_SHEET_BMS, sync_id, "taken")
 
-            append_issue_row_fixed([bm_id, "БМ", purchase_date, normalize_numeric_for_sheet(price), today, row[3], bm_for_whom])
+            append_issue_row_fixed([bm_id, "БМ", purchase_date, normalize_numeric_for_sheet(price), today, row[3], bm_for_whom, "", "", get_request_from_bm_row(row)])
 
             invalidate_stats_cache()
             clear_state(user_id)
@@ -12972,14 +13046,14 @@ def issue_bms_bulk(chat_id, user_id, username, count_needed):
 
                 sheet_update_raw(SHEET_BMS, f"E{row_index}:H{row_index}", [["taken", bm_for_whom, who_took_text, today]])
 
-                issue_rows.append([effective_bm_id, "БМ", row[1], normalize_numeric_for_sheet(row[2]), today, row[3], bm_for_whom])
+                issue_rows.append([effective_bm_id, "БМ", row[1], normalize_numeric_for_sheet(row[2]), today, row[3], bm_for_whom, "", "", get_request_from_bm_row(row)])
 
                 issued_items.append({"bm_id": effective_bm_id, "price": row[2], "data_text": row[8] if len(row) > 8 else "", "sync_id": sync_id})
 
             refresh_sheet_cache(SHEET_BMS)
 
             if issue_rows:
-                sheet_append_rows_and_refresh(SHEET_ISSUES, issue_rows, value_input_option="USER_ENTERED")
+                append_issue_rows_fixed(issue_rows)
 
             for item in issued_items:
                 if item["sync_id"]:
@@ -13122,7 +13196,8 @@ def confirm_king_issue(chat_id, user_id, username):
                 price=row[2],
                 transfer_date=today,
                 supplier=row[3],
-                for_whom=king_for_whom
+                for_whom=king_for_whom,
+                request_number=get_request_from_king_row(row)
             )
 
             invalidate_stats_cache()
@@ -13291,7 +13366,8 @@ def issue_kings_bulk(chat_id, user_id, username, king_names):
                     "supplier": row[3],
                     "geo": row[7],
                     "data_text": get_full_king_data_from_row(row),
-                    "sync_id": sync_id
+                    "sync_id": sync_id,
+                    "request_number": get_request_from_king_row(row)
                 })
 
             logging.info(f"issue_kings_bulk updated {len(issued_items)} kings for user_id={user_id}")
@@ -13312,7 +13388,8 @@ def issue_kings_bulk(chat_id, user_id, username, king_names):
                     price=item["price"],
                     transfer_date=today,
                     supplier=item["supplier"],
-                    for_whom=king_for_whom
+                    for_whom=king_for_whom,
+                    request_number=item.get("request_number", "")
                 )
 
             invalidate_stats_cache()
@@ -13725,7 +13802,10 @@ def process_crypto_bulk_proxy_step(chat_id, user_id, username, proxy_text):
         normalize_numeric_for_sheet(row[2]),
         today,
         row[3],
-        king_for_whom
+        king_for_whom,
+        "",
+        "",
+        get_request_from_king_row(row)
     ])
 
     results.append({
@@ -13748,7 +13828,7 @@ def process_crypto_bulk_proxy_step(chat_id, user_id, username, proxy_text):
 
     start_crypto_kings_bulk_proxy_step(chat_id, user_id)
 
-def append_king_to_issues_sheet(king_name, purchase_date, price, transfer_date, supplier, for_whom):
+def append_king_to_issues_sheet(king_name, purchase_date, price, transfer_date, supplier, for_whom, request_number=""):
     append_issue_row_fixed([
         king_name,
         "KING",
@@ -13756,7 +13836,10 @@ def append_king_to_issues_sheet(king_name, purchase_date, price, transfer_date, 
         normalize_numeric_for_sheet(price),
         transfer_date,
         supplier,
-        for_whom
+        for_whom,
+        "",
+        "",
+        str(request_number or "").strip(),
     ])
 
 def find_last_king_issue_row(king_name):
@@ -18766,7 +18849,8 @@ def handle_message(msg):
                     price=row[2],
                     transfer_date=today,
                     supplier=row[3],
-                    for_whom=king_for_whom
+                    for_whom=king_for_whom,
+                    request_number=get_request_from_king_row(row)
                 )
 
                 invalidate_stats_cache()
@@ -19630,7 +19714,8 @@ def handle_message(msg):
                     price=row[2],
                     transfer_date=today,
                     supplier=row[3],
-                    for_whom="farm"
+                    for_whom="farm",
+                    request_number=get_request_from_king_row(row)
                 )
 
                 invalidate_stats_cache()
@@ -20509,7 +20594,8 @@ def handle_message(msg):
                     price=row[2],
                     transfer_date=today,
                     supplier=row[3],
-                    for_whom=king_for_whom
+                    for_whom=king_for_whom,
+                    request_number=get_request_from_king_row(row)
                 )
 
                 invalidate_stats_cache()
@@ -22452,6 +22538,11 @@ def start_background_threads_once():
 
         background_threads_started = True
 
+
+try:
+    ensure_request_columns_ready()
+except Exception:
+    logging.exception("ensure_request_columns_ready crashed")
 
 start_background_threads_once()
 
