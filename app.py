@@ -119,8 +119,6 @@ ACCOUNTS_USERS = {
     8035275476: "SeanConneryManager",
     8435159019: "Robert_Pattinson_Account_Manager",
     7045494795: "TessaYang_Accmanager",
-    8309499971: "petedavidson_accountmanager",
-    7299873991: "Head_of_financeR",
 }
 
 FARMERS_USERS = {
@@ -248,14 +246,6 @@ LIMIT_OPTIONS = ['-250', '250-500', '500-1200', '1200-1500', 'unlim']
 THRESHOLD_OPTIONS = ['0-49', '50-99', '100-199', '200-499', '500+']
 GMT_OPTIONS = ['-10', '-9', '-8', '-7', '-6', '-5', '-4', '-3', '-2', '-1', '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', '10']
 ACCOUNT_CURRENCY_COL = 12  # M колонка в База_личек
-REQUEST_COL_NAME = "Заявка"
-ISSUES_REQUEST_COL_NUM = 10
-KINGS_REQUEST_COL_NUM = 14
-BMS_REQUEST_COL_NUM = 11
-FPS_REQUEST_COL_NUM = 10
-PIXELS_REQUEST_COL_NUM = 10
-ACCOUNTS_REQUEST_COL_NUM = 15
-
 
 MENU_ACCOUNTS = 'Accounts'
 MENU_PIXELS = 'Пиксели'
@@ -307,7 +297,7 @@ DEPT_OTHER = '📦Прочее'
 CRYPTO_NAMES = [
     '№3 DS78', '№5 MCH79', '№20 MS77',
     '№32 alex', '№34 AK81', '№37 VK82',
-    '№4 NH25', '№57 VD22', '№60 MSH5', '№62 IA14', '№68 MK136'
+    '№4 NH25', '№57 VD22', '№60 MSH5', '№62 IA14'
 ]
 
 GAMBLA_NAMES = [
@@ -426,6 +416,8 @@ BTN_ISSUE_CONFIRM = 'Выдать личку'
 BTN_ISSUE_NEXT = 'Другая личка'
 BTN_ISSUE_MORE = 'Выдать еще'
 BTN_RETURN_CONFIRM = 'Подтвердить бан'
+BTN_BAN_BEFORE_TRANSFER = 'До передачи'
+BTN_BAN_BUYER_USED = 'Байер использовал'
 
 # кнопки выдачи кингов
 BTN_KING_CONFIRM = 'Выдать кинг'
@@ -729,129 +721,43 @@ def sheet_update_and_refresh(sheet_name, cell_range, values):
     google_write_with_retry(_do)
     mark_sheet_cache_stale(sheet_name)
 
-
-def col_to_letter(col_num):
-    result = ""
-    while col_num > 0:
-        col_num, rem = divmod(col_num - 1, 26)
-        result = chr(65 + rem) + result
-    return result
-
-
-def detect_sheet_header_row_index(rows, hints=None):
-    hints = [str(x).strip().lower() for x in (hints or []) if str(x).strip()]
-    best_idx = None
-    best_score = -1
-
-    for idx, row in enumerate((rows or [])[:5], start=1):
-        values = [str(x).strip().lower() for x in (row or []) if str(x).strip()]
-        if not values:
-            continue
-
-        score = sum(1 for h in hints if h in values) if hints else 1
-        if score > best_score:
-            best_score = score
-            best_idx = idx
-
-    return best_idx or 1
-
-
-def ensure_sheet_request_column(sheet_name, target_col_num, header_hints=None):
-    def _do():
-        with google_lock:
-            sheet = get_sheet(sheet_name)
-            rows = sheet.get_all_values()
-            header_row_idx = detect_sheet_header_row_index(rows, header_hints)
-            header = rows[header_row_idx - 1] if header_row_idx - 1 < len(rows) else []
-
-            for idx, value in enumerate(header, start=1):
-                if str(value).strip().lower() == REQUEST_COL_NAME.lower():
-                    return idx
-
-            chosen_col = target_col_num
-            existing = str(header[chosen_col - 1]).strip() if len(header) >= chosen_col else ""
-            if existing and existing.lower() != REQUEST_COL_NAME.lower():
-                last_nonempty = 0
-                for i, value in enumerate(header, start=1):
-                    if str(value).strip():
-                        last_nonempty = i
-                chosen_col = max(last_nonempty + 1, chosen_col)
-
-            sheet.update(f"{col_to_letter(chosen_col)}{header_row_idx}", [[REQUEST_COL_NAME]])
-            return chosen_col
-
-    col_num = google_write_with_retry(_do)
-    mark_sheet_cache_stale(sheet_name)
-    return col_num
-
-
-def ensure_request_columns_ready():
-    ensure_sheet_request_column(SHEET_ISSUES, ISSUES_REQUEST_COL_NUM, header_hints=["тип", "комментарии"])
-    ensure_sheet_request_column(SHEET_ACCOUNTS, ACCOUNTS_REQUEST_COL_NUM)
-    ensure_sheet_request_column(SHEET_KINGS, KINGS_REQUEST_COL_NUM)
-    ensure_sheet_request_column(SHEET_CRYPTO_KINGS, KINGS_REQUEST_COL_NUM)
-    ensure_sheet_request_column(SHEET_FARM_KINGS, KINGS_REQUEST_COL_NUM)
-    ensure_sheet_request_column(SHEET_BMS, BMS_REQUEST_COL_NUM)
-    ensure_sheet_request_column(SHEET_FARM_BMS, BMS_REQUEST_COL_NUM)
-    ensure_sheet_request_column(SHEET_FPS, FPS_REQUEST_COL_NUM)
-    ensure_sheet_request_column(SHEET_FARM_FPS, FPS_REQUEST_COL_NUM)
-    ensure_sheet_request_column(SHEET_PIXELS, PIXELS_REQUEST_COL_NUM)
-
-
-def normalize_issue_row_for_append(row):
-    values = list(row or [])
-    if len(values) < 7:
-        values += [""] * (7 - len(values))
-    if len(values) < 10:
-        values += [""] * (10 - len(values))
-    else:
-        values = values[:10]
-    return values
-
-
-def get_request_value_by_index(row, index_0_based):
-    row = list(row or [])
-    if index_0_based < 0 or len(row) <= index_0_based:
-        return ""
-    return str(row[index_0_based] or "").strip()
-
-
-def get_request_from_accounts_row(row):
-    return get_request_value_by_index(row, ACCOUNTS_REQUEST_COL_NUM - 1)
-
-
-def get_request_from_king_row(row):
-    return get_request_value_by_index(row, KINGS_REQUEST_COL_NUM - 1)
-
-
-def get_request_from_bm_row(row):
-    return get_request_value_by_index(row, BMS_REQUEST_COL_NUM - 1)
-
-
-def get_request_from_fp_row(row):
-    return get_request_value_by_index(row, FPS_REQUEST_COL_NUM - 1)
-
-
-def get_request_from_pixel_row(row):
-    return get_request_value_by_index(row, PIXELS_REQUEST_COL_NUM - 1)
-
-
 def append_issue_row_fixed(row):
-    ensure_sheet_request_column(SHEET_ISSUES, ISSUES_REQUEST_COL_NUM, header_hints=["тип", "комментарии"])
     rows = get_sheet_rows_cached(SHEET_ISSUES, force=True)
+
     next_row = len(rows) + 1
-    values = normalize_issue_row_for_append(row)
-    sheet_update_and_refresh(SHEET_ISSUES, f"A{next_row}:J{next_row}", [values])
+    values = list(row or [])
+
+    if len(values) < 7:
+        values = values + [""] * (7 - len(values))
+    else:
+        values = values[:7]
+
+    sheet_update_and_refresh(
+        SHEET_ISSUES,
+        f"A{next_row}:G{next_row}",
+        [values]
+    )
 
 def append_issue_rows_fixed(rows_to_add):
-    rows = [normalize_issue_row_for_append(x) for x in (rows_to_add or []) if x]
+    rows = [list(x or [])[:7] for x in (rows_to_add or []) if x]
     if not rows:
         return
-    ensure_sheet_request_column(SHEET_ISSUES, ISSUES_REQUEST_COL_NUM, header_hints=["тип", "комментарии"])
+
+    normalized = []
+    for row in rows:
+        if len(row) < 7:
+            row = row + [""] * (7 - len(row))
+        normalized.append(row[:7])
+
     current_rows = get_sheet_rows_cached(SHEET_ISSUES, force=True)
     start_row = len(current_rows) + 1
-    end_row = start_row + len(rows) - 1
-    sheet_update_and_refresh(SHEET_ISSUES, f"A{start_row}:J{end_row}", rows)
+    end_row = start_row + len(normalized) - 1
+
+    sheet_update_and_refresh(
+        SHEET_ISSUES,
+        f"A{start_row}:G{end_row}",
+        normalized
+    )
 
 def sheet_update_raw(sheet_name, cell_range, values):
     def _do():
@@ -1941,7 +1847,8 @@ def send_main_menu(chat_id, text="Главное меню:", user_id=None):
         keyboard.append([{"text": MENU_ACCOUNTS}, {"text": MENU_FARMERS}])
         keyboard.append([{"text": MENU_STATS}])
 
-        keyboard.append([{"text": MENU_MISC}])
+        if can_see_misc(user_id):
+            keyboard.append([{"text": MENU_MISC}])
 
         keyboard.append([{"text": MENU_ADMIN}])
         keyboard.append([{"text": MENU_CANCEL}])
@@ -1950,7 +1857,8 @@ def send_main_menu(chat_id, text="Главное меню:", user_id=None):
         keyboard.append([{"text": MENU_ACCOUNTS}])
         keyboard.append([{"text": MENU_STATS}])
 
-        keyboard.append([{"text": MENU_MISC}])
+        if can_see_misc(user_id):
+            keyboard.append([{"text": MENU_MISC}])
 
         keyboard.append([{"text": MENU_CANCEL}])
 
@@ -1958,7 +1866,8 @@ def send_main_menu(chat_id, text="Главное меню:", user_id=None):
         keyboard.append([{"text": MENU_FARMERS}])
         keyboard.append([{"text": MENU_STATS}])
 
-        keyboard.append([{"text": MENU_MISC}])
+        if can_see_misc(user_id):
+            keyboard.append([{"text": MENU_MISC}])
 
         keyboard.append([{"text": MENU_CANCEL}])
 
@@ -1974,6 +1883,27 @@ def send_text_input_prompt(chat_id, text):
         [{"text": BTN_BACK_STEP}, {"text": MENU_CANCEL}]
     ]
     tg_send_message(chat_id, text, keyboard)
+
+def send_ban_timing_menu(chat_id):
+    keyboard = [
+        [{"text": BTN_BAN_BEFORE_TRANSFER}, {"text": BTN_BAN_BUYER_USED}],
+        [{"text": BTN_BACK_STEP}, {"text": MENU_CANCEL}]
+    ]
+    tg_send_message(
+        chat_id,
+        "Расходник забанился до передачи байеру или байер уже пользовался им?",
+        keyboard
+    )
+
+
+def start_ban_reason_flow(chat_id, user_id, state_payload, prompt_text):
+    payload = dict(state_payload or {})
+    payload["mode"] = "awaiting_ban_stage"
+    payload["ban_reason_mode"] = str(payload.get("ban_reason_mode") or "").strip()
+    payload["ban_reason_prompt"] = str(prompt_text or "Напиши причину бана.").strip() or "Напиши причину бана."
+    set_state(user_id, payload)
+    send_ban_timing_menu(chat_id)
+
 
 def send_return_action_menu(chat_id, what_text):
     keyboard = [
@@ -2099,6 +2029,7 @@ def send_admin_menu(chat_id, text="Меню Admin:", user_id=None):
     if user_id is not None and is_admin_farm(user_id):
         keyboard = [
             [{"text": ADMIN_FARMERS}, {"text": ADMIN_ALL_STATS}],
+            [{"text": ADMIN_CHECK_BANS}],
             [{"text": BTN_BACK_FROM_ADMIN}]
         ]
     else:
@@ -2106,6 +2037,7 @@ def send_admin_menu(chat_id, text="Меню Admin:", user_id=None):
             [{"text": ADMIN_BACKUP}, {"text": ADMIN_UPDATE_5M}],
             [{"text": ADMIN_ACCOUNTANTS}, {"text": ADMIN_FARMERS}],
             [{"text": ADMIN_ALL_STATS}, {"text": ADMIN_BOT_CHECK}],
+            [{"text": ADMIN_CHECK_BANS}],
             [{"text": ADMIN_SEND_STICKER}],
             [{"text": ADMIN_POLL}],
             [{"text": ADMIN_MESSAGE}],
@@ -2114,10 +2046,10 @@ def send_admin_menu(chat_id, text="Меню Admin:", user_id=None):
 
     tg_send_message(chat_id, text, keyboard)
 
-def send_misc_menu(chat_id, text="Меню Прочее:", user_id=None):
+def send_misc_menu(chat_id, text="Меню Прочее:"):
     keyboard = [
-        [{"text": ADMIN_CHECK_BANS}],
-        [{"text": BTN_BACK_FROM_MISC}],
+        [{"text": ADMIN_ADD_STICKERS}],
+        [{"text": BTN_BACK_FROM_MISC}]
     ]
     tg_send_message(chat_id, text, keyboard)
 
@@ -2139,76 +2071,69 @@ def send_admin_accountants_menu(chat_id, text="Меню Акаунтеры:"):
     tg_send_message(chat_id, text, keyboard)
 
 def send_add_kings_instructions(chat_id):
-    text = """Пришли Кинги txt файлом.
-
-Формат:
-номер) дата покупки; цена; поставщик; гео; номер заявки
-данные кинга.
-
-Пример:
-1) 15/02/2026; 300; WD; usa; 2870
-login - example1
-password - 12345
-cookie - abcdef
-
-2) 16/02/2026; 500; WD; uk; 2871
-login - example2
-password - 67890
-cookie - ghijkl
-
-Номер заявки — это заявка из PaymentsRMBot, где вы оплатили этот расходник."""
+    text = (
+        "Пришли Кинги txt файлом.\n\n"
+        "Формат:\n"
+        "номер) дата покупки; цена; поставщик; гео\n"
+        "данные кинга.\n\n"
+        "Пример:\n"
+        "1) 15/02/2026; 300; WD; usa\n"
+        "login - example1\n"
+        "password - 12345\n"
+        "cookie - abcdef\n\n"
+        "2) 16/02/2026; 500; WD; uk\n"
+        "login - example2\n"
+        "password - 67890\n"
+        "cookie - ghijkl\n\n"
+        "3) 17/02/2026; 250; WD; italy\n"
+        "login - example3\n"
+        "password - 11111\n"
+        "cookie - zzzzzz"
+    )
     tg_send_message(chat_id, text)
 
 def send_add_bms_instructions(chat_id):
     text = """Пришли БМы сообщением блоками.
 
 Формат одного блока:
-дата покупки; цена; поставщик; номер заявки
-данные БМа
+дата покупки; цена; поставщик
+dанные БМа
 
 Потом пустая строка и следующий БМ.
 
 Пример:
-15/02/2026; 300; WD; 2870
+15/02/2026; 300; WD
 данные бм
 
-18/02/2026; 500; TT; 2871
-данные бм
-
-Номер заявки — это заявка из PaymentsRMBot, где вы оплатили этот расходник."""
+18/02/2026; 500; TT
+данные бм"""
     tg_send_message(chat_id, text)
 
 def send_add_fps_instructions(chat_id):
-    text = """Пришли ФП сообщением, каждая с новой строки.
-
-Формат:
-ссылка; дата покупки; цена; у кого купили; склад; номер заявки
-
-Пример:
-https://facebook.com/profile.php?id=123; 15/02/2026; 300; WD; sklad1; 2870
-https://facebook.com/profile.php?id=456; 16/02/2026; 500; TT; sklad2; 2871
-
-Номер заявки — это заявка из PaymentsRMBot, где вы оплатили этот расходник."""
+    text = (
+        "Пришли ФП сообщением, каждая с новой строки.\n\n"
+        "Формат:\n"
+        "ссылка; дата покупки; цена; у кого купили; склад\n\n"
+        "Пример:\n"
+        "https://facebook.com/profile.php?id=123; 15/02/2026; 300; WD; sklad1\n"
+        "https://facebook.com/profile.php?id=456; 16/02/2026; 500; TT; sklad2"
+    )
     tg_send_message(chat_id, text)
 
 def send_add_pixels_instructions(chat_id):
-    text = """Пришли Пиксели сообщением блоками.
-
-Формат одного блока:
-дата покупки; цена; поставщик; номер заявки
-данные пикселя
-
-Потом пустая строка и следующий пиксель.
-
-Пример:
-15/02/2026; 300; WD; 2870
-pixel data 1 line 1
-pixel data 1 line 2
-
-16/02/2026; 500; TT; 2871
-pixel data 2
-
-Номер заявки — это заявка из PaymentsRMBot, где вы оплатили этот расходник."""
+    text = (
+        "Пришли Пиксели сообщением блоками.\n\n"
+        "Формат одного блока:\n"
+        "дата покупки; цена; поставщик\n"
+        "данные пикселя\n\n"
+        "Потом пустая строка и следующий пиксель.\n\n"
+        "Пример:\n"
+        "15/02/2026; 300; WD\n"
+        "pixel data 1 line 1\n"
+        "pixel data 1 line 2\n\n"
+        "16/02/2026; 500; TT\n"
+        "pixel data 2"
+    )
     tg_send_message(chat_id, text)
 
 def send_octo_king_data_instructions(chat_id, warehouse_name=""):
@@ -4068,6 +3993,7 @@ def parse_kings_txt(text):
 
     for raw_line in lines:
         line = clean_text_for_parsing(raw_line).rstrip()
+
         if not line.strip():
             if current_header is not None:
                 current_data_lines.append("")
@@ -4076,6 +4002,7 @@ def parse_kings_txt(text):
         if re.match(r'^\d+[.)]\s+', line.strip()):
             if current_header is not None:
                 blocks.append((current_header, current_data_lines))
+
             current_header = line.strip()
             current_data_lines = []
         else:
@@ -4092,15 +4019,11 @@ def parse_kings_txt(text):
         header_clean = re.sub(r'^\d+[.)]\s*', '', header).strip()
         parts = [x.strip() for x in header_clean.split(';')]
 
-        if len(parts) not in [4, 5]:
-            errors.append(f"Блок {idx}: нужно 5 полей: дата; цена; поставщик; гео; номер заявки")
+        if len(parts) != 4:
+            errors.append(f"Блок {idx}: нужно 4 поля: дата; цена; поставщик; гео")
             continue
 
-        if len(parts) == 4:
-            purchase_date_raw, price_raw, supplier, geo = parts
-            request_number = ""
-        else:
-            purchase_date_raw, price_raw, supplier, geo, request_number = parts
+        purchase_date_raw, price_raw, supplier, geo = parts
 
         purchase_date = parse_date(purchase_date_raw)
         if not purchase_date:
@@ -4113,6 +4036,7 @@ def parse_kings_txt(text):
             continue
 
         data_text = "\n".join(data_lines).strip()
+
         if not data_text:
             errors.append(f"Блок {idx}: нет данных кинга")
             continue
@@ -4122,7 +4046,6 @@ def parse_kings_txt(text):
             "price": price,
             "supplier": supplier,
             "geo": geo,
-            "request_number": str(request_number or "").strip(),
             "data_text": data_text
         })
 
@@ -4141,18 +4064,14 @@ def _is_bm_header_line(line):
     header = _normalize_bm_header_line(line)
     parts = [x.strip() for x in header.split(';')]
 
-    if len(parts) == 5:
-        return bool(parts[0]) and bool(parse_date(parts[1])) and parse_price(parts[2]) is not None and bool(parts[3])
-
     if len(parts) == 4:
-        if parse_date(parts[0]):
-            return parse_price(parts[1]) is not None and bool(parts[2])
-        return bool(parts[0]) and bool(parse_date(parts[1])) and parse_price(parts[2]) is not None and bool(parts[3])
+        return bool(parse_date(parts[1])) and parse_price(parts[2]) is not None and bool(parts[3])
 
     if len(parts) == 3:
         return bool(parse_date(parts[0])) and parse_price(parts[1]) is not None and bool(parts[2])
 
     return False
+
 
 def parse_bms_txt(text):
     text = str(text or '').strip()
@@ -4160,11 +4079,13 @@ def parse_bms_txt(text):
         return [], ['Пустой текст.']
 
     raw_lines = [line.rstrip() for line in text.splitlines()]
+
     blocks = []
     current_block = []
 
     for raw_line in raw_lines:
         line = raw_line.rstrip()
+
         if not line.strip():
             if current_block:
                 blocks.append("\n".join(current_block).strip())
@@ -4193,25 +4114,16 @@ def parse_bms_txt(text):
         parts = [x.strip() for x in header_clean.split(';')]
 
         bm_id = ""
-        request_number = ""
 
-        if len(parts) == 5:
-            bm_id, purchase_date_raw, price_raw, supplier, request_number = parts
+        if len(parts) == 4:
+            bm_id, purchase_date_raw, price_raw, supplier = parts
             if not bm_id:
                 errors.append(f"Блок {idx}: пустой id БМа")
                 continue
-        elif len(parts) == 4:
-            if parse_date(parts[0]):
-                purchase_date_raw, price_raw, supplier, request_number = parts
-            else:
-                bm_id, purchase_date_raw, price_raw, supplier = parts
-                if not bm_id:
-                    errors.append(f"Блок {idx}: пустой id БМа")
-                    continue
         elif len(parts) == 3:
             purchase_date_raw, price_raw, supplier = parts
         else:
-            errors.append(f"Блок {idx}: нужен формат 'дата покупки; цена; поставщик; номер заявки' или старый формат с id БМа")
+            errors.append(f"Блок {idx}: нужен формат 'дата покупки; цена; поставщик' или старый формат с id БМа")
             continue
 
         purchase_date = parse_date(purchase_date_raw)
@@ -4238,7 +4150,6 @@ def parse_bms_txt(text):
             "purchase_date": purchase_date.strftime("%d/%m/%Y"),
             "price": price,
             "supplier": supplier,
-            "request_number": str(request_number or "").strip(),
             "data_text": data_text
         })
 
@@ -4272,7 +4183,6 @@ def get_full_king_data_from_row(row):
     return part_j + part_k + part_l
 
 def add_kings_from_txt_content(file_text, target_sheet=SHEET_KINGS):
-    ensure_sheet_request_column(target_sheet, KINGS_REQUEST_COL_NUM)
     rows, errors = parse_kings_txt(file_text)
 
     if not rows:
@@ -4281,29 +4191,34 @@ def add_kings_from_txt_content(file_text, target_sheet=SHEET_KINGS):
         return "Ничего не добавил. Не удалось разобрать файл."
 
     to_append = []
+
     for idx, item in enumerate(rows, start=1):
         part_j, part_k, part_l = split_text_for_three_cells(item["data_text"], max_len=50000)
+
         if part_j is None:
-            errors.append(f"Блок {idx}: Данные кинга слишком большие даже для трёх ячеек: {len(item['data_text'])} символов")
+            errors.append(
+                f"Блок {idx}: Данные кинга слишком большие даже для трёх ячеек: {len(item['data_text'])} символов"
+            )
             continue
 
         sync_id = make_sync_id("king")
+
         row_to_add = [
-            "",
-            item["purchase_date"],
-            item["price"],
-            item["supplier"],
-            "free",
-            "",
-            "",
-            item["geo"],
-            "",
-            part_j,
-            part_k,
-            part_l,
-            sync_id,
-            item.get("request_number", "")
+            "",                     # A название кинга — пока пусто
+            item["purchase_date"],  # B дата покупки
+            item["price"],          # C цена
+            item["supplier"],       # D у кого купили
+            "free",                 # E статус
+            "",                     # F кому выдали
+            "",                     # G дата взятия
+            item["geo"],            # H гео
+            "",                     # I кто взял
+            part_j,                 # J данные часть 1
+            part_k,                 # K данные часть 2
+            part_l,                 # L данные часть 3
+            sync_id                 # M sync_id
         ]
+
         to_append.append(row_to_add)
 
     if to_append:
@@ -4326,28 +4241,33 @@ def add_kings_from_txt_content(file_text, target_sheet=SHEET_KINGS):
             basebot_rows = []
             for row in to_append:
                 basebot_rows.append([
-                    sync_prefix,
-                    row[3],
-                    row[4],
-                    row[7],
-                    row[9],
-                    row[10],
-                    row[11],
-                    row[12],
+                    sync_prefix,  # тип
+                    row[3],       # supplier
+                    row[4],       # status
+                    row[7],       # geo
+                    row[9],       # data1
+                    row[10],      # data2
+                    row[11],      # data3
+                    row[12],      # sync_id (M)
                 ])
             basebot_append_rows(basebot_sheet, basebot_rows)
 
         invalidate_stats_cache()
 
-    message = f"Готово ✅\nДобавлено king: {len(to_append)}\nОшибок: {len(errors)}"
+    message = (
+        f"Готово ✅\n"
+        f"Добавлено king: {len(to_append)}\n"
+        f"Ошибок: {len(errors)}"
+    )
+
     if errors:
         message += "\n\nОшибки:\n" + "\n".join(errors[:10])
         if len(errors) > 10:
             message += f"\n... и ещё {len(errors) - 10}"
+
     return message
 
 def add_bms_from_txt_content(file_text, target_sheet=SHEET_BMS):
-    ensure_sheet_request_column(target_sheet, BMS_REQUEST_COL_NUM)
     rows, errors = parse_bms_txt(file_text)
 
     if not rows:
@@ -4356,21 +4276,23 @@ def add_bms_from_txt_content(file_text, target_sheet=SHEET_BMS):
         return "Ничего не добавил. Не удалось разобрать файл."
 
     to_append = []
+
     for idx, item in enumerate(rows, start=1):
         sync_id = make_sync_id("bm")
+
         row_to_add = [
-            item["bm_id"],
-            item["purchase_date"],
-            item["price"],
-            item["supplier"],
-            "free",
-            "",
-            "",
-            "",
-            item["data_text"],
-            sync_id,
-            item.get("request_number", "")
+            item["bm_id"],           # A bm id
+            item["purchase_date"],   # B дата покупки
+            item["price"],           # C цена
+            item["supplier"],        # D у кого купили
+            "free",                  # E статус
+            "",                      # F кому выдали
+            "",                      # G дата выдачи
+            "",                      # H кто выдал / кто взял
+            item["data_text"],       # I данные
+            sync_id                  # J sync_id
         ]
+
         to_append.append(row_to_add)
 
     if to_append:
@@ -4390,25 +4312,33 @@ def add_bms_from_txt_content(file_text, target_sheet=SHEET_BMS):
             basebot_rows = []
             for row in to_append:
                 basebot_rows.append([
-                    bm_type,
-                    row[3],
-                    row[4],
-                    "",
-                    row[8],
-                    "",
-                    "",
-                    row[9],
+                    bm_type,  # тип
+                    row[3],   # supplier
+                    row[4],   # status
+                    "",       # geo
+                    row[8],   # data
+                    "",       # data2
+                    "",       # data3
+                    row[9],   # sync_id (J)
                 ])
+
             basebot_append_rows(basebot_sheet, basebot_rows)
 
         invalidate_stats_cache()
 
     label = "farm BM" if target_sheet == SHEET_FARM_BMS else "BM"
-    message = f"Готово ✅\nДобавлено {label}: {len(to_append)}\nОшибок: {len(errors)}"
+
+    message = (
+        f"Готово ✅\n"
+        f"Добавлено {label}: {len(to_append)}\n"
+        f"Ошибок: {len(errors)}"
+    )
+
     if errors:
         message += "\n\nОшибки:\n" + "\n".join(errors[:10])
         if len(errors) > 10:
             message += f"\n... и ещё {len(errors) - 10}"
+
     return message
 
 def handle_document_message(msg):
@@ -4768,40 +4698,45 @@ def append_auto_warehouse_rows_for_new_fps(added_items):
         return 0
 
     grouped = {}
+
     for item in added_items:
         warehouse = str(item.get("warehouse", "")).strip()
         if not warehouse:
             continue
+
         if warehouse not in grouped:
             grouped[warehouse] = item
 
     rows_to_append = []
+
     for warehouse, item in grouped.items():
         purchase_date = item.get("purchase_date", "")
         supplier = item.get("supplier", "")
-        request_number = str(item.get("request_number", "") or "").strip()
         transfer_date = datetime.now(MOSCOW_TZ).strftime("%d/%m/%Y")
+    
         rows_to_append.append([
-            warehouse,
-            "KING",
-            purchase_date,
-            35,
-            transfer_date,
-            supplier,
-            "TEAM",
-            "",
-            "",
-            request_number
+            warehouse,          # A
+            "KING",             # B
+            purchase_date,      # C дата покупки
+            35,                 # D цена склада
+            transfer_date,      # E дата передачи
+            supplier,           # F поставщик
+            "TEAM"              # G кому передали
         ])
 
     if rows_to_append:
-        append_issue_rows_fixed(rows_to_append)
+        sheet_append_rows_and_refresh(
+            SHEET_ISSUES,
+            rows_to_append,
+            value_input_option="USER_ENTERED"
+        )
+
     return len(rows_to_append)
 
 def add_fps_from_text(text, target_sheet=SHEET_FPS):
-    ensure_sheet_request_column(target_sheet, FPS_REQUEST_COL_NUM)
     existing_rows = get_sheet_rows_cached(target_sheet)
     existing_links = set()
+
     for row in existing_rows[1:]:
         if row and row[0].strip():
             existing_links.add(row[0].strip())
@@ -4814,19 +4749,16 @@ def add_fps_from_text(text, target_sheet=SHEET_FPS):
 
     for i, line in enumerate(lines, start=1):
         fields = [x.strip() for x in line.split(";")]
-        if len(fields) not in [5, 6]:
-            errors.append(f"Строка {i}: должно быть 6 полей через ';'")
+        if len(fields) != 5:
+            errors.append(f"Строка {i}: должно быть 5 полей через ';'")
             continue
 
-        if len(fields) == 5:
-            fp_link, purchase_date_raw, price_raw, supplier, warehouse = fields
-            request_number = ""
-        else:
-            fp_link, purchase_date_raw, price_raw, supplier, warehouse, request_number = fields
+        fp_link, purchase_date_raw, price_raw, supplier, warehouse = fields
 
         if not fp_link:
             errors.append(f"Строка {i}: пустая ссылка ФП")
             continue
+
         if fp_link in existing_links:
             duplicates += 1
             continue
@@ -4842,14 +4774,30 @@ def add_fps_from_text(text, target_sheet=SHEET_FPS):
             continue
 
         purchase_date_str = purchase_date.strftime("%d/%m/%Y")
-        request_number = str(request_number or "").strip()
 
-        to_append.append([fp_link, purchase_date_str, price, supplier, warehouse, "free", "", "", "", request_number])
-        added_items.append({"warehouse": warehouse, "purchase_date": purchase_date_str, "supplier": supplier, "request_number": request_number})
+        to_append.append([
+            fp_link,
+            purchase_date_str,
+            price,
+            supplier,
+            warehouse,
+            "free",
+            "",
+            "",
+            ""
+        ])
+
+        added_items.append({
+            "warehouse": warehouse,
+            "purchase_date": purchase_date_str,
+            "supplier": supplier
+        })
+
         existing_links.add(fp_link)
 
     warehouse_rows_added = 0
     new_warehouses = octo_extract_unique_warehouses(added_items)
+    
     if to_append:
         sheet_append_rows_and_refresh(target_sheet, to_append)
         warehouse_rows_added = append_auto_warehouse_rows_for_new_fps(added_items)
@@ -4863,11 +4811,16 @@ def add_fps_from_text(text, target_sheet=SHEET_FPS):
         f"Дубликатов пропущено: {duplicates}\n"
         f"Ошибок: {len(errors)}"
     )
+
     if errors:
         message += "\n\nОшибки:\n" + "\n".join(errors[:10])
         if len(errors) > 10:
             message += f"\n... и ещё {len(errors) - 10}"
-    return {"message": message, "new_warehouses": new_warehouses}
+
+    return {
+        "message": message,
+        "new_warehouses": new_warehouses
+    }
 
 def parse_pixel_line(block_text):
     text = str(block_text or "").strip()
@@ -4886,24 +4839,26 @@ def parse_pixel_line(block_text):
     purchase_date = parts[0]
     price = parts[1].replace(",", ".").strip()
     supplier = parts[2]
-    request_number = parts[3] if len(parts) > 3 else ""
 
-    data_text = "\n".join(lines[1:]).strip()
+    # Берём весь хвост блока после первой строки как есть,
+    # чтобы не потерять "Токен cAPI" и длинный токен
+    data_lines = lines[1:]
+    data_text = "\n".join(data_lines).strip()
+
     return {
         "purchase_date": purchase_date,
         "price": price,
         "supplier": supplier,
-        "request_number": str(request_number or "").strip(),
         "data_text": data_text
     }
 
 def add_pixels_from_text(file_text):
-    ensure_sheet_request_column(SHEET_PIXELS, PIXELS_REQUEST_COL_NUM)
     text = str(file_text or "").strip()
     if not text:
         return "Ничего не добавил. Пустой текст."
 
     raw_lines = [line.rstrip() for line in text.splitlines()]
+
     blocks = []
     current_block = []
 
@@ -4914,47 +4869,69 @@ def add_pixels_from_text(file_text):
                 current_block = [line.strip()]
             else:
                 current_block.append(line.strip())
+
     if current_block:
         blocks.append("\n".join(current_block).strip())
 
     errors = []
     to_append = []
+
     for idx, block in enumerate(blocks, start=1):
         try:
             parsed = parse_pixel_line(block)
             if not parsed:
                 errors.append(f"Строка {idx}: не удалось разобрать пиксель")
                 continue
+
             sync_id = make_sync_id("pixel")
+
             row_to_add = [
-                parsed["purchase_date"],
-                parsed["price"],
-                parsed["supplier"],
-                "free",
-                "",
-                "",
-                "",
-                parsed["data_text"],
-                sync_id,
-                parsed.get("request_number", "")
+                parsed["purchase_date"],  # A дата покупки
+                parsed["price"],          # B цена
+                parsed["supplier"],       # C у кого купили
+                "free",                   # D статус
+                "",                       # E кому выдали
+                "",                       # F дата выдачи
+                "",                       # G кто выдал / кто взял
+                parsed["data_text"],      # H данные пикселя
+                sync_id                   # I sync_id
             ]
+
             to_append.append(row_to_add)
+
         except Exception as e:
             errors.append(f"Строка {idx}: {e}")
 
     if to_append:
         sheet_append_rows_and_refresh(SHEET_PIXELS, to_append)
+
         basebot_rows = []
         for row in to_append:
-            basebot_rows.append(["pixel", row[2], row[3], "", row[7], "", "", row[8]])
+            basebot_rows.append([
+                "pixel",  # тип
+                row[2],   # supplier
+                row[3],   # status
+                "",       # geo
+                row[7],   # data
+                "",       # data2
+                "",       # data3
+                row[8],   # sync_id (I)
+            ])
+
         basebot_append_rows(BASEBOT_SHEET_PIXELS, basebot_rows)
         invalidate_stats_cache()
 
-    message = f"Готово ✅\nДобавлено пикселей: {len(to_append)}\nОшибок: {len(errors)}"
+    message = (
+        f"Готово ✅\n"
+        f"Добавлено пикселей: {len(to_append)}\n"
+        f"Ошибок: {len(errors)}"
+    )
+
     if errors:
         message += "\n\nОшибки:\n" + "\n".join(errors[:10])
         if len(errors) > 10:
             message += f"\n... и ещё {len(errors) - 10}"
+
     return message
 
 def find_fp_in_base(fp_link):
@@ -5022,7 +4999,7 @@ def build_fp_search_texts(fp_links):
 
     return results
 
-def return_fp_to_ban(fp_link, comment_text=""):
+def return_fp_to_ban(fp_link, comment_text="", ban_timing=""):
     found = find_fp_in_base(fp_link)
     if not found:
         return False, "ФП не найдено."
@@ -5044,7 +5021,7 @@ def return_fp_to_ban(fp_link, comment_text=""):
 
     issue_info = find_last_fp_issue_row(fp_link)
     if issue_info:
-        mark_issue_row_as_ban(issue_info["row_index"], comment_text)
+        mark_issue_row_as_ban(issue_info["row_index"], comment_text, ban_timing)
 
     invalidate_stats_cache()
     return True, "ФП переведено в ban."
@@ -5079,7 +5056,7 @@ FP_WAREHOUSE_LINKED_KING_ACCOUNT_RECIPIENTS = {"team"} | {str(x).strip().lower()
 FP_WAREHOUSE_LINKED_KING_FARM_RECIPIENTS = {"farm"}
 
 
-def mark_fp_warehouse_linked_king_issue_rows_as_ban(warehouse_name, comment_text="", farm=False):
+def mark_fp_warehouse_linked_king_issue_rows_as_ban(warehouse_name, comment_text="", farm=False, ban_timing=""):
     target_name = str(warehouse_name or "").strip().lower()
     if not target_name:
         return 0
@@ -5103,13 +5080,13 @@ def mark_fp_warehouse_linked_king_issue_rows_as_ban(warehouse_name, comment_text
         if issue_for_whom and issue_for_whom not in recipients:
             continue
 
-        mark_issue_row_as_ban(idx, comment_text)
+        mark_issue_row_as_ban(idx, comment_text, ban_timing)
         marked += 1
 
     return marked
 
 
-def return_fp_warehouse_to_ban(warehouse_name, comment_text="", farm=False):
+def return_fp_warehouse_to_ban(warehouse_name, comment_text="", farm=False, ban_timing=""):
     warehouse_name = str(warehouse_name or "").strip()
     if not warehouse_name:
         return False, "Название склада не указано."
@@ -5164,7 +5141,7 @@ def return_fp_warehouse_to_ban(warehouse_name, comment_text="", farm=False):
 
             issue_info = find_last_fp_issue_row(row[0])
             if issue_info:
-                mark_issue_row_as_ban(issue_info["row_index"], comment_text)
+                mark_issue_row_as_ban(issue_info["row_index"], comment_text, ban_timing)
             else:
                 issue_rows_to_append.append([
                     row[0],
@@ -5175,30 +5152,33 @@ def return_fp_warehouse_to_ban(warehouse_name, comment_text="", farm=False):
                     row[3],
                     "ban",
                     "",
-                    str(comment_text or "").strip(),
-                    get_request_from_fp_row(row),
+                    build_ban_comment_text(comment_text, ban_timing, row[6]),
                 ])
 
         if issue_rows_to_append:
-            append_issue_rows_fixed(issue_rows_to_append)
+            sheet_append_rows_and_refresh(
+                SHEET_ISSUES,
+                issue_rows_to_append,
+                value_input_option="USER_ENTERED"
+            )
 
         refresh_sheet_cache(target_sheet)
 
     king_message = ""
     if farm:
-        king_ok, king_result = return_farm_king_to_ban(warehouse_name, comment_text)
+        king_ok, king_result = return_farm_king_to_ban(warehouse_name, comment_text, ban_timing)
         if king_ok:
             king_message = f"Farm king склада '{warehouse_name}' переведён в ban."
         elif "не найден" not in str(king_result).lower():
             king_message = str(king_result)
     else:
-        king_ok, king_result = return_king_to_ban(warehouse_name, comment_text)
+        king_ok, king_result = return_king_to_ban(warehouse_name, comment_text, ban_timing)
         if king_ok:
             king_message = f"Кинг склада '{warehouse_name}' переведён в ban."
         elif "не найден" not in str(king_result).lower():
             king_message = str(king_result)
 
-    linked_issue_rows_marked = mark_fp_warehouse_linked_king_issue_rows_as_ban(warehouse_name, comment_text, farm=farm)
+    linked_issue_rows_marked = mark_fp_warehouse_linked_king_issue_rows_as_ban(warehouse_name, comment_text, farm=farm, ban_timing=ban_timing)
     if linked_issue_rows_marked and not king_message:
         if farm:
             king_message = f"Farm king склада '{warehouse_name}' переведён в ban."
@@ -5725,10 +5705,7 @@ def issue_fps_bulk(chat_id, user_id, username, count_needed):
                     normalize_numeric_for_sheet(row[2]),
                     today,
                     row[3],
-                    fp_for_whom,
-                    "",
-                    "",
-                    get_request_from_fp_row(row)
+                    fp_for_whom
                 ])
 
                 issued_items.append({
@@ -5855,10 +5832,7 @@ def confirm_pixel_issue(chat_id, user_id, username):
                 normalize_numeric_for_sheet(row[1]),
                 today,
                 row[2],
-                pixel_for_whom,
-                "",
-                "",
-                get_request_from_pixel_row(row)
+                pixel_for_whom
             ])
 
             invalidate_stats_cache()
@@ -5983,10 +5957,7 @@ def issue_pixels_bulk(chat_id, user_id, username, count_needed):
                     normalize_numeric_for_sheet(row[1]),
                     today,
                     row[2],
-                    pixel_for_whom,
-                    "",
-                    "",
-                    get_request_from_pixel_row(row)
+                    pixel_for_whom
                 ])
 
                 issued_messages.append({
@@ -6235,7 +6206,7 @@ def find_last_pixel_issue_row(pixel_name=None, pixel_id=None):
     return last_match
 
 
-def return_pixel_to_ban(pixel_query, comment_text=""):
+def return_pixel_to_ban(pixel_query, comment_text="", ban_timing=""):
     found = find_pixel_in_base_by_data(pixel_query)
     if not found:
         return False, "Пиксель не найден."
@@ -6266,7 +6237,7 @@ def return_pixel_to_ban(pixel_query, comment_text=""):
 
     issue_info = find_last_pixel_issue_row(pixel_name=pixel_name, pixel_id=pixel_id)
     if issue_info:
-        mark_issue_row_as_ban(issue_info["row_index"], comment_text)
+        mark_issue_row_as_ban(issue_info["row_index"], comment_text, ban_timing)
 
     invalidate_stats_cache()
     return True, "Пиксель переведён в ban."
@@ -7206,10 +7177,7 @@ def process_farm_kings_bulk_proxy_step_background(chat_id, user_id, username):
         normalize_numeric_for_sheet(row[2]),
         today,
         row[3],
-        "farm",
-        "",
-        "",
-        get_request_from_king_row(row)
+        "farm"
     ])
 
     results.append({
@@ -7475,7 +7443,7 @@ def build_farm_king_search_text(king_name):
     }
 
 
-def return_farm_king_to_ban(king_name, comment_text=""):
+def return_farm_king_to_ban(king_name, comment_text="", ban_timing=""):
     found = find_farm_king_in_base_by_name(king_name)
     if not found:
         return False, "Кинг не найден в База фарм кинги."
@@ -7501,7 +7469,7 @@ def return_farm_king_to_ban(king_name, comment_text=""):
 
     issue_info = find_last_king_issue_row(king_name)
     if issue_info:
-        mark_issue_row_as_ban(issue_info["row_index"], comment_text)
+        mark_issue_row_as_ban(issue_info["row_index"], comment_text, ban_timing)
 
     invalidate_stats_cache()
     return True, f"Кинг '{king_name}' переведён в ban."
@@ -7657,10 +7625,7 @@ def issue_farm_kings(chat_id, user_id, username, king_names):
                 normalize_numeric_for_sheet(row[2]),
                 today,
                 row[3],
-                "farm",
-                "",
-                "",
-                get_request_from_king_row(row)
+                "farm"
             ])
 
             issued_items.append({
@@ -7881,7 +7846,7 @@ def build_farm_bm_search_text(bm_id):
         f"Данные:\n{row[8] or 'нет данных'}"
     )
 
-def return_farm_bm_to_ban(bm_id, comment_text=""):
+def return_farm_bm_to_ban(bm_id, comment_text="", ban_timing=""):
     found = find_farm_bm_in_base(bm_id)
     if not found:
         return False, "BM не найден в База фарм бм."
@@ -7901,7 +7866,7 @@ def return_farm_bm_to_ban(bm_id, comment_text=""):
 
     issue_info = find_last_bm_issue_row(effective_bm_id)
     if issue_info:
-        mark_issue_row_as_ban(issue_info["row_index"], comment_text)
+        mark_issue_row_as_ban(issue_info["row_index"], comment_text, ban_timing)
 
     invalidate_stats_cache()
     return True, f"BM '{effective_bm_id}' переведён в ban."
@@ -7970,10 +7935,7 @@ def issue_farm_bm(chat_id, user_id, username):
             normalize_numeric_for_sheet(row[2]),
             today,
             row[3],
-            "farm",
-            "",
-            "",
-            get_request_from_bm_row(row)
+            "farm"
         ])
 
         invalidate_stats_cache()
@@ -8056,7 +8018,7 @@ def build_farm_fp_search_text(fp_link):
         f"Дата выдачи: {row[8] or 'не указана'}"
     )
 
-def return_farm_fp_to_ban(fp_link, comment_text=""):
+def return_farm_fp_to_ban(fp_link, comment_text="", ban_timing=""):
     found = find_farm_fp_in_base(fp_link)
     if not found:
         return False, "Farm FP не найдено."
@@ -8078,7 +8040,7 @@ def return_farm_fp_to_ban(fp_link, comment_text=""):
 
     issue_info = find_last_fp_issue_row(fp_link)
     if issue_info:
-        mark_issue_row_as_ban(issue_info["row_index"], comment_text)
+        mark_issue_row_as_ban(issue_info["row_index"], comment_text, ban_timing)
 
     invalidate_stats_cache()
     return True, "Farm FP переведено в ban."
@@ -8197,10 +8159,7 @@ def issue_farm_fps(chat_id, user_id, username, count_needed):
                     normalize_numeric_for_sheet(row[2]),
                     today,
                     row[3],
-                    "farm",
-                    "",
-                    "",
-                    get_request_from_fp_row(row)
+                    "farm"
                 ])
 
                 messages.append(f"Ссылка: {row[0]}")
@@ -9900,7 +9859,6 @@ def compute_ban_storm_stats(period_type="week", force=False, now=None):
 
     total_period_bans = 0
     total_effective_base = 0
-    total_period_ban_sum = 0.0
 
     for issue_type in BAN_STORM_TYPES_ORDER:
         period_total_rows = int(stats[issue_type]["period_total_rows"] or 0)
@@ -9913,7 +9871,6 @@ def compute_ban_storm_stats(period_type="week", force=False, now=None):
 
         total_period_bans += period_ban_rows
         total_effective_base += effective_total
-        total_period_ban_sum += float(stats[issue_type].get("period_ban_sum", 0.0) or 0.0)
 
     overall_risk_percent = int(round((total_period_bans / total_effective_base) * 100)) if total_effective_base > 0 else 0
 
@@ -9925,7 +9882,6 @@ def compute_ban_storm_stats(period_type="week", force=False, now=None):
         "overall_risk_percent": overall_risk_percent,
         "total_period_bans": total_period_bans,
         "total_effective_base": total_effective_base,
-        "total_period_ban_sum": total_period_ban_sum,
     }
 
 def build_ban_storm_report_text(period_type="week", now=None, force=False, title_override=None):
@@ -9952,14 +9908,7 @@ def build_ban_storm_report_text(period_type="week", now=None, force=False, title
         )
         lines.append("")
 
-    overall_risk = int(report.get('overall_risk_percent', 0) or 0)
-    total_sum = format_ban_storm_amount(report.get('total_period_ban_sum', 0.0) or 0.0)
-
-    lines.append(f"❓общий шанс шторма - {overall_risk}%")
-    if period_type == "month":
-        lines.append(f"💰общая сумма за месяц - {total_sum}")
-    else:
-        lines.append(f"💰общая сумма за неделю - {total_sum}")
+    lines.append(f"❓общий шанс шторма - {int(report.get('overall_risk_percent', 0) or 0)}%")
     return "\n".join(lines).strip()
 
 def build_combined_ban_storm_report_text(now=None, force=False):
@@ -10788,7 +10737,38 @@ def find_last_issue_row(account_number):
             }
     return last_match
 
-def mark_issue_row_as_ban(issue_row_index, comment_text=""):
+def normalize_ban_timing(value):
+    raw = str(value or "").strip().lower()
+
+    if raw in {"before", "до передачи", BTN_BAN_BEFORE_TRANSFER.lower()}:
+        return "before"
+
+    if raw in {"used", "buyer_used", "байер использовал", BTN_BAN_BUYER_USED.lower()}:
+        return "used"
+
+    return ""
+
+
+def build_ban_comment_text(comment_text="", ban_timing="", buyer_before=""):
+    reason = str(comment_text or "").strip()
+    buyer_value = str(buyer_before or "").strip() or "не указан"
+    timing = normalize_ban_timing(ban_timing)
+
+    if timing == "before":
+        prefix = f"до передачи ({buyer_value})"
+    elif timing == "used":
+        prefix = f"байер использовал ({buyer_value})"
+    else:
+        prefix = ""
+
+    if prefix and reason:
+        return f"{prefix}, {reason}"
+    if prefix:
+        return prefix
+    return reason
+
+
+def mark_issue_row_as_ban(issue_row_index, comment_text="", ban_timing="", buyer_before=""):
     if not issue_row_index:
         return
 
@@ -10797,12 +10777,14 @@ def mark_issue_row_as_ban(issue_row_index, comment_text=""):
     current_row = ensure_row_len(current_row, 9)
 
     supplier = str(current_row[5] or "").strip()
+    issue_buyer_before = str(current_row[6] or "").strip()
     who_issued = str(current_row[7] or "").strip()
+    final_comment = build_ban_comment_text(comment_text, ban_timing, buyer_before or issue_buyer_before)
 
     sheet_update_and_refresh(
         SHEET_ISSUES,
         f"E{issue_row_index}:I{issue_row_index}",
-        [[ban_date, supplier, "ban", who_issued, str(comment_text or "").strip()]]
+        [[ban_date, supplier, "ban", who_issued, final_comment]]
     )
 
 def set_issue_comment(issue_row_index, comment_text):
@@ -10826,7 +10808,7 @@ def is_banned_account(base_row, issue_row=None):
 
     return base_target == "ban" or issue_target == "ban"
 
-def return_account_to_ban(account_number, comment_text=""):
+def return_account_to_ban(account_number, comment_text="", ban_timing=""):
     base_info = find_account_in_base(account_number)
     issue_info = find_last_issue_row(account_number)
 
@@ -10850,7 +10832,7 @@ def return_account_to_ban(account_number, comment_text=""):
     )
 
     if issue_info:
-        mark_issue_row_as_ban(issue_info["row_index"], comment_text)
+        mark_issue_row_as_ban(issue_info["row_index"], comment_text, ban_timing)
 
     invalidate_stats_cache()
     return True, "Личка переведена в ban."
@@ -11037,12 +11019,12 @@ def process_bulk_account_return_to_free(account_numbers):
 
     return success_items, failed_items
 
-def process_bulk_account_return_to_ban(account_numbers, comment_text=""):
+def process_bulk_account_return_to_ban(account_numbers, comment_text="", ban_timing=""):
     success_items = []
     failed_items = []
 
     for account_number in (account_numbers or []):
-        ok, message = return_account_to_ban(account_number, comment_text)
+        ok, message = return_account_to_ban(account_number, comment_text, ban_timing)
 
         if ok:
             success_items.append((account_number, message))
@@ -11112,22 +11094,21 @@ def send_free_accounts(chat_id, selected_filter):
 # ADD ACCOUNTS
 # =========================
 def send_bulk_add_instructions(chat_id):
-    text = """Отправь лички сообщением, каждая с новой строки.
-
-Формат:
-номер; дата покупки; цена; поставщик; склады; номер заявки
-
-Пример:
-RK001; 15/02/2026; 300; WD; sklad1,sklad2; 2870
-RK002; 16/02/2026; 500; WD; sklad3; 2871
-
-Номер заявки — это заявка из PaymentsRMBot, где вы оплатили этот расходник."""
+    text = (
+        "Отправь лички сообщением, каждая с новой строки.\n\n"
+        "Формат:\n"
+        "номер; дата покупки; цена; поставщик; склады\n\n"
+        "Пример:\n"
+        "RK001; 15/02/2026; 300; WD; sklad1,sklad2\n"
+        "RK002; 16/02/2026; 500; WD; sklad3"
+    )
     tg_send_message(chat_id, text)
 
+
 def add_accounts_from_text(text):
-    ensure_sheet_request_column(SHEET_ACCOUNTS, ACCOUNTS_REQUEST_COL_NUM)
     existing_rows = get_sheet_rows_cached(SHEET_ACCOUNTS)
     existing_accounts = set()
+
     for row in existing_rows[1:]:
         if row and row[0].strip():
             existing_accounts.add(row[0].strip())
@@ -11139,19 +11120,16 @@ def add_accounts_from_text(text):
 
     for i, line in enumerate(lines, start=1):
         fields = [x.strip() for x in line.split(";")]
-        if len(fields) not in [5, 6]:
-            errors.append(f"Строка {i}: должно быть 6 полей через ';'")
+        if len(fields) != 5:
+            errors.append(f"Строка {i}: должно быть 5 полей через ';'")
             continue
 
-        if len(fields) == 5:
-            account_number, purchase_date_raw, price_raw, supplier, warehouses = fields
-            request_number = ""
-        else:
-            account_number, purchase_date_raw, price_raw, supplier, warehouses, request_number = fields
+        account_number, purchase_date_raw, price_raw, supplier, warehouses = fields
 
         if not account_number:
             errors.append(f"Строка {i}: пустой номер лички")
             continue
+
         if account_number in existing_accounts:
             duplicates += 1
             continue
@@ -11166,23 +11144,19 @@ def add_accounts_from_text(text):
             errors.append(f"Строка {i}: неверная цена '{price_raw}'")
             continue
 
-        request_number = str(request_number or "").strip()
         to_append.append([
-            account_number,
-            purchase_date.strftime("%d/%m/%Y"),
-            price,
-            supplier,
-            "",
-            "",
-            "",
-            warehouses,
-            "free",
-            "",
-            "",
-            "",
-            "",
-            "",
-            request_number,
+            account_number,                         # A номер
+            purchase_date.strftime("%d/%m/%Y"),    # B дата покупки
+            price,                                 # C цена
+            supplier,                              # D поставщик
+            "",                                    # E лимит
+            "",                                    # F трешхолд
+            "",                                    # G GMT
+            warehouses,                            # H склады
+            "free",                                # I статус
+            "",                                    # J кому выдали
+            "",                                    # K дата взятия
+            ""                                     # L кто взял
         ])
         existing_accounts.add(account_number)
 
@@ -11190,11 +11164,18 @@ def add_accounts_from_text(text):
         sheet_append_rows_and_refresh(SHEET_ACCOUNTS, to_append)
         invalidate_stats_cache()
 
-    message = f"Готово.\nДобавлено: {len(to_append)}\nДубликатов пропущено: {duplicates}\nОшибок: {len(errors)}"
+    message = (
+        f"Готово.\n"
+        f"Добавлено: {len(to_append)}\n"
+        f"Дубликатов пропущено: {duplicates}\n"
+        f"Ошибок: {len(errors)}"
+    )
+
     if errors:
         message += "\n\nОшибки:\n" + "\n".join(errors[:10])
         if len(errors) > 10:
             message += f"\n... и ещё {len(errors) - 10}"
+
     return message
 
 def find_oldest_free_account(exclude_account=None):
@@ -11318,19 +11299,20 @@ def show_found_account(chat_id, user_id, found):
     tg_send_message(chat_id, text, keyboard)
 
 
-def append_issue_row(account_number, purchase_date, price, transfer_date, supplier, for_whom, request_number=""):
-    append_issue_row_fixed([
-        account_number,
-        "РК",
-        purchase_date,
-        normalize_numeric_for_sheet(price),
-        transfer_date,
-        supplier,
-        for_whom,
-        "",
-        "",
-        str(request_number or "").strip(),
-    ])
+def append_issue_row(account_number, purchase_date, price, transfer_date, supplier, for_whom):
+    sheet_append_row_and_refresh(
+        SHEET_ISSUES,
+        [
+            account_number,
+            "РК",
+            purchase_date,
+            normalize_numeric_for_sheet(price),
+            transfer_date,
+            supplier,
+            for_whom
+        ],
+        value_input_option="USER_ENTERED"
+    )
 
 def issue_accounts_bulk(account_numbers, for_whom, username):
     today = datetime.now(MOSCOW_TZ).strftime("%d/%m/%Y")
@@ -11394,10 +11376,7 @@ def issue_accounts_bulk(account_numbers, for_whom, username):
                 normalize_numeric_for_sheet(row[2]),
                 today,
                 row[3],
-                for_whom,
-                "",
-                "",
-                get_request_from_accounts_row(row)
+                for_whom
             ])
 
             issued.append({
@@ -11478,8 +11457,7 @@ def issue_next_quick_account_for_person(for_whom, username):
             row[2],
             today,
             row[3],
-            for_whom,
-            get_request_from_accounts_row(row)
+            for_whom
         )
 
         invalidate_stats_cache()
@@ -12338,8 +12316,7 @@ def process_kings_bulk_proxy_step(chat_id, user_id, username, proxy_text):
                         price=row[2],
                         transfer_date=today,
                         supplier=row[3],
-                        for_whom=state.get("king_for_whom", ""),
-                        request_number=get_request_from_king_row(row)
+                        for_whom=state.get("king_for_whom", "")
                     )
 
                     invalidate_stats_cache()
@@ -12551,8 +12528,7 @@ def process_farm_kings_bulk_proxy_step(chat_id, user_id, username, proxy_text):
             price=row[2],
             transfer_date=today,
             supplier=row[3],
-            for_whom="farm",
-            request_number=get_request_from_king_row(row)
+            for_whom="farm"
         )
 
         results.append({
@@ -12846,7 +12822,7 @@ def build_bm_search_text(bm_id):
         f"Данные:\n{data_text}"
     )
 
-def return_bm_to_ban(bm_id, comment_text=""):
+def return_bm_to_ban(bm_id, comment_text="", ban_timing=""):
     bm_info = find_bm_in_base(bm_id)
     if not bm_info:
         return False, "БМ не найден в База_БМ."
@@ -12866,7 +12842,7 @@ def return_bm_to_ban(bm_id, comment_text=""):
 
     issue_info = find_last_bm_issue_row(effective_bm_id)
     if issue_info:
-        mark_issue_row_as_ban(issue_info["row_index"], comment_text)
+        mark_issue_row_as_ban(issue_info["row_index"], comment_text, ban_timing)
 
     invalidate_stats_cache()
     return True, f"БМ '{effective_bm_id}' переведён в ban."
@@ -12973,7 +12949,7 @@ def confirm_bm_issue(chat_id, user_id, username):
             if sync_id:
                 sync_status_to_basebot(BASEBOT_SHEET_BMS, sync_id, "taken")
 
-            append_issue_row_fixed([bm_id, "БМ", purchase_date, normalize_numeric_for_sheet(price), today, row[3], bm_for_whom, "", "", get_request_from_bm_row(row)])
+            append_issue_row_fixed([bm_id, "БМ", purchase_date, normalize_numeric_for_sheet(price), today, row[3], bm_for_whom])
 
             invalidate_stats_cache()
             clear_state(user_id)
@@ -13052,14 +13028,14 @@ def issue_bms_bulk(chat_id, user_id, username, count_needed):
 
                 sheet_update_raw(SHEET_BMS, f"E{row_index}:H{row_index}", [["taken", bm_for_whom, who_took_text, today]])
 
-                issue_rows.append([effective_bm_id, "БМ", row[1], normalize_numeric_for_sheet(row[2]), today, row[3], bm_for_whom, "", "", get_request_from_bm_row(row)])
+                issue_rows.append([effective_bm_id, "БМ", row[1], normalize_numeric_for_sheet(row[2]), today, row[3], bm_for_whom])
 
                 issued_items.append({"bm_id": effective_bm_id, "price": row[2], "data_text": row[8] if len(row) > 8 else "", "sync_id": sync_id})
 
             refresh_sheet_cache(SHEET_BMS)
 
             if issue_rows:
-                append_issue_rows_fixed(issue_rows)
+                sheet_append_rows_and_refresh(SHEET_ISSUES, issue_rows, value_input_option="USER_ENTERED")
 
             for item in issued_items:
                 if item["sync_id"]:
@@ -13202,8 +13178,7 @@ def confirm_king_issue(chat_id, user_id, username):
                 price=row[2],
                 transfer_date=today,
                 supplier=row[3],
-                for_whom=king_for_whom,
-                request_number=get_request_from_king_row(row)
+                for_whom=king_for_whom
             )
 
             invalidate_stats_cache()
@@ -13372,8 +13347,7 @@ def issue_kings_bulk(chat_id, user_id, username, king_names):
                     "supplier": row[3],
                     "geo": row[7],
                     "data_text": get_full_king_data_from_row(row),
-                    "sync_id": sync_id,
-                    "request_number": get_request_from_king_row(row)
+                    "sync_id": sync_id
                 })
 
             logging.info(f"issue_kings_bulk updated {len(issued_items)} kings for user_id={user_id}")
@@ -13394,8 +13368,7 @@ def issue_kings_bulk(chat_id, user_id, username, king_names):
                     price=item["price"],
                     transfer_date=today,
                     supplier=item["supplier"],
-                    for_whom=king_for_whom,
-                    request_number=item.get("request_number", "")
+                    for_whom=king_for_whom
                 )
 
             invalidate_stats_cache()
@@ -13808,10 +13781,7 @@ def process_crypto_bulk_proxy_step(chat_id, user_id, username, proxy_text):
         normalize_numeric_for_sheet(row[2]),
         today,
         row[3],
-        king_for_whom,
-        "",
-        "",
-        get_request_from_king_row(row)
+        king_for_whom
     ])
 
     results.append({
@@ -13834,7 +13804,7 @@ def process_crypto_bulk_proxy_step(chat_id, user_id, username, proxy_text):
 
     start_crypto_kings_bulk_proxy_step(chat_id, user_id)
 
-def append_king_to_issues_sheet(king_name, purchase_date, price, transfer_date, supplier, for_whom, request_number=""):
+def append_king_to_issues_sheet(king_name, purchase_date, price, transfer_date, supplier, for_whom):
     append_issue_row_fixed([
         king_name,
         "KING",
@@ -13842,10 +13812,7 @@ def append_king_to_issues_sheet(king_name, purchase_date, price, transfer_date, 
         normalize_numeric_for_sheet(price),
         transfer_date,
         supplier,
-        for_whom,
-        "",
-        "",
-        str(request_number or "").strip(),
+        for_whom
     ])
 
 def find_last_king_issue_row(king_name):
@@ -13958,7 +13925,7 @@ def find_king_in_base_by_name(king_name):
     return None
 
 
-def return_king_to_ban(king_name, comment_text=""):
+def return_king_to_ban(king_name, comment_text="", ban_timing=""):
     base_info = find_king_in_base_by_name(king_name)
     if not base_info:
         return False, "Кинг не найден в базах."
@@ -13991,7 +13958,7 @@ def return_king_to_ban(king_name, comment_text=""):
 
     issue_info = find_last_king_issue_row(king_name)
     if issue_info:
-        mark_issue_row_as_ban(issue_info["row_index"], comment_text)
+        mark_issue_row_as_ban(issue_info["row_index"], comment_text, ban_timing)
 
     invalidate_stats_cache()
     return True, f"Кинг '{king_name}' переведён в ban."
@@ -14063,7 +14030,7 @@ def find_crypto_king_in_base_by_name(king_name):
     return None
 
 
-def return_crypto_king_to_ban(king_name, comment_text=""):
+def return_crypto_king_to_ban(king_name, comment_text="", ban_timing=""):
     base_info = find_crypto_king_in_base_by_name(king_name)
     if not base_info:
         return False, "Crypto king не найден в База_крипта_кинги."
@@ -14090,7 +14057,7 @@ def return_crypto_king_to_ban(king_name, comment_text=""):
 
     issue_info = find_last_king_issue_row(king_name)
     if issue_info:
-        mark_issue_row_as_ban(issue_info["row_index"], comment_text)
+        mark_issue_row_as_ban(issue_info["row_index"], comment_text, ban_timing)
 
     invalidate_stats_cache()
     return True, f"Crypto king '{king_name}' переведён в ban."
@@ -16150,7 +16117,8 @@ def handle_message(msg):
             FARM_MENU_KING, FARM_MENU_BM, FARM_MENU_FP,
             BTN_BACK_TO_FARMERS, BTN_BACK_FROM_ADMIN, BTN_BACK_FROM_ACCOUNTANTS,
             BTN_BACK_FROM_ADMIN_FARMERS, MENU_CANCEL,
-            MENU_MISC, BTN_BACK_FROM_MISC, ADMIN_ADD_STICKERS, ADMIN_CHECK_BANS
+            MENU_MISC, BTN_BACK_FROM_MISC, ADMIN_ADD_STICKERS,
+            BTN_BAN_BEFORE_TRANSFER, BTN_BAN_BUYER_USED
         }
 
         now = time.time()
@@ -16371,6 +16339,10 @@ def handle_message(msg):
                 )
                 return
 
+            if mode == "awaiting_ban_stage":
+                send_ban_timing_menu(chat_id)
+                return
+
             if mode == KING_OCTO_MODE_COUNT:
                 tg_send_message(chat_id, "Сколько king нужно?", [
                     [{"text": BTN_BACK_STEP}, {"text": MENU_CANCEL}]
@@ -16579,12 +16551,12 @@ def handle_message(msg):
             return
 
         if text == MENU_MISC:
-            if not has_access(user_id):
+            if not can_see_misc(user_id):
                 send_main_menu(chat_id, "Главное меню:", user_id=user_id)
                 return
 
             clear_state(user_id)
-            send_misc_menu(chat_id, "Меню Прочее:", user_id=user_id)
+            send_misc_menu(chat_id, "Меню Прочее:")
             return
 
         if text == ADMIN_ADD_STICKERS:
@@ -16742,12 +16714,12 @@ def handle_message(msg):
             return
 
         if text == ADMIN_CHECK_BANS:
-            if not has_access(user_id):
+            if not is_admin(user_id):
                 tg_send_message(chat_id, "У вас нет доступа.")
                 return
 
             tg_send_message(chat_id, build_combined_ban_storm_report_text(force=True))
-            send_misc_menu(chat_id, "Меню Прочее:", user_id=user_id)
+            send_admin_menu(chat_id, "Меню Admin:", user_id=user_id)
             return
 
         if text == ADMIN_BOT_CHECK:
@@ -17126,6 +17098,28 @@ def handle_message(msg):
             show_found_account(chat_id, user_id, found)
             return
 
+        if state.get("mode") == "awaiting_ban_stage":
+            ban_timing = normalize_ban_timing(text)
+            if not ban_timing:
+                send_ban_timing_menu(chat_id)
+                return
+
+            next_mode = str(state.get("ban_reason_mode", "")).strip()
+            prompt_text = str(state.get("ban_reason_prompt", "Напиши причину бана.")).strip() or "Напиши причину бана."
+            if not next_mode:
+                clear_state(user_id)
+                send_main_menu(chat_id, "Сначала выбери действие заново.", user_id=user_id)
+                return
+
+            next_state = dict(state)
+            next_state["mode"] = next_mode
+            next_state["ban_timing"] = ban_timing
+            next_state.pop("ban_reason_mode", None)
+            next_state.pop("ban_reason_prompt", None)
+            set_state(user_id, next_state)
+            send_text_input_prompt(chat_id, prompt_text)
+            return
+
         if text == BTN_RETURN_CONFIRM:
             if state.get("mode") == "awaiting_return_confirm":
                 account_numbers = list(state.get("return_account_numbers") or [])
@@ -17134,68 +17128,91 @@ def handle_message(msg):
                 if not account_numbers and single_account:
                     account_numbers = [single_account]
 
-                next_state = {
-                    "mode": "awaiting_ban_reason_account",
-                    "return_account_numbers": account_numbers,
-                    "return_account_number": single_account,
-                    "return_account_missing_numbers": list(state.get("return_account_missing_numbers") or [])
-                }
-
-                set_state(user_id, next_state)
-
-                if len(account_numbers) > 1:
-                    send_text_input_prompt(chat_id, "Напиши причину бана для личек.")
-                else:
-                    send_text_input_prompt(chat_id, "Напиши причину бана для лички.")
+                prompt_text = "Напиши причину бана для личек." if len(account_numbers) > 1 else "Напиши причину бана для лички."
+                start_ban_reason_flow(
+                    chat_id,
+                    user_id,
+                    {
+                        "return_account_numbers": account_numbers,
+                        "return_account_number": single_account,
+                        "return_account_missing_numbers": list(state.get("return_account_missing_numbers") or []),
+                        "ban_reason_mode": "awaiting_ban_reason_account"
+                    },
+                    prompt_text
+                )
                 return
 
             if state.get("mode") == "awaiting_return_king_confirm":
-                set_state(user_id, {
-                    "mode": "awaiting_ban_reason_king",
-                    "return_king_name": state.get("return_king_name", ""),
-                    "return_king_source": state.get("return_king_source", "normal")
-                })
-                send_text_input_prompt(chat_id, "Напиши причину бана для кинга.")
+                start_ban_reason_flow(
+                    chat_id,
+                    user_id,
+                    {
+                        "return_king_name": state.get("return_king_name", ""),
+                        "return_king_source": state.get("return_king_source", "normal"),
+                        "ban_reason_mode": "awaiting_ban_reason_king"
+                    },
+                    "Напиши причину бана для кинга."
+                )
                 return
 
             if state.get("mode") == "awaiting_return_bm_confirm":
-                set_state(user_id, {
-                    "mode": "awaiting_ban_reason_bm",
-                    "return_bm_id": state.get("return_bm_id", "")
-                })
-                send_text_input_prompt(chat_id, "Напиши причину бана для БМа.")
+                start_ban_reason_flow(
+                    chat_id,
+                    user_id,
+                    {
+                        "return_bm_id": state.get("return_bm_id", ""),
+                        "ban_reason_mode": "awaiting_ban_reason_bm"
+                    },
+                    "Напиши причину бана для БМа."
+                )
                 return
 
             if state.get("mode") == "awaiting_return_pixel_confirm":
-                set_state(user_id, {
-                    "mode": "awaiting_ban_reason_pixel",
-                    "return_pixel_query": state.get("return_pixel_query", "")
-                })
-                send_text_input_prompt(chat_id, "Напиши причину бана для Пикселя.")
+                start_ban_reason_flow(
+                    chat_id,
+                    user_id,
+                    {
+                        "return_pixel_query": state.get("return_pixel_query", ""),
+                        "ban_reason_mode": "awaiting_ban_reason_pixel"
+                    },
+                    "Напиши причину бана для Пикселя."
+                )
                 return
 
             if state.get("mode") == "awaiting_farm_return_bm_confirm":
-                set_state(user_id, {
-                    "mode": "awaiting_ban_reason_farm_bm",
-                    "return_farm_bm_id": state.get("return_farm_bm_id", "")
-                })
-                send_text_input_prompt(chat_id, "Напиши причину бана для farm BM.")
+                start_ban_reason_flow(
+                    chat_id,
+                    user_id,
+                    {
+                        "return_farm_bm_id": state.get("return_farm_bm_id", ""),
+                        "ban_reason_mode": "awaiting_ban_reason_farm_bm"
+                    },
+                    "Напиши причину бана для farm BM."
+                )
                 return
 
             if state.get("mode") == "awaiting_return_fp_ban_confirm":
-                set_state(user_id, {
-                    "mode": "awaiting_ban_reason_fp",
-                    "return_fp_link": state.get("return_fp_link", "")
-                })
-                send_text_input_prompt(chat_id, "Напиши причину бана для ФП.")
+                start_ban_reason_flow(
+                    chat_id,
+                    user_id,
+                    {
+                        "return_fp_link": state.get("return_fp_link", ""),
+                        "ban_reason_mode": "awaiting_ban_reason_fp"
+                    },
+                    "Напиши причину бана для ФП."
+                )
                 return
 
             if state.get("mode") == "awaiting_farm_return_fp_ban_confirm":
-                set_state(user_id, {
-                    "mode": "awaiting_ban_reason_farm_fp",
-                    "return_fp_link": state.get("return_fp_link", "")
-                })
-                send_text_input_prompt(chat_id, "Напиши причину бана для farm FP.")
+                start_ban_reason_flow(
+                    chat_id,
+                    user_id,
+                    {
+                        "return_fp_link": state.get("return_fp_link", ""),
+                        "ban_reason_mode": "awaiting_ban_reason_farm_fp"
+                    },
+                    "Напиши причину бана для farm FP."
+                )
                 return
 
             send_accounts_menu(chat_id, "Сначала выбери действие заново.")
@@ -17318,12 +17335,16 @@ def handle_message(msg):
                 send_kings_menu(chat_id, "Сначала выбери действие заново.")
                 return
 
-            set_state(user_id, {
-                "mode": "awaiting_ban_reason_king",
-                "return_king_name": state.get("return_king_name", ""),
-                "return_king_source": state.get("return_king_source", "normal")
-            })
-            send_text_input_prompt(chat_id, "Напиши причину бана для кинга.")
+            start_ban_reason_flow(
+                chat_id,
+                user_id,
+                {
+                    "return_king_name": state.get("return_king_name", ""),
+                    "return_king_source": state.get("return_king_source", "normal"),
+                    "ban_reason_mode": "awaiting_ban_reason_king"
+                },
+                "Напиши причину бана для кинга."
+            )
             return
 
         if text == BTN_PIXEL_RETURN_FREE_CONFIRM:
@@ -17520,19 +17541,27 @@ def handle_message(msg):
 
         if text == BTN_BM_BAN_CONFIRM:
             if state.get("mode") == "awaiting_return_bm_confirm":
-                set_state(user_id, {
-                    "mode": "awaiting_ban_reason_bm",
-                    "return_bm_id": state.get("return_bm_id", "")
-                })
-                send_text_input_prompt(chat_id, "Напиши причину бана для БМа.")
+                start_ban_reason_flow(
+                    chat_id,
+                    user_id,
+                    {
+                        "return_bm_id": state.get("return_bm_id", ""),
+                        "ban_reason_mode": "awaiting_ban_reason_bm"
+                    },
+                    "Напиши причину бана для БМа."
+                )
                 return
 
             if state.get("mode") == "awaiting_farm_return_bm_confirm":
-                set_state(user_id, {
-                    "mode": "awaiting_ban_reason_farm_bm",
-                    "return_farm_bm_id": state.get("return_farm_bm_id", "")
-                })
-                send_text_input_prompt(chat_id, "Напиши причину бана для farm BM.")
+                start_ban_reason_flow(
+                    chat_id,
+                    user_id,
+                    {
+                        "return_farm_bm_id": state.get("return_farm_bm_id", ""),
+                        "ban_reason_mode": "awaiting_ban_reason_farm_bm"
+                    },
+                    "Напиши причину бана для farm BM."
+                )
                 return
 
             send_main_menu(chat_id, "Сначала выбери действие заново.", user_id=user_id)
@@ -17639,11 +17668,15 @@ def handle_message(msg):
                 send_pixels_menu(chat_id, "Сначала выбери действие заново.")
                 return
 
-            set_state(user_id, {
-                "mode": "awaiting_ban_reason_pixel",
-                "return_pixel_query": state.get("return_pixel_query", "")
-            })
-            send_text_input_prompt(chat_id, "Напиши причину бана для Пикселя.")
+            start_ban_reason_flow(
+                chat_id,
+                user_id,
+                {
+                    "return_pixel_query": state.get("return_pixel_query", ""),
+                    "ban_reason_mode": "awaiting_ban_reason_pixel"
+                },
+                "Напиши причину бана для Пикселя."
+            )
             return
         
         # ========= FARMERS =========
@@ -18855,8 +18888,7 @@ def handle_message(msg):
                     price=row[2],
                     transfer_date=today,
                     supplier=row[3],
-                    for_whom=king_for_whom,
-                    request_number=get_request_from_king_row(row)
+                    for_whom=king_for_whom
                 )
 
                 invalidate_stats_cache()
@@ -19720,8 +19752,7 @@ def handle_message(msg):
                     price=row[2],
                     transfer_date=today,
                     supplier=row[3],
-                    for_whom="farm",
-                    request_number=get_request_from_king_row(row)
+                    for_whom="farm"
                 )
 
                 invalidate_stats_cache()
@@ -20157,23 +20188,28 @@ def handle_message(msg):
                 send_farm_kings_menu(chat_id, "Кинг не найден.")
                 return
 
-            set_state(user_id, {
-                "mode": "awaiting_ban_reason_farm_king",
-                "return_king_name": king_name
-            })
-            send_text_input_prompt(chat_id, "Напиши причину бана для farm king.")
+            start_ban_reason_flow(
+                chat_id,
+                user_id,
+                {
+                    "return_king_name": king_name,
+                    "ban_reason_mode": "awaiting_ban_reason_farm_king"
+                },
+                "Напиши причину бана для farm king."
+            )
             return
 
 
         if state.get("mode") == "awaiting_ban_reason_farm_king":
             comment_text = text.strip()
+            ban_timing = state.get("ban_timing", "")
 
             if not comment_text:
                 send_text_input_prompt(chat_id, "Напиши причину бана для farm king.")
                 return
 
             king_name = state.get("return_king_name", "")
-            ok, message = return_farm_king_to_ban(king_name, comment_text)
+            ok, message = return_farm_king_to_ban(king_name, comment_text, ban_timing)
             clear_state(user_id)
             send_farm_kings_menu(chat_id, message)
             return
@@ -20297,11 +20333,15 @@ def handle_message(msg):
                 send_text_input_prompt(chat_id, "Впиши название склада ФП, который нужно целиком перевести в ban.")
                 return
 
-            set_state(user_id, {
-                "mode": "awaiting_ban_reason_fp_warehouse",
-                "return_fp_warehouse": warehouse_name
-            })
-            send_text_input_prompt(chat_id, f"Напиши причину бана для всего склада ФП '{warehouse_name}'.")
+            start_ban_reason_flow(
+                chat_id,
+                user_id,
+                {
+                    "return_fp_warehouse": warehouse_name,
+                    "ban_reason_mode": "awaiting_ban_reason_fp_warehouse"
+                },
+                f"Напиши причину бана для всего склада ФП '{warehouse_name}'."
+            )
             return
 
         if state.get("mode") == "awaiting_farm_return_fp_ban_warehouse":
@@ -20311,15 +20351,20 @@ def handle_message(msg):
                 send_text_input_prompt(chat_id, "Впиши название склада farm FP, который нужно целиком перевести в ban.")
                 return
 
-            set_state(user_id, {
-                "mode": "awaiting_ban_reason_farm_fp_warehouse",
-                "return_fp_warehouse": warehouse_name
-            })
-            send_text_input_prompt(chat_id, f"Напиши причину бана для всего склада farm FP '{warehouse_name}'.")
+            start_ban_reason_flow(
+                chat_id,
+                user_id,
+                {
+                    "return_fp_warehouse": warehouse_name,
+                    "ban_reason_mode": "awaiting_ban_reason_farm_fp_warehouse"
+                },
+                f"Напиши причину бана для всего склада farm FP '{warehouse_name}'."
+            )
             return
 
         if state.get("mode") == "awaiting_ban_reason_account":
             comment_text = text.strip()
+            ban_timing = state.get("ban_timing", "")
             account_numbers = list(state.get("return_account_numbers") or [])
 
             if not comment_text:
@@ -20340,12 +20385,12 @@ def handle_message(msg):
                 return
 
             if len(account_numbers) == 1:
-                ok, message = return_account_to_ban(account_numbers[0], comment_text)
+                ok, message = return_account_to_ban(account_numbers[0], comment_text, ban_timing)
                 clear_state(user_id)
                 send_accounts_main_menu(chat_id, message)
                 return
 
-            success_items, failed_items = process_bulk_account_return_to_ban(account_numbers, comment_text)
+            success_items, failed_items = process_bulk_account_return_to_ban(account_numbers, comment_text, ban_timing)
             missing_numbers = list(state.get("return_account_missing_numbers") or [])
 
             clear_state(user_id)
@@ -20364,6 +20409,7 @@ def handle_message(msg):
 
         if state.get("mode") == "awaiting_ban_reason_king":
             comment_text = text.strip()
+            ban_timing = state.get("ban_timing", "")
             if not comment_text:
                 send_text_input_prompt(chat_id, "Напиши причину бана для кинга.")
                 return
@@ -20372,9 +20418,9 @@ def handle_message(msg):
             source = state.get("return_king_source", "normal")
 
             if source == "crypto":
-                ok, message = return_crypto_king_to_ban(king_name, comment_text)
+                ok, message = return_crypto_king_to_ban(king_name, comment_text, ban_timing)
             else:
-                ok, message = return_king_to_ban(king_name, comment_text)
+                ok, message = return_king_to_ban(king_name, comment_text, ban_timing)
 
             clear_state(user_id)
             send_kings_menu(chat_id, message)
@@ -20383,12 +20429,13 @@ def handle_message(msg):
 
         if state.get("mode") == "awaiting_ban_reason_bm":
             comment_text = text.strip()
+            ban_timing = state.get("ban_timing", "")
             if not comment_text:
                 send_text_input_prompt(chat_id, "Напиши причину бана для БМа.")
                 return
 
             bm_id = state.get("return_bm_id", "")
-            ok, message = return_bm_to_ban(bm_id, comment_text)
+            ok, message = return_bm_to_ban(bm_id, comment_text, ban_timing)
             clear_state(user_id)
             send_bms_menu(chat_id, message)
             return
@@ -20396,12 +20443,13 @@ def handle_message(msg):
 
         if state.get("mode") == "awaiting_ban_reason_pixel":
             comment_text = text.strip()
+            ban_timing = state.get("ban_timing", "")
             if not comment_text:
                 send_text_input_prompt(chat_id, "Напиши причину бана для Пикселя.")
                 return
 
             pixel_query = state.get("return_pixel_query", "")
-            ok, message = return_pixel_to_ban(pixel_query, comment_text)
+            ok, message = return_pixel_to_ban(pixel_query, comment_text, ban_timing)
             clear_state(user_id)
             send_pixels_menu(chat_id, message)
             return
@@ -20409,12 +20457,13 @@ def handle_message(msg):
 
         if state.get("mode") == "awaiting_ban_reason_farm_bm":
             comment_text = text.strip()
+            ban_timing = state.get("ban_timing", "")
             if not comment_text:
                 send_text_input_prompt(chat_id, "Напиши причину бана для farm BM.")
                 return
 
             bm_id = state.get("return_farm_bm_id", "")
-            ok, message = return_farm_bm_to_ban(bm_id, comment_text)
+            ok, message = return_farm_bm_to_ban(bm_id, comment_text, ban_timing)
             clear_state(user_id)
             send_farm_bms_menu(chat_id, message)
             return
@@ -20422,12 +20471,13 @@ def handle_message(msg):
 
         if state.get("mode") == "awaiting_ban_reason_fp":
             comment_text = text.strip()
+            ban_timing = state.get("ban_timing", "")
             if not comment_text:
                 send_text_input_prompt(chat_id, "Напиши причину бана для ФП.")
                 return
 
             fp_link = state.get("return_fp_link", "")
-            ok, message = return_fp_to_ban(fp_link, comment_text)
+            ok, message = return_fp_to_ban(fp_link, comment_text, ban_timing)
             clear_state(user_id)
             send_fps_menu(chat_id, message)
             return
@@ -20435,36 +20485,39 @@ def handle_message(msg):
 
         if state.get("mode") == "awaiting_ban_reason_farm_fp":
             comment_text = text.strip()
+            ban_timing = state.get("ban_timing", "")
             if not comment_text:
                 send_text_input_prompt(chat_id, "Напиши причину бана для farm FP.")
                 return
 
             fp_link = state.get("return_fp_link", "")
-            ok, message = return_farm_fp_to_ban(fp_link, comment_text)
+            ok, message = return_farm_fp_to_ban(fp_link, comment_text, ban_timing)
             clear_state(user_id)
             send_farm_fps_menu(chat_id, message)
             return
 
         if state.get("mode") == "awaiting_ban_reason_fp_warehouse":
             comment_text = text.strip()
+            ban_timing = state.get("ban_timing", "")
             if not comment_text:
                 send_text_input_prompt(chat_id, "Напиши причину бана для всего склада ФП.")
                 return
 
             warehouse_name = state.get("return_fp_warehouse", "")
-            ok, message = return_fp_warehouse_to_ban(warehouse_name, comment_text, farm=False)
+            ok, message = return_fp_warehouse_to_ban(warehouse_name, comment_text, farm=False, ban_timing=ban_timing)
             clear_state(user_id)
             send_fps_menu(chat_id, message)
             return
 
         if state.get("mode") == "awaiting_ban_reason_farm_fp_warehouse":
             comment_text = text.strip()
+            ban_timing = state.get("ban_timing", "")
             if not comment_text:
                 send_text_input_prompt(chat_id, "Напиши причину бана для всего склада farm FP.")
                 return
 
             warehouse_name = state.get("return_fp_warehouse", "")
-            ok, message = return_fp_warehouse_to_ban(warehouse_name, comment_text, farm=True)
+            ok, message = return_fp_warehouse_to_ban(warehouse_name, comment_text, farm=True, ban_timing=ban_timing)
             clear_state(user_id)
             send_farm_fps_menu(chat_id, message)
             return
@@ -20600,8 +20653,7 @@ def handle_message(msg):
                     price=row[2],
                     transfer_date=today,
                     supplier=row[3],
-                    for_whom=king_for_whom,
-                    request_number=get_request_from_king_row(row)
+                    for_whom=king_for_whom
                 )
 
                 invalidate_stats_cache()
@@ -22544,11 +22596,6 @@ def start_background_threads_once():
 
         background_threads_started = True
 
-
-try:
-    ensure_request_columns_ready()
-except Exception:
-    logging.exception("ensure_request_columns_ready crashed")
 
 start_background_threads_once()
 
