@@ -156,7 +156,7 @@ def has_access(user_id):
     return is_admin(user_id) or is_accounts_user(user_id) or is_farmers_user(user_id)
 
 def can_see_misc(user_id):
-    return user_id not in MISC_HIDDEN_USERS
+    return has_access(user_id)
 
 def touch_request_heartbeat():
     global last_request_time
@@ -1907,6 +1907,22 @@ def start_ban_reason_flow(chat_id, user_id, state_payload, prompt_text):
     set_state(user_id, payload)
     send_ban_timing_menu(chat_id)
 
+def start_ban_reason_flow_direct(chat_id, user_id, state_payload, prompt_text):
+    payload = dict(state_payload or {})
+    next_mode = str(payload.get("ban_reason_mode") or "").strip()
+    prompt = str(prompt_text or "Напиши причину бана.").strip() or "Напиши причину бана."
+    if not next_mode:
+        clear_state(user_id)
+        send_main_menu(chat_id, "Сначала выбери действие заново.", user_id=user_id)
+        return
+
+    payload.pop("ban_reason_mode", None)
+    payload.pop("ban_reason_prompt", None)
+    payload["mode"] = next_mode
+    payload["ban_timing"] = ""
+    set_state(user_id, payload)
+    send_text_input_prompt(chat_id, prompt)
+
 
 def send_return_action_menu(chat_id, what_text):
     keyboard = [
@@ -2032,7 +2048,6 @@ def send_admin_menu(chat_id, text="Меню Admin:", user_id=None):
     if user_id is not None and is_admin_farm(user_id):
         keyboard = [
             [{"text": ADMIN_FARMERS}, {"text": ADMIN_ALL_STATS}],
-            [{"text": ADMIN_CHECK_BANS}],
             [{"text": BTN_BACK_FROM_ADMIN}]
         ]
     else:
@@ -2040,7 +2055,6 @@ def send_admin_menu(chat_id, text="Меню Admin:", user_id=None):
             [{"text": ADMIN_BACKUP}, {"text": ADMIN_UPDATE_5M}],
             [{"text": ADMIN_ACCOUNTANTS}, {"text": ADMIN_FARMERS}],
             [{"text": ADMIN_ALL_STATS}, {"text": ADMIN_BOT_CHECK}],
-            [{"text": ADMIN_CHECK_BANS}],
             [{"text": ADMIN_SEND_STICKER}],
             [{"text": ADMIN_POLL}],
             [{"text": ADMIN_MESSAGE}],
@@ -2051,7 +2065,7 @@ def send_admin_menu(chat_id, text="Меню Admin:", user_id=None):
 
 def send_misc_menu(chat_id, text="Меню Прочее:"):
     keyboard = [
-        [{"text": ADMIN_ADD_STICKERS}],
+        [{"text": ADMIN_CHECK_BANS}],
         [{"text": BTN_BACK_FROM_MISC}]
     ]
     tg_send_message(chat_id, text, keyboard)
@@ -9838,6 +9852,12 @@ def compute_ban_storm_stats(period_type="week", force=False, now=None):
         for issue_type in BAN_STORM_TYPES_ORDER
     }
 
+    total_period_bans = 0
+    total_effective_base = 0
+    total_period_ban_sum = 0.0
+    total_before_transfer = 0
+    total_buyer_used = 0
+
     for raw_row in rows[1:]:
         row = ensure_row_len(raw_row, 9)
         issue_type = normalize_ban_storm_issue_type(row[1])
@@ -9859,9 +9879,13 @@ def compute_ban_storm_stats(period_type="week", force=False, now=None):
             price_value = parse_price(row[3])
             if price_value is not None:
                 stats[issue_type]["period_ban_sum"] += price_value
+                total_period_ban_sum += float(price_value or 0.0)
 
-    total_period_bans = 0
-    total_effective_base = 0
+            timing_kind = classify_ban_timing_from_comment(row[8])
+            if timing_kind == "before":
+                total_before_transfer += 1
+            elif timing_kind == "used":
+                total_buyer_used += 1
 
     for issue_type in BAN_STORM_TYPES_ORDER:
         period_total_rows = int(stats[issue_type]["period_total_rows"] or 0)
@@ -9885,7 +9909,11 @@ def compute_ban_storm_stats(period_type="week", force=False, now=None):
         "overall_risk_percent": overall_risk_percent,
         "total_period_bans": total_period_bans,
         "total_effective_base": total_effective_base,
+        "total_period_ban_sum": total_period_ban_sum,
+        "total_before_transfer": total_before_transfer,
+        "total_buyer_used": total_buyer_used,
     }
+
 
 def build_ban_storm_report_text(period_type="week", now=None, force=False, title_override=None):
     now = now or datetime.now(MOSCOW_TZ)
@@ -9911,8 +9939,18 @@ def build_ban_storm_report_text(period_type="week", now=None, force=False, title
         )
         lines.append("")
 
-    lines.append(f"❓общий шанс шторма - {int(report.get('overall_risk_percent', 0) or 0)}%")
+    overall_risk = int(report.get("overall_risk_percent", 0) or 0)
+    total_sum = format_ban_storm_amount(report.get("total_period_ban_sum", 0.0) or 0.0)
+    total_before = int(report.get("total_before_transfer", 0) or 0)
+    total_used = int(report.get("total_buyer_used", 0) or 0)
+    period_label = "неделю" if period_type == "week" else "месяц"
+
+    lines.append(f"❓общий шанс шторма - {overall_risk}%")
+    lines.append(f"💰общая сумма за {period_label} - {total_sum}")
+    lines.append(f"⏳до передачи - {total_before}")
+    lines.append(f"👤после передачи байеру - {total_used}")
     return "\n".join(lines).strip()
+
 
 def build_combined_ban_storm_report_text(now=None, force=False):
     now = now or datetime.now(MOSCOW_TZ)
@@ -10769,6 +10807,16 @@ def build_ban_comment_text(comment_text="", ban_timing="", buyer_before=""):
     if prefix:
         return prefix
     return reason
+
+def classify_ban_timing_from_comment(comment_text=""):
+    raw = str(comment_text or "").strip().lower()
+    if not raw:
+        return ""
+    if raw.startswith("до передачи") or "до передачи" in raw:
+        return "before"
+    if raw.startswith("байер использовал") or "байер использовал" in raw:
+        return "used"
+    return ""
 
 
 def mark_issue_row_as_ban(issue_row_index, comment_text="", ban_timing="", buyer_before=""):
@@ -16120,7 +16168,7 @@ def handle_message(msg):
             FARM_MENU_KING, FARM_MENU_BM, FARM_MENU_FP,
             BTN_BACK_TO_FARMERS, BTN_BACK_FROM_ADMIN, BTN_BACK_FROM_ACCOUNTANTS,
             BTN_BACK_FROM_ADMIN_FARMERS, MENU_CANCEL,
-            MENU_MISC, BTN_BACK_FROM_MISC, ADMIN_ADD_STICKERS
+            MENU_MISC, BTN_BACK_FROM_MISC, ADMIN_ADD_STICKERS, ADMIN_CHECK_BANS
         }
 
         now = time.time()
@@ -16562,12 +16610,8 @@ def handle_message(msg):
             return
 
         if text == ADMIN_ADD_STICKERS:
-            if not has_access(user_id):
+            if not is_admin(user_id):
                 tg_send_message(chat_id, "Нет доступа.")
-                return
-
-            if not can_see_misc(user_id):
-                send_main_menu(chat_id, "Главное меню:", user_id=user_id)
                 return
 
             set_state(user_id, {
@@ -16716,12 +16760,12 @@ def handle_message(msg):
             return
 
         if text == ADMIN_CHECK_BANS:
-            if not is_admin(user_id):
+            if not has_access(user_id):
                 tg_send_message(chat_id, "У вас нет доступа.")
                 return
 
             tg_send_message(chat_id, build_combined_ban_storm_report_text(force=True))
-            send_admin_menu(chat_id, "Меню Admin:", user_id=user_id)
+            send_misc_menu(chat_id, "Меню Прочее:")
             return
 
         if text == ADMIN_BOT_CHECK:
@@ -17182,7 +17226,7 @@ def handle_message(msg):
                 return
 
             if state.get("mode") == "awaiting_farm_return_bm_confirm":
-                start_ban_reason_flow(
+                start_ban_reason_flow_direct(
                     chat_id,
                     user_id,
                     {
@@ -17206,7 +17250,7 @@ def handle_message(msg):
                 return
 
             if state.get("mode") == "awaiting_farm_return_fp_ban_confirm":
-                start_ban_reason_flow(
+                start_ban_reason_flow_direct(
                     chat_id,
                     user_id,
                     {
@@ -17555,7 +17599,7 @@ def handle_message(msg):
                 return
 
             if state.get("mode") == "awaiting_farm_return_bm_confirm":
-                start_ban_reason_flow(
+                start_ban_reason_flow_direct(
                     chat_id,
                     user_id,
                     {
@@ -20190,7 +20234,7 @@ def handle_message(msg):
                 send_farm_kings_menu(chat_id, "Кинг не найден.")
                 return
 
-            start_ban_reason_flow(
+            start_ban_reason_flow_direct(
                 chat_id,
                 user_id,
                 {
@@ -20353,7 +20397,7 @@ def handle_message(msg):
                 send_text_input_prompt(chat_id, "Впиши название склада farm FP, который нужно целиком перевести в ban.")
                 return
 
-            start_ban_reason_flow(
+            start_ban_reason_flow_direct(
                 chat_id,
                 user_id,
                 {
