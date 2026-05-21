@@ -1884,6 +1884,7 @@ def send_text_input_prompt(chat_id, text):
     ]
     tg_send_message(chat_id, text, keyboard)
 
+
 def send_ban_timing_menu(chat_id):
     keyboard = [
         [{"text": BTN_BAN_BEFORE_TRANSFER}, {"text": BTN_BAN_BUYER_USED}],
@@ -16117,8 +16118,7 @@ def handle_message(msg):
             FARM_MENU_KING, FARM_MENU_BM, FARM_MENU_FP,
             BTN_BACK_TO_FARMERS, BTN_BACK_FROM_ADMIN, BTN_BACK_FROM_ACCOUNTANTS,
             BTN_BACK_FROM_ADMIN_FARMERS, MENU_CANCEL,
-            MENU_MISC, BTN_BACK_FROM_MISC, ADMIN_ADD_STICKERS,
-            BTN_BAN_BEFORE_TRANSFER, BTN_BAN_BUYER_USED
+            MENU_MISC, BTN_BACK_FROM_MISC, ADMIN_ADD_STICKERS
         }
 
         now = time.time()
@@ -20385,7 +20385,7 @@ def handle_message(msg):
                 return
 
             if len(account_numbers) == 1:
-                ok, message = return_account_to_ban(account_numbers[0], comment_text, ban_timing)
+                ok, message = return_account_to_ban(account_numbers[0], comment_text)
                 clear_state(user_id)
                 send_accounts_main_menu(chat_id, message)
                 return
