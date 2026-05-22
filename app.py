@@ -12325,9 +12325,13 @@ def confirm_king_octo_issue(chat_id, user_id, username):
 def process_kings_bulk_proxy_step(chat_id, user_id, username, proxy_text):
     state = get_state(user_id)
 
-    if state.get("mode") != KING_OCTO_MODE_BULK_PROXY:
+    if state.get("mode") not in [KING_OCTO_MODE_BULK_PROXY, KING_OCTO_MODE_BULK_CONFIRM]:
         send_kings_menu(chat_id, "Сначала начни выдачу king заново.")
         return
+
+    if state.get("mode") != KING_OCTO_MODE_BULK_PROXY:
+        state["mode"] = KING_OCTO_MODE_BULK_PROXY
+        set_state_with_custom_ttl(user_id, state, KING_BULK_PROXY_TTL)
 
     queue = state.get("kings_bulk_queue", [])
     current_index = int(state.get("kings_bulk_current_index", 0))
@@ -19073,7 +19077,11 @@ def handle_message(msg):
                 tg_send_message(chat_id, "Ошибка выдачи king. Попробуй ещё раз.")
                 send_kings_menu(chat_id, "Меню кингов:")
 
-        if state.get("mode") == KING_OCTO_MODE_BULK_PROXY:
+        if state.get("mode") in [KING_OCTO_MODE_BULK_PROXY, KING_OCTO_MODE_BULK_CONFIRM]:
+            if state.get("mode") != KING_OCTO_MODE_BULK_PROXY:
+                state["mode"] = KING_OCTO_MODE_BULK_PROXY
+                set_state_with_custom_ttl(user_id, state, KING_BULK_PROXY_TTL)
+
             process_kings_bulk_proxy_step(
                 chat_id=chat_id,
                 user_id=user_id,
@@ -21715,6 +21723,7 @@ def handle_callback_query(callback_query):
         if data == f"kings_bulk_skip_all_proxies:{user_id}":
             state = get_state(user_id)
             state["kings_bulk_skip_all_proxies"] = True
+            state["mode"] = KING_OCTO_MODE_BULK_PROXY
 
             if message_id:
                 state["kings_bulk_proxy_message_id"] = message_id
@@ -21749,11 +21758,14 @@ def handle_callback_query(callback_query):
             tg_answer_callback_query(callback_id)
 
             state = get_state(user_id)
+            state["mode"] = KING_OCTO_MODE_BULK_PROXY
 
             if message_id:
                 state["kings_bulk_confirm_message_id"] = message_id
-                set_state_with_custom_ttl(user_id, state, KING_BULK_PROXY_TTL)
 
+            set_state_with_custom_ttl(user_id, state, KING_BULK_PROXY_TTL)
+
+            if message_id:
                 tg_edit_message_text(
                     chat_id,
                     message_id,
