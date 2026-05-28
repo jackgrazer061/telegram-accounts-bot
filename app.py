@@ -10104,7 +10104,9 @@ def compute_ban_storm_stats(period_type="week", force=False, now=None):
     total_effective_base = 0
     total_period_ban_sum = 0.0
     total_before_transfer = 0
+    total_before_transfer_sum = 0.0
     total_buyer_used = 0
+    total_buyer_used_sum = 0.0
 
     for raw_row in rows[1:]:
         row = ensure_row_len(raw_row, 9)
@@ -10125,15 +10127,18 @@ def compute_ban_storm_stats(period_type="week", force=False, now=None):
         if target == "ban":
             stats[issue_type]["period_ban_rows"] += 1
             price_value = parse_price(row[3])
+            price_float = float(price_value or 0.0) if price_value is not None else 0.0
             if price_value is not None:
                 stats[issue_type]["period_ban_sum"] += price_value
-                total_period_ban_sum += float(price_value or 0.0)
+                total_period_ban_sum += price_float
 
             timing_kind = classify_ban_timing_from_comment(row[8])
             if timing_kind == "before":
                 total_before_transfer += 1
+                total_before_transfer_sum += price_float
             elif timing_kind == "used":
                 total_buyer_used += 1
+                total_buyer_used_sum += price_float
 
     for issue_type in BAN_STORM_TYPES_ORDER:
         period_total_rows = int(stats[issue_type]["period_total_rows"] or 0)
@@ -10159,7 +10164,9 @@ def compute_ban_storm_stats(period_type="week", force=False, now=None):
         "total_effective_base": total_effective_base,
         "total_period_ban_sum": total_period_ban_sum,
         "total_before_transfer": total_before_transfer,
+        "total_before_transfer_sum": total_before_transfer_sum,
         "total_buyer_used": total_buyer_used,
+        "total_buyer_used_sum": total_buyer_used_sum,
     }
 
 
@@ -10190,13 +10197,15 @@ def build_ban_storm_report_text(period_type="week", now=None, force=False, title
     overall_risk = int(report.get("overall_risk_percent", 0) or 0)
     total_sum = format_ban_storm_amount(report.get("total_period_ban_sum", 0.0) or 0.0)
     total_before = int(report.get("total_before_transfer", 0) or 0)
+    total_before_sum = format_ban_storm_amount(report.get("total_before_transfer_sum", 0.0) or 0.0)
     total_used = int(report.get("total_buyer_used", 0) or 0)
+    total_used_sum = format_ban_storm_amount(report.get("total_buyer_used_sum", 0.0) or 0.0)
     period_label = "неделю" if period_type == "week" else "месяц"
 
     lines.append(f"❓общий шанс шторма - {overall_risk}%")
     lines.append(f"💰общая сумма за {period_label} - {total_sum}")
-    lines.append(f"⏳до передачи - {total_before}")
-    lines.append(f"👤после передачи байеру - {total_used}")
+    lines.append(f"⏳до передачи - {total_before} на сумму {total_before_sum}")
+    lines.append(f"👤после передачи байеру - {total_used} на сумму {total_used_sum}")
     return "\n".join(lines).strip()
 
 
