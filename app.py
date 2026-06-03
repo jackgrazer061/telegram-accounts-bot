@@ -295,6 +295,7 @@ MENU_CANCEL = 'Отмена'
 
 MENU_MISC = 'Прочее'
 BTN_BACK_FROM_MISC = 'Назад из Прочее'
+MISC_FREE_RESOURCES = '📊 Остатки расходников'
 
 SUBMENU_GET_PIXELS = '➡️Получить Пиксели'
 SUBMENU_SEARCH_PIXEL = '🔎Найти Пиксель'
@@ -2157,6 +2158,90 @@ def send_misc_menu(chat_id, text="Меню Прочее:"):
         [{"text": BTN_BACK_FROM_MISC}]
     ]
     tg_send_message(chat_id, text, keyboard)
+
+
+
+def _get_rows_cached_safe(sheet_name):
+    try:
+        return get_sheet_rows_cached(sheet_name, force=True)
+    except Exception as e:
+        logging.warning(f"Не удалось прочитать лист {sheet_name}: {e}")
+        return []
+
+
+def _safe_float_sum_value(value):
+    parsed = parse_price(value)
+    if parsed is None:
+        return 0.0
+    return float(parsed)
+
+
+def _format_summary_money(value):
+    try:
+        num = float(value or 0)
+    except Exception:
+        num = 0.0
+
+    if abs(num - round(num)) < 1e-9:
+        return f"{int(round(num)):,}".replace(",", " ")
+
+    text = f"{num:,.2f}".replace(",", " ").replace(".", ",")
+    return text.rstrip("0").rstrip(",")
+
+
+def _summarize_free_rows(rows, status_index, price_index, row_len):
+    count = 0
+    total_sum = 0.0
+
+    for row in rows[1:]:
+        row = ensure_row_len(row, row_len)
+        status = str(row[status_index]).strip().lower()
+        if status != "free":
+            continue
+
+        count += 1
+        total_sum += _safe_float_sum_value(row[price_index])
+
+    return {
+        "count": count,
+        "sum": total_sum
+    }
+
+
+def build_free_resources_summary_text():
+    sections = [
+        ("👤 Лички", SHEET_ACCOUNTS, 8, 2, 12),
+        ("👑 Кинги", SHEET_KINGS, 4, 2, 13),
+        ("🪙 Crypto king", SHEET_CRYPTO_KINGS, 4, 2, 13),
+        ("🌀 Пиксели", SHEET_PIXELS, 3, 1, 9),
+        ("📁 БМ", SHEET_BMS, 4, 2, 10),
+        ("📑 ФП", SHEET_FPS, 5, 2, 9),
+        ("🌾 Farm king", SHEET_FARM_KINGS, 4, 2, 13),
+        ("🌾 Farm BM", SHEET_FARM_BMS, 4, 2, 10),
+        ("🌾 Farm FP", SHEET_FARM_FPS, 5, 2, 9),
+    ]
+
+    lines = ["📦 СВОБОДНЫЕ ОСТАТКИ", ""]
+    total_count = 0
+    total_sum = 0.0
+
+    for title, sheet_name, status_index, price_index, row_len in sections:
+        rows = _get_rows_cached_safe(sheet_name)
+        stats = _summarize_free_rows(rows, status_index, price_index, row_len)
+
+        total_count += stats["count"]
+        total_sum += stats["sum"]
+
+        lines.append(
+            f"{title}: {stats['count']} шт. — {_format_summary_money(stats['sum'])}💰"
+        )
+
+    lines.append("")
+    lines.append(
+        f"💵 Итого free: {total_count} шт. — {_format_summary_money(total_sum)}💰"
+    )
+
+    return "\n".join(lines)
 
 def send_admin_farmers_menu(chat_id, text="Admin / Фармеры:"):
     keyboard = [
@@ -15098,7 +15183,7 @@ def run_sheet_structure_checks():
 
     for sheet_name, min_cols, title in checks:
         try:
-            rows = get_sheet_rows_cached(sheet_name, force=True)
+            rows = _get_rows_cached_safe(sheet_name)
 
             if not rows:
                 add_result(f"{title}: лист не пустой", False, "Лист пустой")
@@ -15284,7 +15369,7 @@ def find_row_in_sheet_by_sync_id(sheet_name, sync_id, sync_col_index=0, basebot=
     if basebot:
         rows = basebot_get_all_rows(sheet_name)
     else:
-        rows = get_sheet_rows_cached(sheet_name, force=True)
+        rows = _get_rows_cached_safe(sheet_name)
 
     target = str(sync_id or "").strip()
 
@@ -16900,6 +16985,15 @@ def handle_message(msg):
                 chat_id,
                 "Пришли стикер одним сообщением — я добавлю его в очередь."
             )
+            return
+
+        if text == MISC_FREE_RESOURCES:
+            if not can_see_misc(user_id):
+                send_main_menu(chat_id, "Главное меню:", user_id=user_id)
+                return
+
+            tg_send_message(chat_id, build_free_resources_summary_text())
+            send_misc_menu(chat_id, "Меню Прочее:")
             return
 
         if text == BTN_BACK_FROM_MISC:
