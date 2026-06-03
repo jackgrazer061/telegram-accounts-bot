@@ -2,7 +2,7 @@ from flask_cors import CORS
 import os
 import json
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, date
 import time
 import re
 from zoneinfo import ZoneInfo
@@ -48,7 +48,6 @@ OCTO_CRYPTO_EXTENSIONS = [
     "nmnnilimjhkbdmnpojpbihmnphkneckf@1.0.9",     # SMIT Connect
     "naciaagbkifhpnoodlkhbejjldaiffcm@1.6.9",     # Get Token Cookie
     "lopekoolgoijpmaidblgfgelbkfkgmod@0.6.0",     # Pass key
-    "ifmhoabcaeehkljcfclfiieohkohdgbb@31.1.0",    # FIXER
 ]
 
 OCTO_FARM_EXTENSIONS = [
@@ -60,7 +59,6 @@ OCTO_FARM_EXTENSIONS = [
     "nmnnilimjhkbdmnpojpbihmnphkneckf@1.0.9",     # SMIT Connect
     "naciaagbkifhpnoodlkhbejjldaiffcm@1.6.9",     # Get Token Cookie
     "lopekoolgoijpmaidblgfgelbkfkgmod@0.6.0",     # Pass key
-    "ifmhoabcaeehkljcfclfiieohkohdgbb@31.1.0",    # FIXER
 ]
 
 if not BOT_TOKEN:
@@ -121,8 +119,6 @@ ACCOUNTS_USERS = {
     8035275476: "SeanConneryManager",
     8435159019: "Robert_Pattinson_Account_Manager",
     7045494795: "TessaYang_Accmanager",
-    8309499971: "petedavidson_accountmanager",
-    7299873991: "Head_of_financeR",
 }
 
 FARMERS_USERS = {
@@ -158,7 +154,7 @@ def has_access(user_id):
     return is_admin(user_id) or is_accounts_user(user_id) or is_farmers_user(user_id)
 
 def can_see_misc(user_id):
-    return has_access(user_id)
+    return user_id not in MISC_HIDDEN_USERS
 
 def touch_request_heartbeat():
     global last_request_time
@@ -194,6 +190,7 @@ SHEET_CRYPTO_KINGS = "База_крипта_кинги"
 SHEET_PIXELS = "База_пикселей"
 SHEET_STICKERS = "Стикеры"
 SHEET_KING_DOWNLOADS = "Кэш_скачиваний_king"
+SHEET_FREE_SNAPSHOTS = "Остатки по дням"
 
 ADMIN_POLL = "Опрос"
 
@@ -250,14 +247,6 @@ LIMIT_OPTIONS = ['-250', '250-500', '500-1200', '1200-1500', 'unlim']
 THRESHOLD_OPTIONS = ['0-49', '50-99', '100-199', '200-499', '500+']
 GMT_OPTIONS = ['-10', '-9', '-8', '-7', '-6', '-5', '-4', '-3', '-2', '-1', '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', '10']
 ACCOUNT_CURRENCY_COL = 12  # M колонка в База_личек
-PAYMENT_HASH_COL_NAME = "Хэш оплаты"
-REQUEST_COL_NAME = PAYMENT_HASH_COL_NAME
-ISSUES_REQUEST_COL_NUM = 10
-KINGS_REQUEST_COL_NUM = 14
-BMS_REQUEST_COL_NUM = 11
-FPS_REQUEST_COL_NUM = 10
-PIXELS_REQUEST_COL_NUM = 10
-ACCOUNTS_REQUEST_COL_NUM = 15
 
 MENU_ACCOUNTS = 'Accounts'
 MENU_PIXELS = 'Пиксели'
@@ -288,7 +277,6 @@ MENU_BMS = 'БМ'
 MENU_FPS = 'ФП'
 MENU_STATS = 'Статистика'
 MENU_MANAGER_STATS = 'Статистика менеджера'
-MENU_ISSUED_TO_BUYER = 'Выдано байеру'
 MENU_FARMER_STATS = 'Статистика фармера'
 MENU_ADMIN = 'Admin'
 MENU_CANCEL = 'Отмена'
@@ -296,6 +284,7 @@ MENU_CANCEL = 'Отмена'
 MENU_MISC = 'Прочее'
 BTN_BACK_FROM_MISC = 'Назад из Прочее'
 MISC_FREE_RESOURCES = '📊 Остатки расходников'
+MISC_DAILY_FREE_RESOURCES = '🗓 Остатки по дням'
 
 SUBMENU_GET_PIXELS = '➡️Получить Пиксели'
 SUBMENU_SEARCH_PIXEL = '🔎Найти Пиксель'
@@ -305,12 +294,11 @@ SUBMENU_BACK_MAIN = 'В меню'
 
 DEPT_CRYPTO = '🪙Крипта'
 DEPT_GAMBLA = '🎰Гембла'
-DEPT_OTHER = '📦Прочее'
 
 CRYPTO_NAMES = [
     '№3 DS78', '№5 MCH79', '№20 MS77',
     '№32 alex', '№34 AK81', '№37 VK82',
-    '№4 NH25', '№57 VD22', '№60 MSH5', '№62 IA14', '№68 MK136', '№70 AI140'
+    '№4 NH25', '№57 VD22', '№60 MSH5', '№62 IA14'
 ]
 
 GAMBLA_NAMES = [
@@ -319,48 +307,8 @@ GAMBLA_NAMES = [
     '№30 MG88', '№39 AA96', '№47 DK99', '№49 IE97',
     '№51 VG98', '№21 VK84', '№22 AU85', '№53 DR100', '№54 VP101',
     '№000 richard', '№55 AL102', '№56 IC1', '№58 KM2', '№59 AH6', '№43 MD9', '№45 AA8', '№61 SN11',
-    '№63 ED123', '№64 SA122', '№65 BS125', '№66 AD129', '№67 AG135', '№69 sasha'
+    '№63 ED123', '№64 SA122'
 ]
-
-OTHER_NAMES = [
-    'ACC DEP', 'TEST ACC DEP'
-]
-
-BTN_RETURN_FP_BAN_ALL = '🚫В бан всю ФП'
-
-
-def get_supported_departments():
-    return [DEPT_CRYPTO, DEPT_GAMBLA, DEPT_OTHER]
-
-
-def get_department_people(department):
-    if department == DEPT_CRYPTO:
-        return CRYPTO_NAMES
-    if department == DEPT_GAMBLA:
-        return GAMBLA_NAMES
-    if department == DEPT_OTHER:
-        return OTHER_NAMES
-    return []
-
-
-def get_department_people_by_key(department_key):
-    if department_key == 'crypto':
-        return CRYPTO_NAMES
-    if department_key == 'gambla':
-        return GAMBLA_NAMES
-    if department_key == 'misc':
-        return OTHER_NAMES
-    return []
-
-
-def get_department_title(department):
-    if department == DEPT_CRYPTO:
-        return 'Выбери человека из отдела Крипта:'
-    if department == DEPT_GAMBLA:
-        return 'Выбери человека из отдела Гембла:'
-    if department == DEPT_OTHER:
-        return 'Выбери человека из отдела Прочее:'
-    return ''
 
 SUBMENU_GET = '➡️Выдать лички'
 SUBMENU_QUICK_GET = '⏭️Быстро выдать личку'
@@ -394,7 +342,6 @@ ADMIN_BOT_CHECK = 'Проверка бота'
 ADMIN_BACKUP = 'Бэкап таблиц'
 ADMIN_UPDATE_5M = 'Обновление 5м'
 ADMIN_ALL_STATS = 'Статистика всех'
-ADMIN_CHECK_BANS = 'Проверить баны'
 SUBMENU_CRYPTO_KINGS = 'Крипта кинги'
 ADMIN_ADD_CRYPTO_KINGS = 'Добавить crypto king'
 
@@ -429,8 +376,6 @@ BTN_ISSUE_CONFIRM = 'Выдать личку'
 BTN_ISSUE_NEXT = 'Другая личка'
 BTN_ISSUE_MORE = 'Выдать еще'
 BTN_RETURN_CONFIRM = 'Подтвердить бан'
-BTN_BAN_BEFORE_TRANSFER = 'До передачи'
-BTN_BAN_BUYER_USED = 'Байер использовал'
 
 # кнопки выдачи кингов
 BTN_KING_CONFIRM = 'Выдать кинг'
@@ -471,59 +416,7 @@ google_lock = threading.RLock()
 last_backup_date = None
 MOSCOW_TZ = ZoneInfo("Europe/Moscow")
 farm_bulk_worker_lock = threading.Lock()
-fp_warehouse_time_locks = {}
-farm_fp_warehouse_time_locks = {}
-fp_warehouse_time_locks_lock = threading.Lock()
-
 farm_bulk_workers_running = set()
-
-# Резервирование farm king строк — защита от race condition при параллельных выдачах
-farm_kings_reserve_lock = threading.Lock()
-farm_kings_reserved_rows = {}  # row_index -> user_id, кто зарезервировал
-FARM_KINGS_RESERVE_TTL = 1800  # 30 минут максимум держим резерв
-_farm_kings_reserve_timestamps = {}  # row_index -> timestamp
-
-def reserve_farm_king_rows(user_id, row_indices):
-    """Зарезервировать список строк за пользователем. Возвращает True если все свободны."""
-    now = time.time()
-    with farm_kings_reserve_lock:
-        # Сначала очистим протухшие резервы
-        stale = [r for r, ts in _farm_kings_reserve_timestamps.items()
-                 if now - ts > FARM_KINGS_RESERVE_TTL]
-        for r in stale:
-            farm_kings_reserved_rows.pop(r, None)
-            _farm_kings_reserve_timestamps.pop(r, None)
-
-        # Проверяем, не занят ли кто-то другой
-        for idx in row_indices:
-            owner = farm_kings_reserved_rows.get(idx)
-            if owner is not None and owner != user_id:
-                return False  # Уже занято другим
-
-        # Резервируем
-        for idx in row_indices:
-            farm_kings_reserved_rows[idx] = user_id
-            _farm_kings_reserve_timestamps[idx] = now
-        return True
-
-def release_farm_king_rows(user_id):
-    """Снять все резервы пользователя (при отмене или завершении)."""
-    with farm_kings_reserve_lock:
-        to_release = [r for r, uid in farm_kings_reserved_rows.items() if uid == user_id]
-        for r in to_release:
-            farm_kings_reserved_rows.pop(r, None)
-            _farm_kings_reserve_timestamps.pop(r, None)
-
-def get_reserved_rows_set():
-    """Вернуть множество всех зарезервированных row_index (для фильтрации)."""
-    now = time.time()
-    with farm_kings_reserve_lock:
-        stale = [r for r, ts in _farm_kings_reserve_timestamps.items()
-                 if now - ts > FARM_KINGS_RESERVE_TTL]
-        for r in stale:
-            farm_kings_reserved_rows.pop(r, None)
-            _farm_kings_reserve_timestamps.pop(r, None)
-        return set(farm_kings_reserved_rows.keys())
 polls_lock = threading.Lock()
 polls_data = {}
 next_poll_id = 1
@@ -533,10 +426,6 @@ next_message_id = 1
 
 last_user_action = {}
 ACTION_COOLDOWN = 0.2
-
-king_search_edit_sessions = {}
-king_search_edit_lock = threading.Lock()
-KING_SEARCH_EDIT_TTL = 60 * 60 * 24
 
 STATE_TTL = 600  # обычный ttl
 
@@ -738,117 +627,43 @@ def sheet_update_and_refresh(sheet_name, cell_range, values):
     google_write_with_retry(_do)
     mark_sheet_cache_stale(sheet_name)
 
-def col_to_letter(col_num):
-    result = ""
-    while col_num > 0:
-        col_num, rem = divmod(col_num - 1, 26)
-        result = chr(65 + rem) + result
-    return result
-
-def detect_sheet_header_row_index(rows, hints=None):
-    hints = [str(x).strip().lower() for x in (hints or []) if str(x).strip()]
-    best_idx = None
-    best_score = -1
-
-    for idx, row in enumerate((rows or [])[:5], start=1):
-        values = [str(x).strip().lower() for x in (row or []) if str(x).strip()]
-        if not values:
-            continue
-
-        score = sum(1 for h in hints if h in values) if hints else 1
-        if score > best_score:
-            best_score = score
-            best_idx = idx
-
-    return best_idx or 1
-
-def ensure_sheet_payment_hash_column(sheet_name, target_col_num, header_hints=None):
-    def _do():
-        with google_lock:
-            sheet = get_sheet(sheet_name)
-            rows = sheet.get_all_values()
-            header_row_idx = detect_sheet_header_row_index(rows, header_hints)
-            header = rows[header_row_idx - 1] if header_row_idx - 1 < len(rows) else []
-
-            for idx, value in enumerate(header, start=1):
-                if str(value).strip().lower() == REQUEST_COL_NAME.lower():
-                    return idx
-
-            chosen_col = target_col_num
-            existing = str(header[chosen_col - 1]).strip() if len(header) >= chosen_col else ""
-            if existing and existing.lower() != REQUEST_COL_NAME.lower():
-                last_nonempty = 0
-                for i, value in enumerate(header, start=1):
-                    if str(value).strip():
-                        last_nonempty = i
-                chosen_col = max(last_nonempty + 1, chosen_col)
-
-            sheet.update(f"{col_to_letter(chosen_col)}{header_row_idx}", [[REQUEST_COL_NAME]])
-            return chosen_col
-
-    col_num = google_write_with_retry(_do)
-    mark_sheet_cache_stale(sheet_name)
-    return col_num
-
-def ensure_payment_hash_columns_ready():
-    ensure_sheet_payment_hash_column(SHEET_ISSUES, ISSUES_REQUEST_COL_NUM, header_hints=["тип", "комментарии"])
-    ensure_sheet_payment_hash_column(SHEET_ACCOUNTS, ACCOUNTS_REQUEST_COL_NUM)
-    ensure_sheet_payment_hash_column(SHEET_KINGS, KINGS_REQUEST_COL_NUM)
-    ensure_sheet_payment_hash_column(SHEET_CRYPTO_KINGS, KINGS_REQUEST_COL_NUM)
-    ensure_sheet_payment_hash_column(SHEET_FARM_KINGS, KINGS_REQUEST_COL_NUM)
-    ensure_sheet_payment_hash_column(SHEET_BMS, BMS_REQUEST_COL_NUM)
-    ensure_sheet_payment_hash_column(SHEET_FARM_BMS, BMS_REQUEST_COL_NUM)
-    ensure_sheet_payment_hash_column(SHEET_FPS, FPS_REQUEST_COL_NUM)
-    ensure_sheet_payment_hash_column(SHEET_FARM_FPS, FPS_REQUEST_COL_NUM)
-    ensure_sheet_payment_hash_column(SHEET_PIXELS, PIXELS_REQUEST_COL_NUM)
-
-def normalize_issue_row_for_append(row):
-    values = list(row or [])
-    if len(values) < 7:
-        values += [""] * (7 - len(values))
-    if len(values) < 10:
-        values += [""] * (10 - len(values))
-    else:
-        values = values[:10]
-    return values
-
-def get_payment_hash_value_by_index(row, index_0_based):
-    row = list(row or [])
-    if index_0_based < 0 or len(row) <= index_0_based:
-        return ""
-    return str(row[index_0_based] or "").strip()
-
-def get_payment_hash_from_accounts_row(row):
-    return get_payment_hash_value_by_index(row, ACCOUNTS_REQUEST_COL_NUM - 1)
-
-def get_payment_hash_from_king_row(row):
-    return get_payment_hash_value_by_index(row, KINGS_REQUEST_COL_NUM - 1)
-
-def get_payment_hash_from_bm_row(row):
-    return get_payment_hash_value_by_index(row, BMS_REQUEST_COL_NUM - 1)
-
-def get_payment_hash_from_fp_row(row):
-    return get_payment_hash_value_by_index(row, FPS_REQUEST_COL_NUM - 1)
-
-def get_payment_hash_from_pixel_row(row):
-    return get_payment_hash_value_by_index(row, PIXELS_REQUEST_COL_NUM - 1)
-
 def append_issue_row_fixed(row):
-    ensure_sheet_payment_hash_column(SHEET_ISSUES, ISSUES_REQUEST_COL_NUM, header_hints=["тип", "комментарии"])
     rows = get_sheet_rows_cached(SHEET_ISSUES, force=True)
+
     next_row = len(rows) + 1
-    values = normalize_issue_row_for_append(row)
-    sheet_update_and_refresh(SHEET_ISSUES, f"A{next_row}:J{next_row}", [values])
+    values = list(row or [])
+
+    if len(values) < 7:
+        values = values + [""] * (7 - len(values))
+    else:
+        values = values[:7]
+
+    sheet_update_and_refresh(
+        SHEET_ISSUES,
+        f"A{next_row}:G{next_row}",
+        [values]
+    )
 
 def append_issue_rows_fixed(rows_to_add):
-    rows = [normalize_issue_row_for_append(x) for x in (rows_to_add or []) if x]
+    rows = [list(x or [])[:7] for x in (rows_to_add or []) if x]
     if not rows:
         return
-    ensure_sheet_payment_hash_column(SHEET_ISSUES, ISSUES_REQUEST_COL_NUM, header_hints=["тип", "комментарии"])
+
+    normalized = []
+    for row in rows:
+        if len(row) < 7:
+            row = row + [""] * (7 - len(row))
+        normalized.append(row[:7])
+
     current_rows = get_sheet_rows_cached(SHEET_ISSUES, force=True)
     start_row = len(current_rows) + 1
-    end_row = start_row + len(rows) - 1
-    sheet_update_and_refresh(SHEET_ISSUES, f"A{start_row}:J{end_row}", rows)
+    end_row = start_row + len(normalized) - 1
+
+    sheet_update_and_refresh(
+        SHEET_ISSUES,
+        f"A{start_row}:G{end_row}",
+        normalized
+    )
 
 def sheet_update_raw(sheet_name, cell_range, values):
     def _do():
@@ -1975,57 +1790,9 @@ def send_text_input_prompt(chat_id, text):
     ]
     tg_send_message(chat_id, text, keyboard)
 
-
-def send_ban_timing_menu(chat_id):
-    keyboard = [
-        [{"text": BTN_BAN_BEFORE_TRANSFER}, {"text": BTN_BAN_BUYER_USED}],
-        [{"text": BTN_BACK_STEP}, {"text": MENU_CANCEL}]
-    ]
-    tg_send_message(
-        chat_id,
-        "Расходник забанился до передачи байеру или байер уже пользовался им?",
-        keyboard
-    )
-
-
-def start_ban_reason_flow(chat_id, user_id, state_payload, prompt_text):
-    payload = dict(state_payload or {})
-    payload["mode"] = "awaiting_ban_stage"
-    payload["ban_reason_mode"] = str(payload.get("ban_reason_mode") or "").strip()
-    payload["ban_reason_prompt"] = str(prompt_text or "Напиши причину бана.").strip() or "Напиши причину бана."
-    set_state(user_id, payload)
-    send_ban_timing_menu(chat_id)
-
-def start_ban_reason_flow_direct(chat_id, user_id, state_payload, prompt_text):
-    payload = dict(state_payload or {})
-    next_mode = str(payload.get("ban_reason_mode") or "").strip()
-    prompt = str(prompt_text or "Напиши причину бана.").strip() or "Напиши причину бана."
-    if not next_mode:
-        clear_state(user_id)
-        send_main_menu(chat_id, "Сначала выбери действие заново.", user_id=user_id)
-        return
-
-    payload.pop("ban_reason_mode", None)
-    payload.pop("ban_reason_prompt", None)
-    payload["mode"] = next_mode
-    payload["ban_timing"] = ""
-    set_state(user_id, payload)
-    send_text_input_prompt(chat_id, prompt)
-
-
 def send_return_action_menu(chat_id, what_text):
     keyboard = [
         [{"text": BTN_RETURN_TO_BAN}, {"text": BTN_RETURN_TO_FREE}],
-        [{"text": BTN_BACK_STEP}, {"text": MENU_CANCEL}]
-    ]
-    tg_send_message(chat_id, f"Что сделать с {what_text}?", keyboard)
-
-
-def send_fp_return_action_menu(chat_id, farm=False):
-    what_text = 'farm FP' if farm else 'ФП'
-    keyboard = [
-        [{"text": BTN_RETURN_TO_BAN}, {"text": BTN_RETURN_TO_FREE}],
-        [{"text": BTN_RETURN_FP_BAN_ALL}],
         [{"text": BTN_BACK_STEP}, {"text": MENU_CANCEL}]
     ]
     tg_send_message(chat_id, f"Что сделать с {what_text}?", keyboard)
@@ -2036,7 +1803,6 @@ def send_accounts_main_menu(chat_id, text="Меню Accounts:"):
         [{"text": MENU_BMS}, {"text": MENU_FPS}],
         [{"text": MENU_PIXELS}],
         [{"text": MENU_MANAGER_STATS}],
-        [{"text": MENU_ISSUED_TO_BUYER}],
         [{"text": SUBMENU_BACK_MAIN}]
     ]
     tg_send_message(chat_id, text, keyboard)
@@ -2152,32 +1918,25 @@ def send_admin_menu(chat_id, text="Меню Admin:", user_id=None):
 
     tg_send_message(chat_id, text, keyboard)
 
-def send_misc_menu(chat_id, text="Меню Прочее:"):
-    keyboard = [
-        [{"text": ADMIN_CHECK_BANS}],
-        [{"text": MISC_FREE_RESOURCES}],
-        [{"text": BTN_BACK_FROM_MISC}]
-    ]
-    tg_send_message(chat_id, text, keyboard)
+FREE_RESOURCE_ITEMS = [
+    {"key": "accounts", "label": "👤 Лички", "sheet": SHEET_ACCOUNTS, "status_idx": 8, "price_idx": 2, "min_len": 10},
+    {"key": "kings", "label": "👑 Кинги", "sheet": SHEET_KINGS, "status_idx": 4, "price_idx": 2, "min_len": 5},
+    {"key": "crypto_kings", "label": "🪙 Crypto king", "sheet": SHEET_CRYPTO_KINGS, "status_idx": 4, "price_idx": 2, "min_len": 5},
+    {"key": "pixels", "label": "🌀 Пиксели", "sheet": SHEET_PIXELS, "status_idx": 3, "price_idx": 1, "min_len": 4},
+    {"key": "bms", "label": "📁 БМ", "sheet": SHEET_BMS, "status_idx": 4, "price_idx": 2, "min_len": 5},
+    {"key": "fps", "label": "📑 ФП", "sheet": SHEET_FPS, "status_idx": 5, "price_idx": 2, "min_len": 6},
+    {"key": "farm_kings", "label": "🌾 Farm king", "sheet": SHEET_FARM_KINGS, "status_idx": 4, "price_idx": 2, "min_len": 5},
+    {"key": "farm_bms", "label": "🌾 Farm BM", "sheet": SHEET_FARM_BMS, "status_idx": 4, "price_idx": 2, "min_len": 5},
+    {"key": "farm_fps", "label": "🌾 Farm FP", "sheet": SHEET_FARM_FPS, "status_idx": 5, "price_idx": 2, "min_len": 6},
+]
+
+FREE_SNAPSHOT_MONTH_NAMES = {
+    1: "Январь", 2: "Февраль", 3: "Март", 4: "Апрель", 5: "Май", 6: "Июнь",
+    7: "Июль", 8: "Август", 9: "Сентябрь", 10: "Октябрь", 11: "Ноябрь", 12: "Декабрь",
+}
 
 
-
-def _get_rows_cached_safe(sheet_name):
-    try:
-        return get_sheet_rows_cached(sheet_name, force=True)
-    except Exception as e:
-        logging.warning(f"Не удалось прочитать лист {sheet_name}: {e}")
-        return []
-
-
-def _safe_float_sum_value(value):
-    parsed = parse_price(value)
-    if parsed is None:
-        return 0.0
-    return float(parsed)
-
-
-def _format_summary_money(value):
+def format_money_compact(value):
     try:
         num = float(value or 0)
     except Exception:
@@ -2187,62 +1946,373 @@ def _format_summary_money(value):
         return f"{int(round(num)):,}".replace(",", " ")
 
     text = f"{num:,.2f}".replace(",", " ").replace(".", ",")
-    return text.rstrip("0").rstrip(",")
+    text = text.rstrip("0").rstrip(",")
+    return text
 
 
-def _summarize_free_rows(rows, status_index, price_index, row_len):
-    count = 0
-    total_sum = 0.0
+def compute_live_free_resources_items():
+    items = []
 
-    for row in rows[1:]:
-        row = ensure_row_len(row, row_len)
-        status = str(row[status_index]).strip().lower()
-        if status != "free":
-            continue
+    for spec in FREE_RESOURCE_ITEMS:
+        rows = get_sheet_rows_cached(spec["sheet"])
+        free_count = 0
+        free_amount = 0.0
 
-        count += 1
-        total_sum += _safe_float_sum_value(row[price_index])
+        for row in rows[1:]:
+            row = ensure_row_len(row, spec["min_len"])
+            status = str(row[spec["status_idx"]]).strip().lower()
 
-    return {
-        "count": count,
-        "sum": total_sum
-    }
+            if status != "free":
+                continue
+
+            free_count += 1
+            price_value = parse_price(row[spec["price_idx"]])
+            if price_value is not None:
+                free_amount += float(price_value)
+
+        items.append({
+            "key": spec["key"],
+            "label": spec["label"],
+            "count": free_count,
+            "amount": free_amount,
+        })
+
+    return items
 
 
-def build_free_resources_summary_text():
-    sections = [
-        ("👤 Лички", SHEET_ACCOUNTS, 8, 2, 12),
-        ("👑 Кинги", SHEET_KINGS, 4, 2, 13),
-        ("🪙 Crypto king", SHEET_CRYPTO_KINGS, 4, 2, 13),
-        ("🌀 Пиксели", SHEET_PIXELS, 3, 1, 9),
-        ("📁 БМ", SHEET_BMS, 4, 2, 10),
-        ("📑 ФП", SHEET_FPS, 5, 2, 9),
-        ("🌾 Farm king", SHEET_FARM_KINGS, 4, 2, 13),
-        ("🌾 Farm BM", SHEET_FARM_BMS, 4, 2, 10),
-        ("🌾 Farm FP", SHEET_FARM_FPS, 5, 2, 9),
-    ]
+def build_free_resources_report_text(snapshot_date, items, heading_prefix="📦 СВОБОДНЫЕ ОСТАТКИ НА"):
+    if isinstance(snapshot_date, datetime):
+        snapshot_date = snapshot_date.date()
 
-    lines = ["📦 СВОБОДНЫЕ ОСТАТКИ", ""]
-    total_count = 0
-    total_sum = 0.0
+    if isinstance(snapshot_date, date):
+        date_text = snapshot_date.strftime("%d.%m.%Y")
+    else:
+        date_text = str(snapshot_date)
 
-    for title, sheet_name, status_index, price_index, row_len in sections:
-        rows = _get_rows_cached_safe(sheet_name)
-        stats = _summarize_free_rows(rows, status_index, price_index, row_len)
+    total_count = sum(int(item.get("count", 0) or 0) for item in items)
+    total_amount = sum(float(item.get("amount", 0) or 0) for item in items)
 
-        total_count += stats["count"]
-        total_sum += stats["sum"]
+    lines = [f"{heading_prefix} {date_text}", ""]
 
+    for item in items:
         lines.append(
-            f"{title}: {stats['count']} шт. — {_format_summary_money(stats['sum'])}💰"
+            f"{item['label']}: {int(item.get('count', 0) or 0)} шт. — {format_money_compact(item.get('amount', 0))}💰"
         )
 
     lines.append("")
-    lines.append(
-        f"💵 Итого free: {total_count} шт. — {_format_summary_money(total_sum)}💰"
-    )
+    lines.append(f"💵 Итого free: {total_count} шт. — {format_money_compact(total_amount)}💰")
 
     return "\n".join(lines)
+
+
+def send_live_free_resources_report(chat_id):
+    items = compute_live_free_resources_items()
+    now_msk = datetime.now(MOSCOW_TZ).date()
+    tg_send_message(chat_id, build_free_resources_report_text(now_msk, items))
+
+
+def ensure_free_snapshots_sheet_exists():
+    try:
+        with google_lock:
+            client = get_gspread_client()
+            spreadsheet = client.open_by_key(SPREADSHEET_ID)
+
+            try:
+                sheet = spreadsheet.worksheet(SHEET_FREE_SNAPSHOTS)
+            except gspread.exceptions.WorksheetNotFound:
+                sheet = spreadsheet.add_worksheet(title=SHEET_FREE_SNAPSHOTS, rows=5000, cols=8)
+
+            rows = sheet.get_all_values()
+            need_init = False
+
+            if not rows:
+                need_init = True
+            elif len(rows[0]) < 5:
+                need_init = True
+            elif str(rows[0][0]).strip() != "date_iso":
+                need_init = True
+
+            if need_init:
+                sheet.update("A1:E1", [["date_iso", "resource_key", "count", "amount", "saved_at"]])
+
+            sheet_cache[SHEET_FREE_SNAPSHOTS] = sheet
+            return sheet
+
+    except Exception:
+        logging.exception("ensure_free_snapshots_sheet_exists crashed")
+        raise
+
+
+def read_free_snapshot_rows():
+    ensure_free_snapshots_sheet_exists()
+
+    def _do():
+        with google_lock:
+            sheet = get_sheet(SHEET_FREE_SNAPSHOTS)
+            return sheet.get_all_values()
+
+    return google_read_with_retry(_do)
+
+
+def free_snapshot_exists(target_date):
+    target_iso = target_date.isoformat()
+    rows = read_free_snapshot_rows()
+
+    for row in rows[1:]:
+        if row and str(row[0]).strip() == target_iso:
+            return True
+
+    return False
+
+
+def save_free_snapshot_for_date(target_date):
+    ensure_free_snapshots_sheet_exists()
+
+    if free_snapshot_exists(target_date):
+        return False
+
+    items = compute_live_free_resources_items()
+    saved_at = datetime.now(MOSCOW_TZ).isoformat()
+    rows_to_add = []
+
+    for item in items:
+        rows_to_add.append([
+            target_date.isoformat(),
+            item["key"],
+            int(item["count"]),
+            normalize_numeric_for_sheet(item["amount"]),
+            saved_at,
+        ])
+
+    def _do():
+        with google_lock:
+            sheet = get_sheet(SHEET_FREE_SNAPSHOTS)
+            sheet.append_rows(rows_to_add, value_input_option="USER_ENTERED")
+
+    google_write_with_retry(_do)
+    return True
+
+
+def ensure_today_free_snapshot_if_needed():
+    now_msk = datetime.now(MOSCOW_TZ)
+    today = now_msk.date()
+
+    if now_msk.hour < 6:
+        return False
+
+    if free_snapshot_exists(today):
+        return False
+
+    return save_free_snapshot_for_date(today)
+
+
+def load_free_snapshot_items_for_date(target_date):
+    rows = read_free_snapshot_rows()
+    target_iso = target_date.isoformat()
+    mapping = {}
+
+    for row in rows[1:]:
+        row = ensure_row_len(row, 5)
+        if str(row[0]).strip() != target_iso:
+            continue
+
+        key = str(row[1]).strip()
+        count_val = int(float(str(row[2]).replace(",", ".") or "0")) if str(row[2]).strip() else 0
+        amount_val = parse_price(row[3]) or 0.0
+        mapping[key] = {"count": count_val, "amount": float(amount_val)}
+
+    if not mapping:
+        return None
+
+    items = []
+    for spec in FREE_RESOURCE_ITEMS:
+        data = mapping.get(spec["key"], {"count": 0, "amount": 0.0})
+        items.append({
+            "key": spec["key"],
+            "label": spec["label"],
+            "count": int(data.get("count", 0) or 0),
+            "amount": float(data.get("amount", 0) or 0.0),
+        })
+
+    return items
+
+
+def month_key_to_label(month_key):
+    year, month = month_key.split("-")
+    return f"{FREE_SNAPSHOT_MONTH_NAMES.get(int(month), month)} {year}"
+
+
+def iter_recent_month_keys(limit=12):
+    now_msk = datetime.now(MOSCOW_TZ).date().replace(day=1)
+    result = []
+    year = now_msk.year
+    month = now_msk.month
+
+    for _ in range(limit):
+        result.append(f"{year:04d}-{month:02d}")
+        month -= 1
+        if month <= 0:
+            month = 12
+            year -= 1
+
+    return result
+
+
+def get_snapshot_dates_for_month(month_key):
+    rows = read_free_snapshot_rows()
+    seen = set()
+
+    for row in rows[1:]:
+        row = ensure_row_len(row, 1)
+        date_iso = str(row[0]).strip()
+        if not date_iso:
+            continue
+        if date_iso.startswith(month_key + "-"):
+            try:
+                seen.add(datetime.strptime(date_iso, "%Y-%m-%d").date())
+            except Exception:
+                continue
+
+    return sorted(seen)
+
+
+def build_free_snapshot_day_block(snapshot_date, items):
+    return build_free_resources_report_text(snapshot_date, items)
+
+
+def build_free_snapshot_month_page_text(month_key, page=0, per_page=5):
+    dates = get_snapshot_dates_for_month(month_key)
+    if not dates:
+        return None, 0, 0
+
+    total_pages = max(1, (len(dates) + per_page - 1) // per_page)
+    page = max(0, min(page, total_pages - 1))
+
+    slice_dates = dates[page * per_page:(page + 1) * per_page]
+    blocks = []
+
+    for dt in slice_dates:
+        items = load_free_snapshot_items_for_date(dt)
+        if not items:
+            continue
+        blocks.append(build_free_snapshot_day_block(dt, items))
+
+    header = f"📦 Остатки по дням — {month_key_to_label(month_key)}"
+    if total_pages > 1:
+        header += f" ({page + 1}/{total_pages})"
+
+    full_text = header
+    if blocks:
+        full_text += "\n\n" + "\n\n──────────\n\n".join(blocks)
+
+    return full_text, page, total_pages
+
+
+def build_free_snapshot_period_buttons():
+    return [
+        [
+            {"text": "Сегодня", "callback_data": "freehist:today"},
+            {"text": "Текущий месяц", "callback_data": "freehist:current_month"},
+        ],
+        [
+            {"text": "Выбрать месяц", "callback_data": "freehist:choose_month"},
+            {"text": "Выбрать дату", "callback_data": "freehist:choose_date"},
+        ],
+    ]
+
+
+def send_free_snapshot_period_menu(chat_id):
+    tg_send_inline_message(
+        chat_id,
+        "📦 Остатки по дням\n\nВыберите период:",
+        build_free_snapshot_period_buttons()
+    )
+
+
+def build_free_snapshot_month_nav_buttons(month_key, page, total_pages):
+    buttons = []
+    nav_row = []
+
+    if page > 0:
+        nav_row.append({"text": "⬅️ Назад", "callback_data": f"freehist_month:{month_key}:{page - 1}"})
+
+    if page < total_pages - 1:
+        nav_row.append({"text": "➡️ Далее", "callback_data": f"freehist_month:{month_key}:{page + 1}"})
+
+    if nav_row:
+        buttons.append(nav_row)
+
+    buttons.append([{"text": "📅 К периодам", "callback_data": "freehist:menu"}])
+    return buttons
+
+
+def build_free_snapshot_month_choice_buttons():
+    month_keys = iter_recent_month_keys(12)
+    buttons = []
+    row = []
+
+    for month_key in month_keys:
+        year, month = month_key.split("-")
+        label = f"{FREE_SNAPSHOT_MONTH_NAMES.get(int(month), month)} {year}"
+        row.append({"text": label, "callback_data": f"freehist_month:{month_key}:0"})
+        if len(row) == 2:
+            buttons.append(row)
+            row = []
+
+    if row:
+        buttons.append(row)
+
+    buttons.append([{"text": "📅 К периодам", "callback_data": "freehist:menu"}])
+    return buttons
+
+
+def free_snapshot_scheduler_loop():
+    logging.info("free_snapshot_scheduler_loop started")
+
+    while True:
+        try:
+            touch_background_heartbeat()
+            ensure_today_free_snapshot_if_needed()
+        except Exception:
+            logging.exception("free_snapshot_scheduler_loop crashed")
+
+        time.sleep(60)
+
+
+def show_single_free_snapshot_by_date(chat_id, target_date):
+    if target_date == datetime.now(MOSCOW_TZ).date():
+        ensure_today_free_snapshot_if_needed()
+
+    items = load_free_snapshot_items_for_date(target_date)
+    if not items:
+        tg_send_message(chat_id, f"Нет сохранённых остатков на {target_date.strftime('%d.%m.%Y')}")
+        return
+
+    tg_send_inline_message(
+        chat_id,
+        build_free_snapshot_day_block(target_date, items),
+        [[{"text": "📅 К периодам", "callback_data": "freehist:menu"}]]
+    )
+
+
+def parse_snapshot_date_input(text):
+    raw = str(text or "").strip()
+    for fmt in ("%d.%m.%Y", "%d/%m/%Y", "%Y-%m-%d"):
+        try:
+            return datetime.strptime(raw, fmt).date()
+        except Exception:
+            pass
+    return None
+
+
+def send_misc_menu(chat_id, text="Меню Прочее:"):
+    keyboard = [
+        [{"text": MISC_FREE_RESOURCES}],
+        [{"text": MISC_DAILY_FREE_RESOURCES}],
+        [{"text": ADMIN_ADD_STICKERS}],
+        [{"text": BTN_BACK_FROM_MISC}]
+    ]
+    tg_send_message(chat_id, text, keyboard)
 
 def send_admin_farmers_menu(chat_id, text="Admin / Фармеры:"):
     keyboard = [
@@ -2262,76 +2332,66 @@ def send_admin_accountants_menu(chat_id, text="Меню Акаунтеры:"):
     tg_send_message(chat_id, text, keyboard)
 
 def send_add_kings_instructions(chat_id):
-    text = """Пришли Кинги txt файлом.
-
-Формат:
-номер) дата покупки; цена; поставщик; гео; хэш оплаты
-данные кинга.
-
-Пример:
-1) 15/02/2026; 300; WD; usa; hash_2870
-login - example1
-password - 12345
-cookie - abcdef
-
-2) 16/02/2026; 500; WD; uk; hash_2871
-login - example2
-password - 67890
-cookie - ghijkl
-
-Хэш оплаты — это хэш из PaymentsRMBot, где вы оплатили этот расходник."""
+    text = (
+        "Пришли Кинги txt файлом.\n\n"
+        "Формат:\n"
+        "номер) дата покупки; цена; поставщик; гео\n"
+        "данные кинга.\n\n"
+        "Пример:\n"
+        "1) 15/02/2026; 300; WD; usa\n"
+        "login - example1\n"
+        "password - 12345\n"
+        "cookie - abcdef\n\n"
+        "2) 16/02/2026; 500; WD; uk\n"
+        "login - example2\n"
+        "password - 67890\n"
+        "cookie - ghijkl\n\n"
+        "3) 17/02/2026; 250; WD; italy\n"
+        "login - example3\n"
+        "password - 11111\n"
+        "cookie - zzzzzz"
+    )
     tg_send_message(chat_id, text)
 
 def send_add_bms_instructions(chat_id):
-    text = """Пришли БМы сообщением блоками.
-
-Формат одного блока:
-дата покупки; цена; поставщик; хэш оплаты
-данные БМа
-
-Потом пустая строка и следующий БМ.
-
-Пример:
-15/02/2026; 300; WD; hash_2870
-данные бм
-
-18/02/2026; 500; TT; hash_2871
-данные бм
-
-Хэш оплаты — это хэш из PaymentsRMBot, где вы оплатили этот расходник."""
+    text = (
+        "Пришли БМы сообщением.\n\n"
+        "Формат:\n"
+        "номер) id БМа; дата покупки; цена; у кого купили\n"
+        "инвайт ссылка на БМ.\n\n"
+        "Пример:\n"
+        "1) 123456789; 15/02/2026; 300; WD\n"
+        "https://business.facebook.com/invitation/?token=......\n\n"
+        "2) 987654321; 18/02/2026; 500; TT\n"
+        "https://business.facebook.com/invitation/?token=......"
+    )
     tg_send_message(chat_id, text)
 
 def send_add_fps_instructions(chat_id):
-    text = """Пришли ФП сообщением, каждая с новой строки.
-
-Формат:
-ссылка; дата покупки; цена; у кого купили; склад; хэш оплаты
-
-Пример:
-https://facebook.com/profile.php?id=123; 15/02/2026; 300; WD; sklad1; hash_2870
-https://facebook.com/profile.php?id=456; 16/02/2026; 500; TT; sklad2; hash_2871
-
-Хэш оплаты — это хэш из PaymentsRMBot, где вы оплатили этот расходник."""
+    text = (
+        "Пришли ФП сообщением, каждая с новой строки.\n\n"
+        "Формат:\n"
+        "ссылка; дата покупки; цена; у кого купили; склад\n\n"
+        "Пример:\n"
+        "https://facebook.com/profile.php?id=123; 15/02/2026; 300; WD; sklad1\n"
+        "https://facebook.com/profile.php?id=456; 16/02/2026; 500; TT; sklad2"
+    )
     tg_send_message(chat_id, text)
 
 def send_add_pixels_instructions(chat_id):
-    text = """Пришли Пиксели сообщением блоками.
-
-Формат одного блока:
-дата покупки; цена; поставщик; хэш оплаты
-данные пикселя
-
-Потом пустая строка и следующий пиксель.
-
-Пример:
-15/02/2026; 300; WD; hash_2870
-pixel data 1 line 1
-pixel data 1 line 2
-
-16/02/2026; 500; TT; hash_2871
-pixel data 2
-
-Хэш оплаты — это хэш из PaymentsRMBot, где вы оплатили этот расходник."""
+    text = (
+        "Пришли Пиксели сообщением блоками.\n\n"
+        "Формат одного блока:\n"
+        "дата покупки; цена; поставщик\n"
+        "данные пикселя\n\n"
+        "Потом пустая строка и следующий пиксель.\n\n"
+        "Пример:\n"
+        "15/02/2026; 300; WD\n"
+        "pixel data 1 line 1\n"
+        "pixel data 1 line 2\n\n"
+        "16/02/2026; 500; TT\n"
+        "pixel data 2"
+    )
     tg_send_message(chat_id, text)
 
 def send_octo_king_data_instructions(chat_id, warehouse_name=""):
@@ -3058,7 +3118,7 @@ def tg_download_photo_content(photo_list):
 
     return tg_download_file_content(file_id)
 
-def tg_send_document_bytes(chat_id, filename, content_bytes, caption=None, inline_buttons=None):
+def tg_send_document_bytes(chat_id, filename, content_bytes, caption=None):
     try:
         data = {
             "chat_id": str(chat_id)
@@ -3066,12 +3126,6 @@ def tg_send_document_bytes(chat_id, filename, content_bytes, caption=None, inlin
 
         if caption:
             data["caption"] = str(caption)
-
-        if inline_buttons is not None:
-            data["reply_markup"] = json.dumps(
-                {"inline_keyboard": inline_buttons},
-                ensure_ascii=False
-            )
 
         files = {
             "document": (filename, content_bytes, "text/plain")
@@ -3086,23 +3140,9 @@ def tg_send_document_bytes(chat_id, filename, content_bytes, caption=None, inlin
 
         if resp.status_code != 200:
             logging.warning(f"Telegram sendDocument failed: {resp.status_code} {resp.text}")
-            return None
-
-        try:
-            result = resp.json()
-        except Exception:
-            logging.warning("Telegram sendDocument returned non-JSON response")
-            return None
-
-        if not result.get("ok"):
-            logging.warning(f"Telegram sendDocument api error: {result}")
-            return None
-
-        return result
 
     except Exception as e:
         logging.error(f"tg_send_document_bytes error: {e}")
-        return None
 
 def make_safe_txt_filename(name, default_name="king"):
     raw = str(name or "").strip()
@@ -3592,23 +3632,22 @@ def finish_crypto_kings_bulk(chat_id, user_id):
 
     send_kings_menu(chat_id, "Выбери следующее действие:")
 
-def tg_send_king_data_as_txt(chat_id, king_name, data_text, caption=None, inline_buttons=None):
+def tg_send_king_data_as_txt(chat_id, king_name, data_text, caption=None):
     text = str(data_text or "").strip()
 
     if not text:
         tg_send_message(chat_id, "Данные кинга не найдены.")
-        return None
+        return
 
     filename = make_safe_txt_filename(king_name or "king", default_name="king")
-    return tg_send_document_bytes(
+    tg_send_document_bytes(
         chat_id=chat_id,
         filename=filename,
         content_bytes=text.encode("utf-8"),
-        caption=caption,
-        inline_buttons=inline_buttons
+        caption=caption
     )
 
-def tg_send_king_search_result_as_txt(chat_id, title, king_name, meta_text, data_text, inline_buttons=None):
+def tg_send_king_search_result_as_txt(chat_id, title, king_name, meta_text, data_text):
     meta_text = str(meta_text or "").strip()
     data_text = str(data_text or "").strip()
 
@@ -3616,296 +3655,10 @@ def tg_send_king_search_result_as_txt(chat_id, title, king_name, meta_text, data
     if data_text:
         full_text += f"\n\nДанные:\n{data_text}"
 
-    return tg_send_king_data_as_txt(
+    tg_send_king_data_as_txt(
         chat_id=chat_id,
         king_name=king_name or title or "king_search",
-        data_text=full_text,
-        inline_buttons=inline_buttons
-    )
-
-def cleanup_king_search_edit_sessions():
-    now = time.time()
-
-    with king_search_edit_lock:
-        expired_tokens = []
-
-        for token, payload in king_search_edit_sessions.items():
-            created_at = float(payload.get("created_at", 0) or 0)
-            updated_at = float(payload.get("updated_at", 0) or 0)
-            last_ts = max(created_at, updated_at)
-
-            if not last_ts or now - last_ts > KING_SEARCH_EDIT_TTL:
-                expired_tokens.append(token)
-
-        for token in expired_tokens:
-            king_search_edit_sessions.pop(token, None)
-
-
-def create_king_search_edit_session(user_id, result):
-    cleanup_king_search_edit_sessions()
-
-    token = uuid.uuid4().hex[:12]
-    payload = {
-        "user_id": int(user_id),
-        "sheet_name": str(result.get("sheet_name", "")).strip(),
-        "row_index": int(result.get("row_index", 0) or 0),
-        "king_name": str(result.get("king_name", "")).strip(),
-        "status": str(result.get("status", "")).strip(),
-        "for_whom": str(result.get("for_whom", "")).strip(),
-        "created_at": time.time(),
-        "updated_at": time.time(),
-    }
-
-    with king_search_edit_lock:
-        king_search_edit_sessions[token] = payload
-
-    return token
-
-
-def get_king_search_edit_session(token):
-    cleanup_king_search_edit_sessions()
-
-    with king_search_edit_lock:
-        payload = king_search_edit_sessions.get(str(token))
-        if not payload:
-            return None
-        return dict(payload)
-
-
-def update_king_search_edit_session(token, **kwargs):
-    with king_search_edit_lock:
-        payload = king_search_edit_sessions.get(str(token))
-        if not payload:
-            return False
-
-        payload.update(kwargs)
-        payload["updated_at"] = time.time()
-        king_search_edit_sessions[str(token)] = payload
-        return True
-
-
-def build_king_search_entry_inline_buttons(token):
-    return [[{
-        "text": "Изменить данные",
-        "callback_data": f"edit_king_data:{token}"
-    }]]
-
-
-def build_king_search_edit_inline_buttons(token):
-    return [
-        [{
-            "text": "Поменять название",
-            "callback_data": f"edit_king_rename:{token}"
-        }],
-        [{
-            "text": "Поменять байера",
-            "callback_data": f"edit_king_buyer:{token}"
-        }]
-    ]
-
-
-def build_king_search_buyer_department_inline_buttons(token):
-    return [
-        [
-            {
-                "text": DEPT_CRYPTO,
-                "callback_data": f"edit_king_buyer_dept:{token}:crypto"
-            },
-            {
-                "text": DEPT_GAMBLA,
-                "callback_data": f"edit_king_buyer_dept:{token}:gambla"
-            }
-        ],
-        [{
-            "text": DEPT_OTHER,
-            "callback_data": f"edit_king_buyer_dept:{token}:misc"
-        }],
-        [{
-            "text": "⬅️ Назад",
-            "callback_data": f"edit_king_data:{token}"
-        }]
-    ]
-
-
-def build_king_search_buyer_person_inline_buttons(token, department_key):
-    names = get_department_people_by_key(department_key)
-    if not names:
-        return build_king_search_buyer_department_inline_buttons(token)
-
-    keyboard = []
-    row = []
-
-    for idx, name in enumerate(names):
-        row.append({
-            "text": str(name),
-            "callback_data": f"edit_king_buyer_person:{token}:{department_key}:{idx}"
-        })
-
-        if len(row) == 2:
-            keyboard.append(row)
-            row = []
-
-    if row:
-        keyboard.append(row)
-
-    keyboard.append([{
-        "text": "⬅️ Назад",
-        "callback_data": f"edit_king_buyer:{token}"
-    }])
-
-    return keyboard
-
-
-def find_king_name_conflict_across_bases(king_name, ignore_sheet_name=None, ignore_row_index=None):
-    target = str(king_name or "").strip().lower()
-    if not target:
-        return None
-
-    for sheet_name in [SHEET_KINGS, SHEET_CRYPTO_KINGS]:
-        rows = get_sheet_rows_cached(sheet_name)
-
-        for idx, row in enumerate(rows[1:], start=2):
-            existing_name = str((row[0] if row else "") or "").strip().lower()
-            if existing_name != target:
-                continue
-
-            if sheet_name == ignore_sheet_name and int(idx) == int(ignore_row_index or 0):
-                continue
-
-            return {
-                "sheet_name": sheet_name,
-                "row_index": idx
-            }
-
-    return None
-
-
-def rename_searched_king(session_token, new_name):
-    session = get_king_search_edit_session(session_token)
-    if not session:
-        return False, "Кнопка устарела. Найди кинга заново."
-
-    sheet_name = str(session.get("sheet_name", "")).strip()
-    row_index = int(session.get("row_index", 0) or 0)
-    old_name = str(session.get("king_name", "")).strip()
-    new_name = str(new_name or "").strip()
-
-    if not sheet_name or not row_index or not old_name:
-        return False, "Не удалось определить кинга. Найди его заново."
-
-    if not new_name:
-        return False, "Название не должно быть пустым."
-
-    if new_name == old_name:
-        return False, "Это уже текущее название."
-
-    conflict = find_king_name_conflict_across_bases(
-        new_name,
-        ignore_sheet_name=sheet_name,
-        ignore_row_index=row_index
-    )
-    if conflict:
-        return False, f"Название '{new_name}' уже существует."
-
-    live_row = get_sheet_row_live(sheet_name, row_index, 13)
-    if not live_row or not any(str(x).strip() for x in live_row):
-        return False, "Строка кинга не найдена. Найди его заново."
-
-    live_row = ensure_row_len(live_row, 13)
-    current_name = str(live_row[0]).strip()
-
-    if not current_name or current_name.lower() != old_name.lower():
-        return False, "Данные кинга уже изменились. Найди его заново."
-
-    sheet_update_and_refresh(
-        sheet_name,
-        f"A{row_index}:A{row_index}",
-        [[new_name]]
-    )
-
-    issue_info = find_last_king_issue_row(old_name)
-    issue_updated = False
-
-    if issue_info:
-        sheet_update_and_refresh(
-            SHEET_ISSUES,
-            f"A{issue_info['row_index']}:A{issue_info['row_index']}",
-            [[new_name]]
-        )
-        issue_updated = True
-
-    update_king_search_edit_session(session_token, king_name=new_name)
-    invalidate_stats_cache()
-
-    if issue_updated:
-        return True, f"Название изменено: {old_name} → {new_name}"
-
-    return True, (
-        f"Название изменено: {old_name} → {new_name}\n"
-        f"Но строка в {SHEET_ISSUES} не найдена."
-    )
-
-
-def change_searched_king_buyer(session_token, new_for_whom):
-    session = get_king_search_edit_session(session_token)
-    if not session:
-        return False, "Кнопка устарела. Найди кинга заново."
-
-    sheet_name = str(session.get("sheet_name", "")).strip()
-    row_index = int(session.get("row_index", 0) or 0)
-    king_name = str(session.get("king_name", "")).strip()
-    new_for_whom = str(new_for_whom or "").strip()
-
-    if not sheet_name or not row_index or not king_name:
-        return False, "Не удалось определить кинга. Найди его заново."
-
-    if not new_for_whom:
-        return False, "Не удалось определить нового байера."
-
-    live_row = get_sheet_row_live(sheet_name, row_index, 13)
-    if not live_row or not any(str(x).strip() for x in live_row):
-        return False, "Строка кинга не найдена. Найди его заново."
-
-    live_row = ensure_row_len(live_row, 13)
-    current_name = str(live_row[0]).strip()
-    status = str(live_row[4]).strip().lower()
-    old_for_whom = str(live_row[5]).strip()
-
-    if not current_name or current_name.lower() != king_name.lower():
-        return False, "Данные кинга уже изменились. Найди его заново."
-
-    if status != "taken":
-        return False, "Байера можно менять только у выданного кинга."
-
-    if old_for_whom == new_for_whom:
-        return False, "Это уже текущий байер."
-
-    sheet_update_and_refresh(
-        sheet_name,
-        f"F{row_index}:F{row_index}",
-        [[new_for_whom]]
-    )
-
-    issue_info = find_last_king_issue_row(current_name)
-    issue_updated = False
-
-    if issue_info:
-        sheet_update_and_refresh(
-            SHEET_ISSUES,
-            f"G{issue_info['row_index']}:G{issue_info['row_index']}",
-            [[new_for_whom]]
-        )
-        issue_updated = True
-
-    update_king_search_edit_session(session_token, for_whom=new_for_whom)
-    invalidate_stats_cache()
-
-    if issue_updated:
-        return True, f"Байер изменён для '{current_name}': {old_for_whom or 'не указано'} → {new_for_whom}"
-
-    return True, (
-        f"Байер изменён для '{current_name}': {old_for_whom or 'не указано'} → {new_for_whom}\n"
-        f"Но строка в {SHEET_ISSUES} не найдена."
+        data_text=full_text
     )
 
 def extract_digits(text):
@@ -4191,6 +3944,7 @@ def parse_kings_txt(text):
 
     for raw_line in lines:
         line = clean_text_for_parsing(raw_line).rstrip()
+
         if not line.strip():
             if current_header is not None:
                 current_data_lines.append("")
@@ -4199,6 +3953,7 @@ def parse_kings_txt(text):
         if re.match(r'^\d+[.)]\s+', line.strip()):
             if current_header is not None:
                 blocks.append((current_header, current_data_lines))
+
             current_header = line.strip()
             current_data_lines = []
         else:
@@ -4215,15 +3970,11 @@ def parse_kings_txt(text):
         header_clean = re.sub(r'^\d+[.)]\s*', '', header).strip()
         parts = [x.strip() for x in header_clean.split(';')]
 
-        if len(parts) not in [4, 5]:
-            errors.append(f"Блок {idx}: нужно 5 полей: дата; цена; поставщик; гео; хэш оплаты")
+        if len(parts) != 4:
+            errors.append(f"Блок {idx}: нужно 4 поля: дата; цена; поставщик; гео")
             continue
 
-        if len(parts) == 4:
-            purchase_date_raw, price_raw, supplier, geo = parts
-            payment_hash = ""
-        else:
-            purchase_date_raw, price_raw, supplier, geo, payment_hash = parts
+        purchase_date_raw, price_raw, supplier, geo = parts
 
         purchase_date = parse_date(purchase_date_raw)
         if not purchase_date:
@@ -4236,6 +3987,7 @@ def parse_kings_txt(text):
             continue
 
         data_text = "\n".join(data_lines).strip()
+
         if not data_text:
             errors.append(f"Блок {idx}: нет данных кинга")
             continue
@@ -4245,7 +3997,6 @@ def parse_kings_txt(text):
             "price": price,
             "supplier": supplier,
             "geo": geo,
-            "payment_hash": str(payment_hash or "").strip(),
             "data_text": data_text
         })
 
@@ -4256,82 +4007,46 @@ def is_bm_header_line(line):
     return re.match(r'^\d+[.)]\s+', line) is not None
 
 
-def _normalize_bm_header_line(line):
-    return re.sub(r'^\s*\d+[.)]\s*', '', str(line or '')).strip()
-
-
-def _is_bm_header_line(line):
-    header = _normalize_bm_header_line(line)
-    parts = [x.strip() for x in header.split(';')]
-
-    if len(parts) == 4:
-        return bool(parse_date(parts[1])) and parse_price(parts[2]) is not None and bool(parts[3])
-
-    if len(parts) == 3:
-        return bool(parse_date(parts[0])) and parse_price(parts[1]) is not None and bool(parts[2])
-
-    return False
-
-
 def parse_bms_txt(text):
-    text = str(text or '').strip()
-    if not text:
-        return [], ['Пустой текст.']
+    lines = text.splitlines()
 
-    raw_lines = [line.rstrip() for line in text.splitlines()]
     blocks = []
-    current_block = []
+    current_header = None
+    current_data_lines = []
 
-    for raw_line in raw_lines:
+    for raw_line in lines:
         line = raw_line.rstrip()
+
         if not line.strip():
-            if current_block:
-                blocks.append("\n".join(current_block).strip())
-                current_block = []
+            if current_header is not None:
+                current_data_lines.append("")
             continue
 
-        if _is_bm_header_line(line) and current_block:
-            blocks.append("\n".join(current_block).strip())
-            current_block = [line.strip()]
-        else:
-            current_block.append(line.strip())
+        if is_bm_header_line(line):
+            if current_header is not None:
+                blocks.append((current_header, current_data_lines))
 
-    if current_block:
-        blocks.append("\n".join(current_block).strip())
+            current_header = line.strip()
+            current_data_lines = []
+        else:
+            if current_header is not None:
+                current_data_lines.append(line)
+
+    if current_header is not None:
+        blocks.append((current_header, current_data_lines))
 
     parsed = []
     errors = []
 
-    for idx, block in enumerate(blocks, start=1):
-        lines = [x.rstrip() for x in block.splitlines() if x.strip()]
-        if len(lines) < 2:
-            errors.append(f"Блок {idx}: нет данных БМа")
+    for idx, (header, data_lines) in enumerate(blocks, start=1):
+        header_clean = re.sub(r'^\d+[.)]\s*', '', header).strip()
+        parts = [x.strip() for x in header_clean.split(";")]
+
+        if len(parts) != 4:
+            errors.append(f"Блок {idx}: нужно 4 поля: id БМа; дата покупки; цена; у кого купили")
             continue
 
-        header_clean = _normalize_bm_header_line(lines[0])
-        parts = [x.strip() for x in header_clean.split(';')]
-
-        bm_id = ""
-        payment_hash = ""
-
-        if len(parts) == 5:
-            bm_id, purchase_date_raw, price_raw, supplier, payment_hash = parts
-            if not bm_id:
-                errors.append(f"Блок {idx}: пустой id БМа")
-                continue
-        elif len(parts) == 4:
-            if parse_date(parts[0]):
-                purchase_date_raw, price_raw, supplier, payment_hash = parts
-            else:
-                bm_id, purchase_date_raw, price_raw, supplier = parts
-                if not bm_id:
-                    errors.append(f"Блок {idx}: пустой id БМа")
-                    continue
-        elif len(parts) == 3:
-            purchase_date_raw, price_raw, supplier = parts
-        else:
-            errors.append(f"Блок {idx}: нужен формат 'дата покупки; цена; поставщик; хэш оплаты' или старый формат с id БМа")
-            continue
+        bm_id, purchase_date_raw, price_raw, supplier = parts
 
         purchase_date = parse_date(purchase_date_raw)
         if not purchase_date:
@@ -4343,11 +4058,16 @@ def parse_bms_txt(text):
             errors.append(f"Блок {idx}: неверная цена '{price_raw}'")
             continue
 
+        if not bm_id:
+            errors.append(f"Блок {idx}: пустой id БМа")
+            continue
+
         if not supplier:
             errors.append(f"Блок {idx}: не указан поставщик")
             continue
 
-        data_text = "\n".join(lines[1:]).strip()
+        data_text = "\n".join(data_lines).strip()
+
         if not data_text:
             errors.append(f"Блок {idx}: нет данных БМа")
             continue
@@ -4357,7 +4077,6 @@ def parse_bms_txt(text):
             "purchase_date": purchase_date.strftime("%d/%m/%Y"),
             "price": price,
             "supplier": supplier,
-            "payment_hash": str(payment_hash or "").strip(),
             "data_text": data_text
         })
 
@@ -4391,7 +4110,6 @@ def get_full_king_data_from_row(row):
     return part_j + part_k + part_l
 
 def add_kings_from_txt_content(file_text, target_sheet=SHEET_KINGS):
-    ensure_sheet_payment_hash_column(target_sheet, KINGS_REQUEST_COL_NUM)
     rows, errors = parse_kings_txt(file_text)
 
     if not rows:
@@ -4400,29 +4118,34 @@ def add_kings_from_txt_content(file_text, target_sheet=SHEET_KINGS):
         return "Ничего не добавил. Не удалось разобрать файл."
 
     to_append = []
+
     for idx, item in enumerate(rows, start=1):
         part_j, part_k, part_l = split_text_for_three_cells(item["data_text"], max_len=50000)
+
         if part_j is None:
-            errors.append(f"Блок {idx}: Данные кинга слишком большие даже для трёх ячеек: {len(item['data_text'])} символов")
+            errors.append(
+                f"Блок {idx}: Данные кинга слишком большие даже для трёх ячеек: {len(item['data_text'])} символов"
+            )
             continue
 
         sync_id = make_sync_id("king")
+
         row_to_add = [
-            "",
-            item["purchase_date"],
-            item["price"],
-            item["supplier"],
-            "free",
-            "",
-            "",
-            item["geo"],
-            "",
-            part_j,
-            part_k,
-            part_l,
-            sync_id,
-            item.get("payment_hash", "")
+            "",                     # A название кинга — пока пусто
+            item["purchase_date"],  # B дата покупки
+            item["price"],          # C цена
+            item["supplier"],       # D у кого купили
+            "free",                 # E статус
+            "",                     # F кому выдали
+            "",                     # G дата взятия
+            item["geo"],            # H гео
+            "",                     # I кто взял
+            part_j,                 # J данные часть 1
+            part_k,                 # K данные часть 2
+            part_l,                 # L данные часть 3
+            sync_id                 # M sync_id
         ]
+
         to_append.append(row_to_add)
 
     if to_append:
@@ -4445,28 +4168,33 @@ def add_kings_from_txt_content(file_text, target_sheet=SHEET_KINGS):
             basebot_rows = []
             for row in to_append:
                 basebot_rows.append([
-                    sync_prefix,
-                    row[3],
-                    row[4],
-                    row[7],
-                    row[9],
-                    row[10],
-                    row[11],
-                    row[12],
+                    sync_prefix,  # тип
+                    row[3],       # supplier
+                    row[4],       # status
+                    row[7],       # geo
+                    row[9],       # data1
+                    row[10],      # data2
+                    row[11],      # data3
+                    row[12],      # sync_id (M)
                 ])
             basebot_append_rows(basebot_sheet, basebot_rows)
 
         invalidate_stats_cache()
 
-    message = f"Готово ✅\nДобавлено king: {len(to_append)}\nОшибок: {len(errors)}"
+    message = (
+        f"Готово ✅\n"
+        f"Добавлено king: {len(to_append)}\n"
+        f"Ошибок: {len(errors)}"
+    )
+
     if errors:
         message += "\n\nОшибки:\n" + "\n".join(errors[:10])
         if len(errors) > 10:
             message += f"\n... и ещё {len(errors) - 10}"
+
     return message
 
 def add_bms_from_txt_content(file_text, target_sheet=SHEET_BMS):
-    ensure_sheet_payment_hash_column(target_sheet, BMS_REQUEST_COL_NUM)
     rows, errors = parse_bms_txt(file_text)
 
     if not rows:
@@ -4475,21 +4203,23 @@ def add_bms_from_txt_content(file_text, target_sheet=SHEET_BMS):
         return "Ничего не добавил. Не удалось разобрать файл."
 
     to_append = []
+
     for idx, item in enumerate(rows, start=1):
         sync_id = make_sync_id("bm")
+
         row_to_add = [
-            item["bm_id"],
-            item["purchase_date"],
-            item["price"],
-            item["supplier"],
-            "free",
-            "",
-            "",
-            "",
-            item["data_text"],
-            sync_id,
-            item.get("payment_hash", "")
+            item["bm_id"],           # A bm id
+            item["purchase_date"],   # B дата покупки
+            item["price"],           # C цена
+            item["supplier"],        # D у кого купили
+            "free",                  # E статус
+            "",                      # F кому выдали
+            "",                      # G дата выдачи
+            "",                      # H кто выдал / кто взял
+            item["data_text"],       # I данные
+            sync_id                  # J sync_id
         ]
+
         to_append.append(row_to_add)
 
     if to_append:
@@ -4509,25 +4239,33 @@ def add_bms_from_txt_content(file_text, target_sheet=SHEET_BMS):
             basebot_rows = []
             for row in to_append:
                 basebot_rows.append([
-                    bm_type,
-                    row[3],
-                    row[4],
-                    "",
-                    row[8],
-                    "",
-                    "",
-                    row[9],
+                    bm_type,  # тип
+                    row[3],   # supplier
+                    row[4],   # status
+                    "",       # geo
+                    row[8],   # data
+                    "",       # data2
+                    "",       # data3
+                    row[9],   # sync_id (J)
                 ])
+
             basebot_append_rows(basebot_sheet, basebot_rows)
 
         invalidate_stats_cache()
 
     label = "farm BM" if target_sheet == SHEET_FARM_BMS else "BM"
-    message = f"Готово ✅\nДобавлено {label}: {len(to_append)}\nОшибок: {len(errors)}"
+
+    message = (
+        f"Готово ✅\n"
+        f"Добавлено {label}: {len(to_append)}\n"
+        f"Ошибок: {len(errors)}"
+    )
+
     if errors:
         message += "\n\nОшибки:\n" + "\n".join(errors[:10])
         if len(errors) > 10:
             message += f"\n... и ещё {len(errors) - 10}"
+
     return message
 
 def handle_document_message(msg):
@@ -4836,16 +4574,18 @@ def send_currency_options(chat_id, currencies):
 def send_department_menu(chat_id, title="Выбери отдел:"):
     keyboard = [
         [{"text": DEPT_CRYPTO}, {"text": DEPT_GAMBLA}],
-        [{"text": DEPT_OTHER}],
         [{"text": BTN_BACK_STEP}, {"text": MENU_CANCEL}]
     ]
     tg_send_message(chat_id, title, keyboard)
 
 def send_person_menu(chat_id, department):
-    names = get_department_people(department)
-    title = get_department_title(department)
-
-    if not names or not title:
+    if department == DEPT_CRYPTO:
+        names = CRYPTO_NAMES
+        title = "Выбери человека из отдела Крипта:"
+    elif department == DEPT_GAMBLA:
+        names = GAMBLA_NAMES
+        title = "Выбери человека из отдела Гембла:"
+    else:
         tg_send_message(chat_id, "Неизвестный отдел.")
         return
 
@@ -4887,40 +4627,45 @@ def append_auto_warehouse_rows_for_new_fps(added_items):
         return 0
 
     grouped = {}
+
     for item in added_items:
         warehouse = str(item.get("warehouse", "")).strip()
         if not warehouse:
             continue
+
         if warehouse not in grouped:
             grouped[warehouse] = item
 
     rows_to_append = []
+
     for warehouse, item in grouped.items():
         purchase_date = item.get("purchase_date", "")
         supplier = item.get("supplier", "")
-        payment_hash = str(item.get("payment_hash", "") or "").strip()
         transfer_date = datetime.now(MOSCOW_TZ).strftime("%d/%m/%Y")
+    
         rows_to_append.append([
-            warehouse,
-            "KING",
-            purchase_date,
-            35,
-            transfer_date,
-            supplier,
-            "TEAM",
-            "",
-            "",
-            payment_hash
+            warehouse,          # A
+            "KING",             # B
+            purchase_date,      # C дата покупки
+            35,                 # D цена склада
+            transfer_date,      # E дата передачи
+            supplier,           # F поставщик
+            "TEAM"              # G кому передали
         ])
 
     if rows_to_append:
-        append_issue_rows_fixed(rows_to_append)
+        sheet_append_rows_and_refresh(
+            SHEET_ISSUES,
+            rows_to_append,
+            value_input_option="USER_ENTERED"
+        )
+
     return len(rows_to_append)
 
 def add_fps_from_text(text, target_sheet=SHEET_FPS):
-    ensure_sheet_payment_hash_column(target_sheet, FPS_REQUEST_COL_NUM)
     existing_rows = get_sheet_rows_cached(target_sheet)
     existing_links = set()
+
     for row in existing_rows[1:]:
         if row and row[0].strip():
             existing_links.add(row[0].strip())
@@ -4933,19 +4678,16 @@ def add_fps_from_text(text, target_sheet=SHEET_FPS):
 
     for i, line in enumerate(lines, start=1):
         fields = [x.strip() for x in line.split(";")]
-        if len(fields) not in [5, 6]:
-            errors.append(f"Строка {i}: должно быть 6 полей через ';'")
+        if len(fields) != 5:
+            errors.append(f"Строка {i}: должно быть 5 полей через ';'")
             continue
 
-        if len(fields) == 5:
-            fp_link, purchase_date_raw, price_raw, supplier, warehouse = fields
-            payment_hash = ""
-        else:
-            fp_link, purchase_date_raw, price_raw, supplier, warehouse, payment_hash = fields
+        fp_link, purchase_date_raw, price_raw, supplier, warehouse = fields
 
         if not fp_link:
             errors.append(f"Строка {i}: пустая ссылка ФП")
             continue
+
         if fp_link in existing_links:
             duplicates += 1
             continue
@@ -4961,14 +4703,30 @@ def add_fps_from_text(text, target_sheet=SHEET_FPS):
             continue
 
         purchase_date_str = purchase_date.strftime("%d/%m/%Y")
-        payment_hash = str(payment_hash or "").strip()
 
-        to_append.append([fp_link, purchase_date_str, price, supplier, warehouse, "free", "", "", "", payment_hash])
-        added_items.append({"warehouse": warehouse, "purchase_date": purchase_date_str, "supplier": supplier, "payment_hash": payment_hash})
+        to_append.append([
+            fp_link,
+            purchase_date_str,
+            price,
+            supplier,
+            warehouse,
+            "free",
+            "",
+            "",
+            ""
+        ])
+
+        added_items.append({
+            "warehouse": warehouse,
+            "purchase_date": purchase_date_str,
+            "supplier": supplier
+        })
+
         existing_links.add(fp_link)
 
     warehouse_rows_added = 0
     new_warehouses = octo_extract_unique_warehouses(added_items)
+    
     if to_append:
         sheet_append_rows_and_refresh(target_sheet, to_append)
         warehouse_rows_added = append_auto_warehouse_rows_for_new_fps(added_items)
@@ -4982,11 +4740,16 @@ def add_fps_from_text(text, target_sheet=SHEET_FPS):
         f"Дубликатов пропущено: {duplicates}\n"
         f"Ошибок: {len(errors)}"
     )
+
     if errors:
         message += "\n\nОшибки:\n" + "\n".join(errors[:10])
         if len(errors) > 10:
             message += f"\n... и ещё {len(errors) - 10}"
-    return {"message": message, "new_warehouses": new_warehouses}
+
+    return {
+        "message": message,
+        "new_warehouses": new_warehouses
+    }
 
 def parse_pixel_line(block_text):
     text = str(block_text or "").strip()
@@ -5005,24 +4768,26 @@ def parse_pixel_line(block_text):
     purchase_date = parts[0]
     price = parts[1].replace(",", ".").strip()
     supplier = parts[2]
-    payment_hash = parts[3] if len(parts) > 3 else ""
 
-    data_text = "\n".join(lines[1:]).strip()
+    # Берём весь хвост блока после первой строки как есть,
+    # чтобы не потерять "Токен cAPI" и длинный токен
+    data_lines = lines[1:]
+    data_text = "\n".join(data_lines).strip()
+
     return {
         "purchase_date": purchase_date,
         "price": price,
         "supplier": supplier,
-        "payment_hash": str(payment_hash or "").strip(),
         "data_text": data_text
     }
 
 def add_pixels_from_text(file_text):
-    ensure_sheet_payment_hash_column(SHEET_PIXELS, PIXELS_REQUEST_COL_NUM)
     text = str(file_text or "").strip()
     if not text:
         return "Ничего не добавил. Пустой текст."
 
     raw_lines = [line.rstrip() for line in text.splitlines()]
+
     blocks = []
     current_block = []
 
@@ -5033,47 +4798,69 @@ def add_pixels_from_text(file_text):
                 current_block = [line.strip()]
             else:
                 current_block.append(line.strip())
+
     if current_block:
         blocks.append("\n".join(current_block).strip())
 
     errors = []
     to_append = []
+
     for idx, block in enumerate(blocks, start=1):
         try:
             parsed = parse_pixel_line(block)
             if not parsed:
                 errors.append(f"Строка {idx}: не удалось разобрать пиксель")
                 continue
+
             sync_id = make_sync_id("pixel")
+
             row_to_add = [
-                parsed["purchase_date"],
-                parsed["price"],
-                parsed["supplier"],
-                "free",
-                "",
-                "",
-                "",
-                parsed["data_text"],
-                sync_id,
-                parsed.get("payment_hash", "")
+                parsed["purchase_date"],  # A дата покупки
+                parsed["price"],          # B цена
+                parsed["supplier"],       # C у кого купили
+                "free",                   # D статус
+                "",                       # E кому выдали
+                "",                       # F дата выдачи
+                "",                       # G кто выдал / кто взял
+                parsed["data_text"],      # H данные пикселя
+                sync_id                   # I sync_id
             ]
+
             to_append.append(row_to_add)
+
         except Exception as e:
             errors.append(f"Строка {idx}: {e}")
 
     if to_append:
         sheet_append_rows_and_refresh(SHEET_PIXELS, to_append)
+
         basebot_rows = []
         for row in to_append:
-            basebot_rows.append(["pixel", row[2], row[3], "", row[7], "", "", row[8]])
+            basebot_rows.append([
+                "pixel",  # тип
+                row[2],   # supplier
+                row[3],   # status
+                "",       # geo
+                row[7],   # data
+                "",       # data2
+                "",       # data3
+                row[8],   # sync_id (I)
+            ])
+
         basebot_append_rows(BASEBOT_SHEET_PIXELS, basebot_rows)
         invalidate_stats_cache()
 
-    message = f"Готово ✅\nДобавлено пикселей: {len(to_append)}\nОшибок: {len(errors)}"
+    message = (
+        f"Готово ✅\n"
+        f"Добавлено пикселей: {len(to_append)}\n"
+        f"Ошибок: {len(errors)}"
+    )
+
     if errors:
         message += "\n\nОшибки:\n" + "\n".join(errors[:10])
         if len(errors) > 10:
             message += f"\n... и ещё {len(errors) - 10}"
+
     return message
 
 def find_fp_in_base(fp_link):
@@ -5141,7 +4928,7 @@ def build_fp_search_texts(fp_links):
 
     return results
 
-def return_fp_to_ban(fp_link, comment_text="", ban_timing=""):
+def return_fp_to_ban(fp_link, comment_text=""):
     found = find_fp_in_base(fp_link)
     if not found:
         return False, "ФП не найдено."
@@ -5163,7 +4950,7 @@ def return_fp_to_ban(fp_link, comment_text="", ban_timing=""):
 
     issue_info = find_last_fp_issue_row(fp_link)
     if issue_info:
-        mark_issue_row_as_ban(issue_info["row_index"], comment_text, ban_timing)
+        mark_issue_row_as_ban(issue_info["row_index"], comment_text)
 
     invalidate_stats_cache()
     return True, "ФП переведено в ban."
@@ -5194,189 +4981,6 @@ def return_fp_to_free(fp_link):
     invalidate_stats_cache()
     return True, "ФП возвращено в free."
 
-FP_WAREHOUSE_LINKED_KING_ACCOUNT_RECIPIENTS = {"team"} | {str(x).strip().lower() for x in OTHER_NAMES}
-FP_WAREHOUSE_LINKED_KING_FARM_RECIPIENTS = {"farm"}
-
-
-def mark_fp_warehouse_linked_king_issue_rows_as_ban(warehouse_name, comment_text="", farm=False, ban_timing=""):
-    target_name = str(warehouse_name or "").strip().lower()
-    if not target_name:
-        return 0
-
-    recipients = FP_WAREHOUSE_LINKED_KING_FARM_RECIPIENTS if farm else FP_WAREHOUSE_LINKED_KING_ACCOUNT_RECIPIENTS
-    rows = get_sheet_rows_cached(SHEET_ISSUES, force=True)
-    marked = 0
-
-    for idx, raw_row in enumerate(rows[1:], start=2):
-        row = list(raw_row)
-        if len(row) < 9:
-            row += [''] * (9 - len(row))
-
-        if normalize_ban_storm_issue_type(row[1]) != "KING":
-            continue
-
-        if str(row[0] or "").strip().lower() != target_name:
-            continue
-
-        issue_for_whom = str(row[6] or "").strip().lower()
-        if issue_for_whom and issue_for_whom not in recipients:
-            continue
-
-        mark_issue_row_as_ban(idx, comment_text, ban_timing)
-        marked += 1
-
-    return marked
-
-
-def return_fp_warehouse_to_ban(warehouse_name, comment_text="", farm=False, ban_timing=""):
-    warehouse_name = str(warehouse_name or "").strip()
-    if not warehouse_name:
-        return False, "Название склада не указано."
-
-    current_open_before = get_current_open_farm_fp_warehouse() if farm else get_current_open_fp_warehouse()
-
-    target_sheet = SHEET_FARM_FPS if farm else SHEET_FPS
-    rows = get_sheet_rows_cached(target_sheet)
-    ban_date = datetime.now(MOSCOW_TZ).strftime("%d/%m/%Y")
-
-    matching = []
-    for idx, raw_row in enumerate(rows[1:], start=2):
-        row = list(raw_row)
-        if len(row) < 9:
-            row += [''] * (9 - len(row))
-        if str(row[4]).strip() == warehouse_name:
-            matching.append((idx, row))
-
-    if not matching:
-        prefix = "farm FP" if farm else "ФП"
-        return False, f"Склад {prefix} '{warehouse_name}' не найден."
-
-    updated_count = 0
-    total_count = len(matching)
-    total_sum = 0.0
-    issue_rows_to_append = []
-
-    with issue_lock:
-        current_rows = get_sheet_rows_cached(target_sheet, force=True)
-
-        for row_index, _ in matching:
-            if row_index - 1 >= len(current_rows):
-                continue
-
-            row = list(current_rows[row_index - 1])
-            if len(row) < 9:
-                row += [''] * (9 - len(row))
-
-            if str(row[4]).strip() != warehouse_name:
-                continue
-
-            price_value = parse_price(row[2]) or 0.0
-            status = str(row[5]).strip().lower()
-            if status != "ban":
-                sheet_update_raw(
-                    target_sheet,
-                    f"F{row_index}:G{row_index}",
-                    [["ban", "ban"]]
-                )
-                updated_count += 1
-                total_sum += price_value
-
-            issue_info = find_last_fp_issue_row(row[0])
-            if issue_info:
-                mark_issue_row_as_ban(issue_info["row_index"], comment_text, ban_timing)
-            else:
-                issue_rows_to_append.append([
-                    row[0],
-                    "FP",
-                    row[1],
-                    normalize_numeric_for_sheet(row[2]),
-                    ban_date,
-                    row[3],
-                    "ban",
-                    "",
-                    build_ban_comment_text(comment_text, ban_timing, row[6]),
-                    get_payment_hash_from_fp_row(row),
-                ])
-
-        if issue_rows_to_append:
-            sheet_append_rows_and_refresh(
-                SHEET_ISSUES,
-                issue_rows_to_append,
-                value_input_option="USER_ENTERED"
-            )
-
-        refresh_sheet_cache(target_sheet)
-
-    king_message = ""
-    if farm:
-        king_ok, king_result = return_farm_king_to_ban(warehouse_name, comment_text, ban_timing)
-        if king_ok:
-            king_message = f"Farm king склада '{warehouse_name}' переведён в ban."
-        elif "не найден" not in str(king_result).lower():
-            king_message = str(king_result)
-    else:
-        king_ok, king_result = return_king_to_ban(warehouse_name, comment_text, ban_timing)
-        if king_ok:
-            king_message = f"Кинг склада '{warehouse_name}' переведён в ban."
-        elif "не найден" not in str(king_result).lower():
-            king_message = str(king_result)
-
-    linked_issue_rows_marked = mark_fp_warehouse_linked_king_issue_rows_as_ban(warehouse_name, comment_text, farm=farm, ban_timing=ban_timing)
-    if linked_issue_rows_marked and not king_message:
-        if farm:
-            king_message = f"Farm king склада '{warehouse_name}' переведён в ban."
-        else:
-            king_message = f"Кинг склада '{warehouse_name}' переведён в ban."
-
-    remaining_free = count_free_farm_fp_in_warehouse(warehouse_name) if farm else count_free_fp_in_warehouse(warehouse_name)
-    opened_next_warehouse = ""
-    next_open_message = ""
-
-    should_open_next = (
-        str(current_open_before or "").strip() == warehouse_name
-        and remaining_free == 0
-    )
-
-    if should_open_next:
-        try:
-            if farm:
-                opened_next_warehouse = str(get_next_farm_fp_warehouse_name(warehouse_name) or "").strip()
-                notify_admin_farm_fp_warehouse_finished(warehouse_name)
-            else:
-                opened_next_warehouse = str(get_next_fp_warehouse_name(warehouse_name) or "").strip()
-                notify_admin_fp_warehouse_finished(warehouse_name)
-
-            if opened_next_warehouse:
-                next_open_message = f"Открыт следующий склад: {opened_next_warehouse}"
-            else:
-                next_open_message = "Следующий склад для выдачи не найден."
-        except Exception:
-            logging.exception("notify_admin warehouse finished after warehouse ban crashed")
-            next_open_message = "Не удалось автоматически открыть следующий склад."
-
-    invalidate_stats_cache()
-
-    prefix = "farm FP" if farm else "ФП"
-    text_parts = [
-        "Готово ✅",
-        f"Склад: {warehouse_name}",
-        f"{prefix} найдено: {total_count}",
-        f"Переведено в ban: {updated_count}",
-        f"Сумма в ban: {format_ban_storm_amount(total_sum)}",
-    ]
-
-    if issue_rows_to_append:
-        text_parts.append(f"Добавлено в {SHEET_ISSUES}: {len(issue_rows_to_append)}")
-
-    if king_message:
-        text_parts.append(king_message)
-
-    if next_open_message:
-        text_parts.append(next_open_message)
-
-    return True, "\n".join(text_parts)
-
-
 def extract_warehouse_sort_key(warehouse_name):
     text = str(warehouse_name or "").strip().lower()
 
@@ -5388,163 +4992,6 @@ def extract_warehouse_sort_key(warehouse_name):
     # если числа нет — отправляем в конец
     return 10**9
 
-
-
-def get_fp_warehouse_lock_seconds(count_needed):
-    try:
-        count = int(count_needed)
-    except Exception:
-        count = 1
-
-    if count <= 1:
-        return 10 * 60
-    if count == 2:
-        return 20 * 60
-    return 30 * 60
-
-
-def _get_fp_warehouse_lock_store(farm=False):
-    return farm_fp_warehouse_time_locks if farm else fp_warehouse_time_locks
-
-
-def cleanup_fp_warehouse_time_locks(farm=False):
-    store = _get_fp_warehouse_lock_store(farm=farm)
-    now_ts = time.time()
-
-    with fp_warehouse_time_locks_lock:
-        expired = [
-            warehouse_name
-            for warehouse_name, info in store.items()
-            if float(info.get("expires_at", 0) or 0) <= now_ts
-        ]
-
-        for warehouse_name in expired:
-            store.pop(warehouse_name, None)
-
-    return expired
-
-
-def get_fp_warehouse_lock_info(warehouse_name, farm=False):
-    warehouse_name = str(warehouse_name or "").strip()
-    if not warehouse_name:
-        return None
-
-    cleanup_fp_warehouse_time_locks(farm=farm)
-    store = _get_fp_warehouse_lock_store(farm=farm)
-
-    with fp_warehouse_time_locks_lock:
-        info = store.get(warehouse_name)
-        if not info:
-            return None
-        return dict(info)
-
-
-def set_fp_warehouse_time_lock(warehouse_name, user_id, count_needed, farm=False):
-    warehouse_name = str(warehouse_name or "").strip()
-    if not warehouse_name:
-        return None
-
-    try:
-        count_value = int(count_needed)
-    except Exception:
-        count_value = 1
-
-    lock_seconds = get_fp_warehouse_lock_seconds(count_value)
-    expires_at = time.time() + lock_seconds
-
-    info = {
-        "warehouse_name": warehouse_name,
-        "user_id": str(user_id or "").strip(),
-        "count_needed": count_value,
-        "expires_at": expires_at,
-        "farm": bool(farm),
-    }
-
-    store = _get_fp_warehouse_lock_store(farm=farm)
-    cleanup_fp_warehouse_time_locks(farm=farm)
-
-    with fp_warehouse_time_locks_lock:
-        prev = store.get(warehouse_name)
-        if prev and str(prev.get("user_id", "")).strip() == info["user_id"]:
-            info["expires_at"] = max(float(prev.get("expires_at", 0) or 0), expires_at)
-        store[warehouse_name] = info
-
-    return dict(info)
-
-
-def is_fp_warehouse_locked_for_other_user(warehouse_name, user_id=None, farm=False):
-    info = get_fp_warehouse_lock_info(warehouse_name, farm=farm)
-    if not info:
-        return False
-
-    if user_id is not None and str(info.get("user_id", "")).strip() == str(user_id or "").strip():
-        return False
-
-    return True
-
-
-def choose_fp_warehouse_for_issue(sheet_name, count_needed=1, user_id=None, farm=False):
-    rows = get_sheet_rows_cached(sheet_name)
-    cleanup_fp_warehouse_time_locks(farm=farm)
-
-    counts = {}
-    for row in rows[1:]:
-        if len(row) < 9:
-            row = row + [''] * (9 - len(row))
-
-        warehouse = str(row[4]).strip()
-        status = str(row[5]).strip().lower()
-
-        if warehouse and status == "free":
-            counts[warehouse] = counts.get(warehouse, 0) + 1
-
-    if not counts:
-        return None, counts, []
-
-    ordered = sorted(counts.keys(), key=extract_warehouse_sort_key)
-
-    preferred = []
-    unlocked = []
-    busy = []
-
-    current_user_id = str(user_id or "").strip()
-
-    for warehouse_name in ordered:
-        info = get_fp_warehouse_lock_info(warehouse_name, farm=farm)
-
-        if info:
-            if current_user_id and str(info.get("user_id", "")).strip() == current_user_id:
-                preferred.append(warehouse_name)
-            else:
-                busy.append(warehouse_name)
-        else:
-            unlocked.append(warehouse_name)
-
-    for pool in (preferred, unlocked):
-        for warehouse_name in pool:
-            if counts.get(warehouse_name, 0) >= count_needed:
-                return warehouse_name, counts, busy
-
-    for pool in (preferred, unlocked):
-        for warehouse_name in pool:
-            if counts.get(warehouse_name, 0) > 0:
-                return warehouse_name, counts, busy
-
-    return None, counts, busy
-
-
-def maybe_open_fp_warehouse_in_octo(warehouse_name, farm=False):
-    warehouse_name = str(warehouse_name or "").strip()
-    if not warehouse_name or not OCTO_API_TOKEN:
-        return False, "OCTO disabled or warehouse empty"
-
-    tag_name = OCTO_TAG_FARMERS if farm else OCTO_TAG_ACCOUNT_MANAGERS
-
-    try:
-        return tag_next_octo_fp_warehouse(warehouse_name, tag_name)
-    except Exception as e:
-        logging.exception("maybe_open_fp_warehouse_in_octo crashed")
-        return False, str(e)
 
 def get_next_fp_warehouse_name(current_warehouse):
     rows = get_sheet_rows_cached(SHEET_FPS)
@@ -5592,15 +5039,6 @@ def count_free_fp_in_warehouse(warehouse_name):
 
     return count
 
-
-def get_current_open_fp_warehouse(user_id=None, count_needed=1):
-    warehouse_name, _, _ = choose_fp_warehouse_for_issue(
-        SHEET_FPS,
-        count_needed=count_needed,
-        user_id=user_id,
-        farm=False
-    )
-    return warehouse_name
 
 def notify_admin_fp_warehouse_finished(warehouse_name):
     next_warehouse = get_next_fp_warehouse_name(warehouse_name)
@@ -5677,14 +5115,26 @@ def count_free_farm_fp_in_warehouse(warehouse_name):
     return count
 
 
-def get_current_open_farm_fp_warehouse(user_id=None, count_needed=1):
-    warehouse_name, _, _ = choose_fp_warehouse_for_issue(
-        SHEET_FARM_FPS,
-        count_needed=count_needed,
-        user_id=user_id,
-        farm=True
-    )
-    return warehouse_name
+def get_current_open_farm_fp_warehouse():
+    rows = get_sheet_rows_cached(SHEET_FARM_FPS)
+
+    free_warehouses = set()
+    for row in rows[1:]:
+        if len(row) < 9:
+            row = row + [''] * (9 - len(row))
+
+        warehouse = str(row[4]).strip()
+        status = str(row[5]).strip().lower()
+
+        if warehouse and status == "free":
+            free_warehouses.add(warehouse)
+
+    if not free_warehouses:
+        return None
+
+    ordered = sorted(free_warehouses, key=extract_warehouse_sort_key)
+    return ordered[0]
+
 
 def notify_admin_farm_fp_warehouse_finished(warehouse_name):
     next_warehouse = get_next_farm_fp_warehouse_name(warehouse_name)
@@ -5720,12 +5170,8 @@ def notify_admin_farm_fp_warehouse_finished(warehouse_name):
                 f"notify_admin_farm_fp_warehouse_finished failed for admin_id={admin_id}"
             )
 
-def find_free_fp(exclude_link=None, user_id=None):
+def find_free_fp(exclude_link=None):
     rows = get_sheet_rows_cached(SHEET_FPS)
-    current_warehouse = get_current_open_fp_warehouse(user_id=user_id, count_needed=1)
-
-    if not current_warehouse:
-        return None
 
     candidates = []
 
@@ -5739,9 +5185,6 @@ def find_free_fp(exclude_link=None, user_id=None):
         status = str(row[5]).strip().lower()
 
         if status != "free":
-            continue
-
-        if warehouse != current_warehouse:
             continue
 
         if exclude_link and fp_link == exclude_link:
@@ -5764,8 +5207,10 @@ def find_free_fp(exclude_link=None, user_id=None):
     if not candidates:
         return None
 
+    # сначала по складу, потом по дате покупки
     candidates.sort(key=lambda x: (x["warehouse_key"], x["purchase_date_obj"]))
     return candidates[0]
+
 
 def show_found_fp(chat_id, user_id, found):
     state = get_state(user_id)
@@ -5841,13 +5286,6 @@ def confirm_fp_issue(chat_id, user_id, username):
             supplier = row[3]
             warehouse_name = row[4]
 
-            if is_fp_warehouse_locked_for_other_user(warehouse_name, user_id=user_id, farm=False):
-                clear_state(user_id)
-                send_fps_menu(chat_id, "Этот склад ФП сейчас занят другим менеджером. Начни выдачу заново.")
-                return
-
-            maybe_open_fp_warehouse_in_octo(warehouse_name, farm=False)
-
             today = datetime.now(MOSCOW_TZ).strftime("%d/%m/%Y")
             who_took_text = f"@{username}" if username else "без username"
 
@@ -5879,8 +5317,6 @@ def confirm_fp_issue(chat_id, user_id, username):
             mark_sheet_cache_stale(SHEET_FPS)
             mark_sheet_cache_stale(SHEET_ISSUES)
             invalidate_stats_cache()
-
-            set_fp_warehouse_time_lock(warehouse_name, user_id, 1, farm=False)
 
             remaining_in_warehouse = count_free_fp_in_warehouse(warehouse_name)
             if remaining_in_warehouse == 0:
@@ -5922,32 +5358,6 @@ def issue_fps_bulk(chat_id, user_id, username, count_needed):
             send_fps_menu(chat_id, "Не найдено для кого выдавать ФП. Начни заново.")
             return
 
-        current_warehouse, free_counts, busy_warehouses = choose_fp_warehouse_for_issue(
-            SHEET_FPS,
-            count_needed=count_needed,
-            user_id=user_id,
-            farm=False
-        )
-
-        if not current_warehouse:
-            clear_state(user_id)
-            if busy_warehouses:
-                send_fps_menu(chat_id, "Склады ФП сейчас заняты. Попробуй позже.")
-            else:
-                send_fps_menu(chat_id, "Свободных ФП сейчас нет.")
-            return
-
-        available_in_current = int(free_counts.get(current_warehouse, 0) or 0)
-        if available_in_current < count_needed:
-            clear_state(user_id)
-            send_fps_menu(
-                chat_id,
-                f"Недостаточно свободных ФП на доступном складе {current_warehouse}. Доступно: {available_in_current}"
-            )
-            return
-
-        maybe_open_fp_warehouse_in_octo(current_warehouse, farm=False)
-
         rows = get_sheet_rows_cached(SHEET_FPS)
         candidates = []
 
@@ -5956,9 +5366,6 @@ def issue_fps_bulk(chat_id, user_id, username, count_needed):
                 row = row + [''] * (9 - len(row))
 
             if str(row[5]).strip().lower() != "free":
-                continue
-
-            if str(row[4]).strip() != current_warehouse:
                 continue
 
             purchase_date = parse_date(row[1]) or datetime.max
@@ -5970,7 +5377,7 @@ def issue_fps_bulk(chat_id, user_id, username, count_needed):
 
         if len(selected) < count_needed:
             clear_state(user_id)
-            send_fps_menu(chat_id, f"Недостаточно свободных ФП на складе {current_warehouse}. Доступно: {len(selected)}")
+            send_fps_menu(chat_id, f"Недостаточно свободных ФП. Доступно: {len(selected)}")
             return
 
         today = datetime.now(MOSCOW_TZ).strftime("%d/%m/%Y")
@@ -5994,11 +5401,6 @@ def issue_fps_bulk(chat_id, user_id, username, count_needed):
                 if str(row[5]).strip().lower() != "free":
                     clear_state(user_id)
                     send_fps_menu(chat_id, "Одна из ФП уже не свободна. Начни заново.")
-                    return
-
-                if str(row[4]).strip() != current_warehouse:
-                    clear_state(user_id)
-                    send_fps_menu(chat_id, "Одна из ФП уже не из доступного склада. Начни заново.")
                     return
 
             issue_rows = []
@@ -6029,10 +5431,7 @@ def issue_fps_bulk(chat_id, user_id, username, count_needed):
                     normalize_numeric_for_sheet(row[2]),
                     today,
                     row[3],
-                    fp_for_whom,
-                    "",
-                    "",
-                    get_payment_hash_from_fp_row(row)
+                    fp_for_whom
                 ])
 
                 issued_items.append({
@@ -6053,7 +5452,6 @@ def issue_fps_bulk(chat_id, user_id, username, count_needed):
                 )
 
             for warehouse_name in sorted(set(warehouses_touched), key=extract_warehouse_sort_key):
-                set_fp_warehouse_time_lock(warehouse_name, user_id, count_needed, farm=False)
                 remaining_in_warehouse = count_free_fp_in_warehouse(warehouse_name)
                 if remaining_in_warehouse == 0:
                     try:
@@ -6080,7 +5478,6 @@ def issue_fps_bulk(chat_id, user_id, username, count_needed):
 
     except Exception:
         logging.exception("issue_fps_bulk crashed")
-        clear_state(user_id)
         tg_send_message(chat_id, "Ошибка массовой выдачи ФП. Попробуй ещё раз.")
         send_accounts_main_menu(chat_id, "Меню Accounts:")
 
@@ -6161,10 +5558,7 @@ def confirm_pixel_issue(chat_id, user_id, username):
                 normalize_numeric_for_sheet(row[1]),
                 today,
                 row[2],
-                pixel_for_whom,
-                "",
-                "",
-                get_payment_hash_from_pixel_row(row)
+                pixel_for_whom
             ])
 
             invalidate_stats_cache()
@@ -6289,10 +5683,7 @@ def issue_pixels_bulk(chat_id, user_id, username, count_needed):
                     normalize_numeric_for_sheet(row[1]),
                     today,
                     row[2],
-                    pixel_for_whom,
-                    "",
-                    "",
-                    get_payment_hash_from_pixel_row(row)
+                    pixel_for_whom
                 ])
 
                 issued_messages.append({
@@ -6541,7 +5932,7 @@ def find_last_pixel_issue_row(pixel_name=None, pixel_id=None):
     return last_match
 
 
-def return_pixel_to_ban(pixel_query, comment_text="", ban_timing=""):
+def return_pixel_to_ban(pixel_query, comment_text=""):
     found = find_pixel_in_base_by_data(pixel_query)
     if not found:
         return False, "Пиксель не найден."
@@ -6572,7 +5963,7 @@ def return_pixel_to_ban(pixel_query, comment_text="", ban_timing=""):
 
     issue_info = find_last_pixel_issue_row(pixel_name=pixel_name, pixel_id=pixel_id)
     if issue_info:
-        mark_issue_row_as_ban(issue_info["row_index"], comment_text, ban_timing)
+        mark_issue_row_as_ban(issue_info["row_index"], comment_text)
 
     invalidate_stats_cache()
     return True, "Пиксель переведён в ban."
@@ -6767,17 +6158,12 @@ def find_free_farm_kings(count_needed, geo=None, supplier=None):
     candidates = []
     geo = str(geo or "").strip()
     supplier = str(supplier or "").strip()
-    reserved = get_reserved_rows_set()
 
     for idx, row in enumerate(rows[1:], start=2):
         if len(row) < 12:
             row = row + [''] * (12 - len(row))
 
         if str(row[4]).strip().lower() != "free":
-            continue
-
-        # Пропускаем строки, уже зарезервированные другим пользователем
-        if idx in reserved:
             continue
 
         row_geo = str(row[7]).strip()
@@ -6913,7 +6299,6 @@ def find_free_farm_kings_by_geo_and_price(count_needed, geo, price):
     candidates = []
     geo = str(geo or "").strip()
     price = normalize_price_key(price)
-    reserved = get_reserved_rows_set()
 
     for idx, row in enumerate(rows[1:], start=2):
         row = ensure_row_len(row, 13)
@@ -6930,10 +6315,6 @@ def find_free_farm_kings_by_geo_and_price(count_needed, geo, price):
         if row_price != price:
             continue
         if current_name:
-            continue
-
-        # Пропускаем строки, уже зарезервированные другим пользователем
-        if idx in reserved:
             continue
 
         purchase_date = parse_date(row[1]) or datetime.max
@@ -7140,10 +6521,6 @@ def start_farm_kings_bulk_proxy_step(chat_id, user_id):
         f"socks5://host:port"
     )
 
-    # Сохраняем state ДО отправки сообщения — защита от race condition
-    state["mode"] = FARM_KING_OCTO_MODE_BULK_PROXY
-    set_state_with_custom_ttl(user_id, state, FARM_KING_BULK_PROXY_TTL)
-
     sent = tg_send_inline_message(
         chat_id,
         text,
@@ -7155,15 +6532,17 @@ def start_farm_kings_bulk_proxy_step(chat_id, user_id):
         ]]
     )
 
+    state["mode"] = FARM_KING_OCTO_MODE_BULK_PROXY
+
     try:
         if isinstance(sent, dict):
             proxy_message_id = sent.get("result", {}).get("message_id")
             if proxy_message_id:
-                state = get_state(user_id)
                 state["farm_kings_bulk_proxy_message_id"] = proxy_message_id
-                set_state_with_custom_ttl(user_id, state, FARM_KING_BULK_PROXY_TTL)
     except Exception:
         logging.exception("start_farm_kings_bulk_proxy_step failed to save proxy message_id")
+
+    set_state_with_custom_ttl(user_id, state, FARM_KING_BULK_PROXY_TTL)
 
 def start_farm_bulk_worker_if_needed(chat_id, user_id):
     with farm_bulk_worker_lock:
@@ -7236,7 +6615,7 @@ def run_farm_bulk_worker(chat_id, user_id):
             except Exception:
                 logging.exception("run_farm_bulk_worker failed to update progress message")
 
-            time.sleep(1.5)  # пауза между кингами — защита от 429 в Octo
+            time.sleep(0.3)
 
     except Exception as e:
         logging.exception("run_farm_bulk_worker crashed")
@@ -7512,10 +6891,7 @@ def process_farm_kings_bulk_proxy_step_background(chat_id, user_id, username):
         normalize_numeric_for_sheet(row[2]),
         today,
         row[3],
-        "farm",
-        "",
-        "",
-        get_payment_hash_from_king_row(row)
+        "farm"
     ])
 
     results.append({
@@ -7655,8 +7031,6 @@ def send_farm_kings_bulk_followup_messages(chat_id, results):
 def finish_farm_kings_bulk(chat_id, user_id):
     state = get_state(user_id)
 
-    release_farm_king_rows(user_id)  # Снять резерв — выдача завершена
-
     progress_message_id = state.get("farm_kings_bulk_progress_message_id")
     if progress_message_id:
         tg_delete_message(chat_id, progress_message_id)
@@ -7781,7 +7155,7 @@ def build_farm_king_search_text(king_name):
     }
 
 
-def return_farm_king_to_ban(king_name, comment_text="", ban_timing=""):
+def return_farm_king_to_ban(king_name, comment_text=""):
     found = find_farm_king_in_base_by_name(king_name)
     if not found:
         return False, "Кинг не найден в База фарм кинги."
@@ -7807,7 +7181,7 @@ def return_farm_king_to_ban(king_name, comment_text="", ban_timing=""):
 
     issue_info = find_last_king_issue_row(king_name)
     if issue_info:
-        mark_issue_row_as_ban(issue_info["row_index"], comment_text, ban_timing)
+        mark_issue_row_as_ban(issue_info["row_index"], comment_text)
 
     invalidate_stats_cache()
     return True, f"Кинг '{king_name}' переведён в ban."
@@ -7963,10 +7337,7 @@ def issue_farm_kings(chat_id, user_id, username, king_names):
                 normalize_numeric_for_sheet(row[2]),
                 today,
                 row[3],
-                "farm",
-                "",
-                "",
-                get_payment_hash_from_king_row(row)
+                "farm"
             ])
 
             issued_items.append({
@@ -8051,52 +7422,6 @@ def issue_farm_kings(chat_id, user_id, username, king_names):
     send_farm_kings_menu(chat_id, "Выбери следующее действие:")
 
 
-def extract_bm_id_from_data_text(data_text):
-    text = str(data_text or "")
-    if not text:
-        return ""
-
-    patterns = [
-        r"business_id=(\d{6,25})",
-        r"\b(?:bm|business(?:\s+manager)?|id)\s*[:#-]?\s*(\d{6,25})\b",
-        r"\b(\d{6,25})\b",
-    ]
-
-    for pattern in patterns:
-        m = re.search(pattern, text, re.IGNORECASE)
-        if m:
-            return m.group(1).strip()
-
-    return ""
-
-
-def get_bm_effective_id_from_row(row):
-    row = ensure_row_len(list(row or []), 9)
-    direct_id = str(row[0] or "").strip()
-    if direct_id:
-        return direct_id
-    return extract_bm_id_from_data_text(row[8])
-
-
-def bm_row_matches_query(row, query, allow_data_contains=False):
-    q = str(query or "").strip().lower()
-    if not q:
-        return False
-
-    row = ensure_row_len(list(row or []), 9)
-    direct_id = str(row[0] or "").strip().lower()
-    effective_id = str(get_bm_effective_id_from_row(row) or "").strip().lower()
-    data_text = str(row[8] or "").strip().lower()
-
-    if q == direct_id or q == effective_id:
-        return True
-
-    if allow_data_contains and q in data_text:
-        return True
-
-    return False
-
-
 def count_free_farm_bms():
     rows = get_sheet_rows_cached(SHEET_FARM_BMS)
 
@@ -8117,10 +7442,11 @@ def find_free_farm_bm(exclude_bm_id=None):
     candidates = []
 
     for idx, row in enumerate(rows[1:], start=2):
-        row = ensure_row_len(row, 9)
+        if len(row) < 9:
+            row = row + [''] * (9 - len(row))
 
-        effective_bm_id = get_bm_effective_id_from_row(row)
-        if exclude_bm_id and effective_bm_id == str(exclude_bm_id).strip():
+        bm_id = str(row[0]).strip()
+        if exclude_bm_id and bm_id == exclude_bm_id:
             continue
 
         if str(row[4]).strip().lower() != "free":
@@ -8138,46 +7464,45 @@ def find_free_farm_bm(exclude_bm_id=None):
 
     candidates.sort(key=lambda x: x["purchase_date_obj"])
     item = candidates[0]
-    row = ensure_row_len(item["row"], 9)
+    row = item["row"]
 
     return {
         "row_index": item["row_index"],
-        "bm_id": get_bm_effective_id_from_row(row),
+        "bm_id": row[0],
         "purchase_date": row[1],
         "price": row[2],
         "supplier": row[3],
         "data_text": row[8]
     }
 
+
 def find_farm_bm_in_base(bm_id):
     rows = get_sheet_rows_cached(SHEET_FARM_BMS)
-    target = str(bm_id or "").strip()
-
-    if not target:
-        return None
 
     for idx, row in enumerate(rows[1:], start=2):
-        row = ensure_row_len(row, 9)
-        if bm_row_matches_query(row, target, allow_data_contains=False):
-            return {"row_index": idx, "row": row}
+        if len(row) < 9:
+            row = row + [''] * (9 - len(row))
 
-    for idx, row in enumerate(rows[1:], start=2):
-        row = ensure_row_len(row, 9)
-        if bm_row_matches_query(row, target, allow_data_contains=True):
-            return {"row_index": idx, "row": row}
+        if str(row[0]).strip() == str(bm_id).strip():
+            return {
+                "row_index": idx,
+                "row": row
+            }
 
     return None
+
 
 def build_farm_bm_search_text(bm_id):
     found = find_farm_bm_in_base(bm_id)
     if not found:
         return None
 
-    row = ensure_row_len(found["row"], 9)
-    effective_bm_id = get_bm_effective_id_from_row(row) or "не найден"
+    row = found["row"]
+    if len(row) < 9:
+        row = row + [''] * (9 - len(row))
 
     return (
-        f"ID BM: {effective_bm_id}\n"
+        f"ID BM: {row[0]}\n"
         f"Дата покупки: {row[1] or 'не указана'}\n"
         f"Цена: {row[2] or 'не указана'}\n"
         f"Статус: {row[4] or 'не указан'}\n"
@@ -8187,53 +7512,69 @@ def build_farm_bm_search_text(bm_id):
         f"Данные:\n{row[8] or 'нет данных'}"
     )
 
-def return_farm_bm_to_ban(bm_id, comment_text="", ban_timing=""):
+def return_farm_bm_to_ban(bm_id, comment_text=""):
     found = find_farm_bm_in_base(bm_id)
     if not found:
         return False, "BM не найден в База фарм бм."
 
-    row = ensure_row_len(found["row"], 10)
-    effective_bm_id = get_bm_effective_id_from_row(row) or str(bm_id).strip()
+    row = found["row"]
+    if len(row) < 9:
+        row = row + [''] * (9 - len(row))
 
     status = str(row[4]).strip().lower()
+
     if status == "ban":
         return False, "Этот BM уже в ban."
 
-    sheet_update_and_refresh(SHEET_FARM_BMS, f"E{found['row_index']}:F{found['row_index']}", [["ban", "ban"]])
+    sheet_update_and_refresh(
+        SHEET_FARM_BMS,
+        f"E{found['row_index']}:F{found['row_index']}",
+        [["ban", "ban"]]
+    )
 
+    row = ensure_row_len(row, 26)
     sync_id = row[9]
+    
     if sync_id:
         sync_status_to_basebot(BASEBOT_SHEET_FARM_BMS, sync_id, "ban")
 
-    issue_info = find_last_bm_issue_row(effective_bm_id)
+    issue_info = find_last_bm_issue_row(bm_id)
     if issue_info:
-        mark_issue_row_as_ban(issue_info["row_index"], comment_text, ban_timing)
+        mark_issue_row_as_ban(issue_info["row_index"], comment_text)
 
     invalidate_stats_cache()
-    return True, f"BM '{effective_bm_id}' переведён в ban."
+    return True, f"BM '{bm_id}' переведён в ban."
 
 def return_farm_bm_to_free(bm_id):
     found = find_farm_bm_in_base(bm_id)
     if not found:
         return False, "BM не найден в База фарм бм."
 
-    row = ensure_row_len(found["row"], 10)
-    effective_bm_id = get_bm_effective_id_from_row(row) or str(bm_id).strip()
+    row = found["row"]
+    if len(row) < 9:
+        row = row + [''] * (9 - len(row))
 
     status = str(row[4]).strip().lower()
+
     if status == "free":
         return False, "Этот farm BM уже free."
 
-    sheet_update_and_refresh(SHEET_FARM_BMS, f"E{found['row_index']}:H{found['row_index']}", [["free", "", "", ""]])
+    sheet_update_and_refresh(
+        SHEET_FARM_BMS,
+        f"E{found['row_index']}:H{found['row_index']}",
+        [["free", "", "", ""]]
+    )
 
+    row = ensure_row_len(row, 26)
     sync_id = row[9]
+    
     if sync_id:
         sync_status_to_basebot(BASEBOT_SHEET_FARM_BMS, sync_id, "free")
 
-    delete_last_bm_issue_row(effective_bm_id)
+    delete_last_bm_issue_row(bm_id)
 
     invalidate_stats_cache()
-    return True, f"Farm BM '{effective_bm_id}' возвращён в free."
+    return True, f"Farm BM '{bm_id}' возвращён в free."
 
 def issue_farm_bm(chat_id, user_id, username):
     today = datetime.now(MOSCOW_TZ).strftime("%d/%m/%Y")
@@ -8241,50 +7582,58 @@ def issue_farm_bm(chat_id, user_id, username):
 
     with issue_lock:
         found = find_free_farm_bm()
+
         if not found:
             send_farm_bms_menu(chat_id, "Свободных фарм BMов сейчас нет.")
             return
 
         row_index = found["row_index"]
         rows = get_sheet_rows_cached(SHEET_FARM_BMS)
+
         if row_index - 1 >= len(rows):
             send_farm_bms_menu(chat_id, "BM не найден в таблице.")
             return
 
-        row = ensure_row_len(rows[row_index - 1], 10)
+        row = rows[row_index - 1]
+        row = ensure_row_len(row, 10)
         sync_id = row[9]
 
         if str(row[4]).strip().lower() != "free":
             send_farm_bms_menu(chat_id, "Этот BM уже занят.")
             return
 
-        effective_bm_id = get_bm_effective_id_from_row(row)
-
         sheet_update_and_refresh(
             SHEET_FARM_BMS,
             f"E{row_index}:H{row_index}",
-            [["taken", "farm", who_took_text, today]]
+            [[
+                "taken",
+                "farm",
+                who_took_text,
+                today
+            ]]
         )
 
         if sync_id:
             sync_status_to_basebot(BASEBOT_SHEET_FARM_BMS, sync_id, "taken")
 
         append_issue_row_fixed([
-            effective_bm_id,
+            row[0],
             "БМ",
             row[1],
             normalize_numeric_for_sheet(row[2]),
             today,
             row[3],
-            "farm",
-            "",
-            "",
-            get_payment_hash_from_bm_row(row)
+            "farm"
         ])
 
         invalidate_stats_cache()
 
-    tg_send_message(chat_id, f"Готово ✅\n\nBM выдан.\n🔥ID BM: {effective_bm_id or 'не найден'}")
+    tg_send_message(
+        chat_id,
+        f"Готово ✅\n\n"
+        f"BM выдан.\n"
+        f"🔥ID BM: {row[0]}"
+    )
 
     if len(row) > 8 and row[8]:
         tg_send_message(chat_id, row[8])
@@ -8293,10 +7642,11 @@ def issue_farm_bm(chat_id, user_id, username):
 
     send_farm_bms_menu(chat_id, "Выбери следующее действие:")
 
-def find_free_farm_fps(count_needed, user_id=None):
+
+def find_free_farm_fps(count_needed):
     rows = get_sheet_rows_cached(SHEET_FARM_FPS)
 
-    current_warehouse = get_current_open_farm_fp_warehouse(user_id=user_id, count_needed=count_needed)
+    current_warehouse = get_current_open_farm_fp_warehouse()
     if not current_warehouse:
         return []
 
@@ -8323,6 +7673,7 @@ def find_free_farm_fps(count_needed, user_id=None):
 
     candidates.sort(key=lambda x: x["purchase_date_obj"])
     return candidates[:count_needed]
+
 
 def find_farm_fp_in_base(fp_link):
     rows = get_sheet_rows_cached(SHEET_FARM_FPS)
@@ -8361,7 +7712,7 @@ def build_farm_fp_search_text(fp_link):
         f"Дата выдачи: {row[8] or 'не указана'}"
     )
 
-def return_farm_fp_to_ban(fp_link, comment_text="", ban_timing=""):
+def return_farm_fp_to_ban(fp_link, comment_text=""):
     found = find_farm_fp_in_base(fp_link)
     if not found:
         return False, "Farm FP не найдено."
@@ -8383,7 +7734,7 @@ def return_farm_fp_to_ban(fp_link, comment_text="", ban_timing=""):
 
     issue_info = find_last_fp_issue_row(fp_link)
     if issue_info:
-        mark_issue_row_as_ban(issue_info["row_index"], comment_text, ban_timing)
+        mark_issue_row_as_ban(issue_info["row_index"], comment_text)
 
     invalidate_stats_cache()
     return True, "Farm FP переведено в ban."
@@ -8421,39 +7772,31 @@ def issue_farm_fps(chat_id, user_id, username, count_needed):
             f"count_needed={count_needed}"
         )
 
-        current_warehouse, free_counts, busy_warehouses = choose_fp_warehouse_for_issue(
-            SHEET_FARM_FPS,
-            count_needed=count_needed,
-            user_id=user_id,
-            farm=True
-        )
+        logging.info("issue_farm_fps before find_free_farm_fps")
+        found = find_free_farm_fps(count_needed)
+        logging.info(f"issue_farm_fps after find_free_farm_fps found_count={len(found)}")
 
+        logging.info("issue_farm_fps before get_current_open_farm_fp_warehouse")
+        current_warehouse = get_current_open_farm_fp_warehouse()
         logging.info(f"issue_farm_fps current_warehouse={current_warehouse}")
 
         if not current_warehouse:
-            if busy_warehouses:
-                send_farm_fps_menu(chat_id, "Склады farm FP сейчас заняты. Попробуй позже.")
-            else:
-                send_farm_fps_menu(chat_id, "Свободных FP сейчас нет.")
+            send_farm_fps_menu(chat_id, "Свободных FP сейчас нет.")
             return
 
-        available_in_current = int(free_counts.get(current_warehouse, 0) or 0)
+        logging.info(
+            f"issue_farm_fps before count_free_farm_fp_in_warehouse "
+            f"warehouse={current_warehouse}"
+        )
+        available_in_current = count_free_farm_fp_in_warehouse(current_warehouse)
         logging.info(f"issue_farm_fps available_in_current={available_in_current}")
 
         if available_in_current < count_needed:
             send_farm_fps_menu(
                 chat_id,
-                f"Недостаточно свободных FP на доступном складе {current_warehouse}. Доступно: {available_in_current}"
+                f"Недостаточно свободных FP на текущем складе {current_warehouse}. "
+                f"Доступно: {available_in_current}"
             )
-            return
-
-        maybe_open_fp_warehouse_in_octo(current_warehouse, farm=True)
-
-        found = find_free_farm_fps(count_needed, user_id=user_id)
-        logging.info(f"issue_farm_fps selected_count={len(found)}")
-
-        if len(found) < count_needed:
-            send_farm_fps_menu(chat_id, f"Недостаточно свободных FP на складе {current_warehouse}. Доступно: {len(found)}")
             return
 
         today = datetime.now(MOSCOW_TZ).strftime("%d/%m/%Y")
@@ -8483,7 +7826,7 @@ def issue_farm_fps(chat_id, user_id, username, count_needed):
                     return
 
                 if str(row[4]).strip() != current_warehouse:
-                    send_farm_fps_menu(chat_id, "Одна из FP уже не из доступного склада.")
+                    send_farm_fps_menu(chat_id, "Одна из FP уже не из текущего склада.")
                     return
 
             for item in found:
@@ -8510,10 +7853,7 @@ def issue_farm_fps(chat_id, user_id, username, count_needed):
                     normalize_numeric_for_sheet(row[2]),
                     today,
                     row[3],
-                    "farm",
-                    "",
-                    "",
-                    get_payment_hash_from_fp_row(row)
+                    "farm"
                 ])
 
                 messages.append(f"Ссылка: {row[0]}")
@@ -8524,8 +7864,6 @@ def issue_farm_fps(chat_id, user_id, username, count_needed):
                 append_issue_rows_fixed(issue_rows)
 
             invalidate_stats_cache()
-
-        set_fp_warehouse_time_lock(current_warehouse, user_id, count_needed, farm=True)
 
         remaining_in_warehouse = count_free_farm_fp_in_warehouse(current_warehouse)
 
@@ -8557,6 +7895,9 @@ def issue_farm_fps(chat_id, user_id, username, count_needed):
             extra_text=f"user_id={user_id}, count_needed={count_needed}"
         )
         raise
+# =========================
+# HELPERS
+# =========================
 
 def normalize_multiline_text_block(text):
     return str(text or "").replace("\r\n", "\n").replace("\r", "\n").strip()
@@ -9084,14 +8425,6 @@ def _extract_docs_links(text):
     for mm in re.finditer(r"https?://drive\.google\.com/[^\s]+", text, re.IGNORECASE):
         docs.append(mm.group(0).strip())
 
-    # Формат B: URL в самом конце строки после 2FA (bridesbay.com, postimg.cc и т.п.)
-    # Паттерн: :BASE32_2FA:https://...  или  заканчивается на https://...
-    m_tail = re.search(r":[A-Z2-7]{16,}:(https?://[^\s\|:]+)", text)
-    if m_tail:
-        url = m_tail.group(1).strip()
-        if url not in docs:
-            docs.append(url)
-
     return _dedupe_keep_order(docs)
 
 
@@ -9281,367 +8614,27 @@ def parse_crypto_king_raw_data(raw_text):
         "raw_text": text_original,
     }
 
-    # ---------- FORMAT double-colon: email :: token :: UA :: :: [cookies] :: fb_pass :: email;fb_pass;email_pass;date;fb_login;... ----------
-    # Детектор: разделитель " :: " (с пробелами), первый элемент — email
-    if " :: " in text_original:
-        dc_parts = [x.strip() for x in text_original.split(" :: ")]
-        if len(dc_parts) >= 4 and _validate_email(dc_parts[0]):
-            result["email"] = _validate_email(dc_parts[0])
-
-            # Последний непустой блок с ";" — semicolon-separated: email;fb_pass;email_pass;date;fb_login;name;2fa;...
-            last_block = ""
-            for p in reversed(dc_parts):
-                if p and ";" in p:
-                    last_block = p
-                    break
-
-            if last_block:
-                sub = [x.strip() for x in last_block.split(";")]
-                # sub[0]=email, sub[1]=fb_pass, sub[2]=email_pass, sub[3]=date, sub[4]=fb_login
-                result["fb_password"] = sub[1].strip() if len(sub) > 1 and sub[1] and not _validate_email(sub[1]) else ""
-                result["email_password"] = sub[2].strip() if len(sub) > 2 else ""
-                fb_login_cand = sub[4].strip() if len(sub) > 4 else ""
-                if re.fullmatch(r"[0-9]{8,20}", fb_login_cand):
-                    result["fb_login"] = fb_login_cand
-
-                # 2FA: ищем в sub элемент похожий на 2FA url или base32
-                for s in sub:
-                    val = _validate_2fa(s.strip())
-                    if val:
-                        result["twofa"] = val
-                        break
-
-                # GEO: ищем "GEO xxx" в sub
-                for s in sub:
-                    m_geo = re.match(r"GEO\s+(.+)", s.strip(), re.IGNORECASE)
-                    if m_geo:
-                        result["geo"] = m_geo.group(1).strip()
-                        break
-
-                # DOC: ищем "DOC https://..."
-                for s in sub:
-                    m_doc = re.match(r"DOC\s+(https?://\S+)", s.strip(), re.IGNORECASE)
-                    if m_doc:
-                        result["docs_links"].append(m_doc.group(1).strip())
-                        break
-
-            # fb_password может быть в dc_parts[-2] (перед последним блоком) если не нашли в sub
-            if not result["fb_password"] and len(dc_parts) >= 2:
-                cand = dc_parts[-2].strip()
-                if cand and not _validate_email(cand) and not cand.startswith("http") and len(cand) <= 30:
-                    result["fb_password"] = cand
-
-            if not result["fb_login"] and result["email"]:
-                result["fb_login"] = result["email"]
-
-            result["cookies_json"] = _extract_cookie_json_block(text_original)
-            result["user_agent"] = _extract_user_agent(text_original)
-            result["bm_links"] = _extract_bm_links(text_original)
-            result["cookies_links"] = _extract_cookie_links(text_original)
-
-            if not result["twofa"]:
-                result["twofa"] = _validate_2fa(_extract_twofa_value(text_original))
-            if not result["cookies_json"]:
-                result["cookies_json"] = extract_cookie_json_from_raw_king_text(text_original)
-
-            result["fb_login"] = _sanitize_login(result["fb_login"])
-            result["email"] = _validate_email(result["email"])
-            result["twofa"] = _validate_2fa(result["twofa"])
-            if _validate_email(result["fb_password"]):
-                result["fb_password"] = ""
-            if _validate_email(result["email_password"]):
-                result["email_password"] = ""
-            return result
-
-    # ---------- FORMAT COLON-SEPARATED: Name:email:fb_pass:email:email_pass:fb_login:UA::token:cookies (форматы 2, 7) ----------
-    # Детектор: первая часть — имя с пробелом, вторая — email
-    if ":" in text and "|" not in text:
-        colon_parts = [x.strip() for x in text.split(":")]
-        if len(colon_parts) >= 6:
-            p0_is_name = bool(re.fullmatch(r"[A-Za-z ]{3,40}", colon_parts[0])) and " " in colon_parts[0]
-            p1_is_email = bool(_validate_email(colon_parts[1]))
-            if p0_is_name and p1_is_email:
-                result["email"] = _validate_email(colon_parts[1])
-                result["fb_password"] = colon_parts[2].strip() if len(colon_parts) > 2 else ""
-                # colon_parts[3] — email повтор
-                result["email_password"] = colon_parts[4].strip() if len(colon_parts) > 4 else ""
-                result["fb_login"] = _sanitize_login(colon_parts[5]) if len(colon_parts) > 5 else ""
-
-                result["twofa"] = _validate_2fa(_extract_twofa_value(text_original))
-                result["geo"] = _extract_geo_value(text_original)
-                result["cookies_json"] = _extract_cookie_json_block(text_original)
-                result["docs_links"] = _extract_docs_links(text_original)
-                result["bm_links"] = _extract_bm_links(text_original)
-                result["cookies_links"] = _extract_cookie_links(text_original)
-                result["user_agent"] = _extract_user_agent(text_original)
-
-                if not result["fb_login"] and result["email"]:
-                    result["fb_login"] = result["email"]
-
-                result["fb_login"] = _sanitize_login(result["fb_login"])
-                result["email"] = _validate_email(result["email"])
-                result["twofa"] = _validate_2fa(result["twofa"])
-                if _validate_email(result["fb_password"]):
-                    result["fb_password"] = ""
-                if not result["cookies_json"]:
-                    result["cookies_json"] = extract_cookie_json_from_raw_king_text(text_original)
-                return result
-
-    # ---------- FORMAT PIPE extended: id|pass|2fa|c_user=...cookie_str...|token|email|email_pass|service|... ----------
-    # Детектор: p[0]=числовой id, p[3] начинается с "c_user=" (куки как строка, не JSON-массив)
-    if "|" in text_original and text_original.count("|") >= 6:
-        _ep = [x.strip() for x in text_original.split("|")]
-        if (len(_ep) >= 7
-                and re.fullmatch(r"[0-9]{8,20}", _ep[0])
-                and _ep[3].startswith("c_user=")):
-            result["fb_login"] = _ep[0]
-            result["fb_password"] = _ep[1]
-            result["twofa"] = _validate_2fa(_ep[2])
-            result["cookies_json"] = _ep[3]  # cookie-строка: c_user=...;xs=...;fr=...
-            # _ep[4] — токен EAABs..., пропускаем
-            result["email"] = _validate_email(_ep[5]) if len(_ep) > 5 else ""
-            result["email_password"] = _ep[6].strip() if len(_ep) > 6 else ""
-            # _ep[7] — service (email), _ep[8] — длинный ключ, _ep[9] — uuid
-            svc = _ep[7].strip() if len(_ep) > 7 else ""
-            if svc and "@" in svc and not svc.startswith("M.C"):
-                result["service"] = svc
-
-            result["fb_login"] = _sanitize_login(result["fb_login"])
-            result["email"] = _validate_email(result["email"])
-            result["twofa"] = _validate_2fa(result["twofa"] or _extract_twofa_value(text_original))
-            result["docs_links"] = _extract_docs_links(text_original)
-            result["bm_links"] = _extract_bm_links(text_original)
-            result["user_agent"] = _extract_user_agent(text_original)
-            result["geo"] = _extract_geo_value(text_original)
-            if _validate_email(result["fb_password"]):
-                result["fb_password"] = ""
-            if _validate_email(result["email_password"]):
-                result["email_password"] = ""
-            return result
-
-    # ---------- FORMAT PIPE (|) ----------
-    # Форматы 5, 8, 14: id|pass|2fa|email|email_pass|service|...
-    # Также: id|@#!pass|2fa|email|pass||cookies
-    if "|" in text and text.count("|") >= 4 and "login -" not in text.lower() and "Fb:" not in text and "E-mail:" not in text:
+    # ---------- FORMAT 1: pipe ----------
+    if "|" in text and text.count("|") >= 5 and "login -" not in text.lower():
         parts = [x.strip() for x in text.split("|")]
-        if len(parts) >= 5:
-            p0 = parts[0]
-            p1 = parts[1] if len(parts) > 1 else ""
-            p2 = parts[2] if len(parts) > 2 else ""
-            p3 = parts[3] if len(parts) > 3 else ""
-            p4 = parts[4] if len(parts) > 4 else ""
-            p5 = parts[5] if len(parts) > 5 else ""
+        if len(parts) >= 6:
+            result["fb_login"] = _sanitize_login(parts[0])
+            result["fb_password"] = parts[1].strip()
+            result["twofa"] = _validate_2fa(parts[2])
+            result["email"] = _validate_email(parts[3])
+            result["email_password"] = parts[4].strip()
+            result["service"] = parts[5].strip()
 
-            # p0 должен быть числовым ID или именем без пробелов
-            p0_is_id = bool(re.fullmatch(r"[0-9]{8,20}", p0))
-            p0_is_name = bool(re.fullmatch(r"[A-Za-z ]{3,40}", p0)) and " " in p0
-
-            if p0_is_id or p0_is_name:
-                if p0_is_id:
-                    result["fb_login"] = p0
-                    result["fb_password"] = p1
-                    result["twofa"] = _validate_2fa(p2)
-                    result["email"] = _validate_email(p3)
-                    result["email_password"] = p4
-                    result["service"] = p5 if p5 and not p5.startswith("xs=") and not p5 == "Live" else ""
-                else:
-                    # Name:email:fb_pass:email:email_pass:fb_login (формат 2, 7)
-                    # parts: Name, email, fb_pass, email, email_pass, fb_login, UA, empty, token, cookies, GEO, avatarl
-                    result["email"] = _validate_email(p1)
-                    result["fb_password"] = p2
-                    result["email_password"] = p4
-                    result["fb_login"] = _sanitize_login(p5) if p5 else ""
-
-                result["cookies_json"] = _extract_cookie_json_block(text_original)
-                result["docs_links"] = _extract_docs_links(text_original)
-                result["bm_links"] = _extract_bm_links(text_original)
-                result["cookies_links"] = _extract_cookie_links(text_original)
-                result["bm_email_pairs"] = _extract_bm_email_pairs(text_original)
-                result["user_agent"] = _extract_user_agent(text_original)
-                result["geo"] = _extract_geo_value(text_original)
-                result["twofa"] = _validate_2fa(result["twofa"] or _extract_twofa_value(text_original))
-
-                if not result["fb_login"] and result["email"]:
-                    result["fb_login"] = result["email"]
-
-                # FINAL SANITY
-                result["fb_login"] = _sanitize_login(result["fb_login"])
-                result["email"] = _validate_email(result["email"])
-                result["twofa"] = _validate_2fa(result["twofa"])
-                if _validate_email(result["fb_password"]):
-                    result["fb_password"] = ""
-                if _validate_email(result["email_password"]):
-                    result["email_password"] = ""
-                if not result["cookies_json"]:
-                    result["cookies_json"] = extract_cookie_json_from_raw_king_text(text_original)
-                return result
-
-    # ---------- FORMAT: Fb:\tID:pass\tE-mail:\temail:pass\t2FA:\tXXX (формат 4) ----------
-    # Ищем "Fb:" или "Facebook:" с парой id:pass рядом
-    m_fb = re.search(r"(?:^|\n|\t)\s*F(?:b|acebook)\s*:\s*([0-9]{8,20})\s*:\s*(\S+)", text, re.IGNORECASE)
-    m_email_pair = re.search(r"E-?mail\s*:\s*([A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,})\s*:\s*(\S+)", text, re.IGNORECASE)
-    if m_fb and m_email_pair:
-        result["fb_login"] = m_fb.group(1).strip()
-        result["fb_password"] = m_fb.group(2).strip()
-        result["email"] = _validate_email(m_email_pair.group(1))
-        result["email_password"] = m_email_pair.group(2).strip()
-        result["twofa"] = _validate_2fa(_extract_twofa_value(text))
-        result["geo"] = _extract_geo_value(text_original)
-        result["cookies_json"] = _extract_cookie_json_block(text_original)
-        result["docs_links"] = _extract_docs_links(text_original)
-        result["bm_links"] = _extract_bm_links(text_original)
-        result["cookies_links"] = _extract_cookie_links(text_original)
-        result["user_agent"] = _extract_user_agent(text_original)
-        if not result["cookies_json"]:
-            result["cookies_json"] = extract_cookie_json_from_raw_king_text(text_original)
-        return result
-
-    # ---------- FORMAT: label - value (tab-separated, формат 11) ----------
-    # UK\tlogin - 61579226233323\tpassword - sEC6R0hkRV\tEmail - email:pass\t2FA - url
-    has_login_dash = bool(re.search(r"\blogin\s*-\s*[0-9]{8,20}", text, re.IGNORECASE))
-    has_password_dash = bool(re.search(r"\bpassword\s*-\s*\S+", text, re.IGNORECASE))
-    if has_login_dash or has_password_dash:
-        m = re.search(r"\blogin\s*-\s*([0-9A-Za-z@._\-]{5,})", text, re.IGNORECASE)
-        if m:
-            result["fb_login"] = _sanitize_login(m.group(1).strip())
-        m = re.search(r"\bpassword\s*-\s*(\S+)", text, re.IGNORECASE)
-        if m:
-            result["fb_password"] = m.group(1).strip()
-
-        # Email - email:pass  или  Email - email\nPassword - pass
-        m = re.search(r"\bEmail\s*-\s*([A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,})\s*:\s*(\S+)", text, re.IGNORECASE)
-        if m:
-            result["email"] = _validate_email(m.group(1))
-            result["email_password"] = m.group(2).strip().split(";")[0].strip()
-        else:
-            result["email"] = _validate_email(_extract_email_from_email_block(text))
-            result["email_password"] = _extract_email_password_from_email_block(text)
-
-        result["twofa"] = _validate_2fa(_extract_twofa_value(text))
-        result["geo"] = _extract_geo_value(text_original)
-        result["cookies_json"] = _extract_cookie_json_block(text_original)
-        result["docs_links"] = _extract_docs_links(text_original)
-        result["bm_links"] = _extract_bm_links(text_original)
-        result["cookies_links"] = _extract_cookie_links(text_original)
-        result["user_agent"] = _extract_user_agent(text_original)
-
-        if not result["fb_login"] and result["email"]:
-            result["fb_login"] = result["email"]
-
-        result["fb_login"] = _sanitize_login(result["fb_login"])
-        result["email"] = _validate_email(result["email"])
-        result["twofa"] = _validate_2fa(result["twofa"])
-        if not result["cookies_json"]:
-            result["cookies_json"] = extract_cookie_json_from_raw_king_text(text_original)
-        return result
-
-    # ---------- FORMAT TAB-SEPARATED: Name\temail\tfb_pass\temail\temail_pass\t...\tid (форматы 3, 9) ----------
-    # Детектор: есть табы, есть email, есть числовой id, нет явных меток
-    tab_parts = [x.strip() for x in re.split(r"\t+", text_original) if x.strip()]
-    if len(tab_parts) >= 5:
-        all_emails_in_tabs = [p for p in tab_parts if _validate_email(p)]
-        all_ids_in_tabs = [p for p in tab_parts if re.fullmatch(r"[0-9]{8,20}", p)]
-
-        if all_emails_in_tabs and all_ids_in_tabs:
-            email_idx = next((i for i, p in enumerate(tab_parts) if _validate_email(p)), -1)
-            fb_id = all_ids_in_tabs[0]
-
-            # Определяем email
-            result["email"] = _validate_email(tab_parts[email_idx])
-            result["fb_login"] = fb_id
-
-            # Пароль от FB: токен сразу после email
-            if email_idx + 1 < len(tab_parts):
-                cand = tab_parts[email_idx + 1]
-                if not _validate_email(cand) and not cand.startswith("http") and not re.fullmatch(r"[0-9.]{6,}", cand):
-                    result["fb_password"] = cand
-
-            # Пароль от Email: следующий после дублирования email (или после fb_password)
-            # Ищем email_idx ещё раз (дублирующийся email)
-            dup_email_idx = next((i for i, p in enumerate(tab_parts) if i > email_idx and _validate_email(p) and p.lower() == result["email"].lower()), -1)
-            if dup_email_idx != -1 and dup_email_idx + 1 < len(tab_parts):
-                cand = tab_parts[dup_email_idx + 1]
-                if not _validate_email(cand) and not cand.startswith("http") and not re.fullmatch(r"[0-9.]{6,}", cand):
-                    result["email_password"] = cand
-            elif email_idx + 2 < len(tab_parts) and not result["email_password"]:
-                cand = tab_parts[email_idx + 2]
-                if not _validate_email(cand) and not cand.startswith("http") and not re.fullmatch(r"[0-9]{6,}", cand):
-                    result["email_password"] = cand
-
-            # 2FA: ищем base32-строку в частях (с пробелами или без)
-            # Важно: настоящий base32 содержит только A-Z и 2-7 (uppercase)
-            for p in tab_parts:
-                p_clean = re.sub(r"\s+", "", p)
-                if len(p_clean) >= 16 and re.fullmatch(r"[A-Z2-7]{16,}", p_clean):
-                    result["twofa"] = _validate_2fa(p)
-                    break
-            # Если не нашли среди tab_parts — пробуем _extract_twofa_value
-            if not result["twofa"]:
-                result["twofa"] = _validate_2fa(_extract_twofa_value(text_original))
-
-            result["geo"] = _extract_geo_value(text_original)
             result["cookies_json"] = _extract_cookie_json_block(text_original)
             result["docs_links"] = _extract_docs_links(text_original)
             result["bm_links"] = _extract_bm_links(text_original)
             result["cookies_links"] = _extract_cookie_links(text_original)
+            result["bm_email_pairs"] = _extract_bm_email_pairs(text_original)
             result["user_agent"] = _extract_user_agent(text_original)
 
-            result["fb_login"] = _sanitize_login(result["fb_login"])
-            result["email"] = _validate_email(result["email"])
-            result["twofa"] = _validate_2fa(result["twofa"])
-            if _validate_email(result["fb_password"]):
-                result["fb_password"] = ""
-            if _validate_email(result["email_password"]):
-                result["email_password"] = ""
-            if not result["cookies_json"]:
-                result["cookies_json"] = extract_cookie_json_from_raw_king_text(text_original)
             return result
 
-    # ---------- FORMAT TAB wPL (формат 1): prefix\tname\tbirthdate\temail\tfb_pass\temail_pass\t2fa_url\tfb_link ----------
-    # Детектор: первая часть выглядит как код (wPL_aug) или просто нет числового id в начале
-    if "\t" in text_original or "    " in text_original:
-        raw_parts = [x.strip() for x in re.split(r"\t+|\s{4,}", text_original) if x.strip()]
-        if len(raw_parts) >= 6:
-            email_indexes = [i for i, p in enumerate(raw_parts) if _validate_email(p)]
-            if email_indexes:
-                ei = email_indexes[0]
-                email_val = raw_parts[ei]
-                result["email"] = _validate_email(email_val)
-                result["fb_login"] = email_val  # в этом формате email = FB Login
-
-                # После email идёт FB Password
-                if ei + 1 < len(raw_parts):
-                    cand = raw_parts[ei + 1]
-                    if not _validate_email(cand) and not cand.startswith("http") and not re.fullmatch(r"[0-9.]{6,}", cand):
-                        result["fb_password"] = cand
-
-                # После FB Password идёт Email Password
-                if ei + 2 < len(raw_parts):
-                    cand = raw_parts[ei + 2]
-                    if not _validate_email(cand) and not cand.startswith("http") and not re.fullmatch(r"[0-9.]{6,}", cand):
-                        result["email_password"] = cand
-
-                # 2FA может быть как ссылка с key= или как base32
-                result["twofa"] = _validate_2fa(_extract_twofa_value(text_original))
-                result["geo"] = _extract_geo_value(text_original)
-                result["cookies_json"] = _extract_cookie_json_block(text_original)
-                result["docs_links"] = _extract_docs_links(text_original)
-                result["bm_links"] = _extract_bm_links(text_original)
-                result["cookies_links"] = _extract_cookie_links(text_original)
-                result["user_agent"] = _extract_user_agent(text_original)
-
-                result["fb_login"] = _sanitize_login(result["fb_login"])
-                result["email"] = _validate_email(result["email"])
-                result["twofa"] = _validate_2fa(result["twofa"])
-                if _validate_email(result["fb_password"]):
-                    result["fb_password"] = ""
-                if _validate_email(result["email_password"]):
-                    result["email_password"] = ""
-                if not result["cookies_json"]:
-                    result["cookies_json"] = extract_cookie_json_from_raw_king_text(text_original)
-                return result
-
-    # ---------- COMMON EXTRACTION (существующая логика — запасной путь) ----------
+    # ---------- COMMON EXTRACTION ----------
     result["geo"] = _extract_geo_value(text)
     result["fb_login"] = _sanitize_login(_extract_login_value(text))
     result["fb_password"] = _extract_fb_password_value(text)
@@ -9656,6 +8649,7 @@ def parse_crypto_king_raw_data(raw_text):
     result["cookies_links"] = _extract_cookie_links(text_original)
     result["bm_email_pairs"] = _extract_bm_email_pairs(text_original)
 
+    # ---------- EMAILS ----------
     all_emails = _dedupe_keep_order(_extract_all_emails(text_original))
 
     pair_matches = re.findall(
@@ -9667,7 +8661,9 @@ def parse_crypto_king_raw_data(raw_text):
         pair_list.append(f"{em}:{pw}")
     result["extra_pairs"] = _dedupe_keep_order(pair_list)
 
+    # если явно email не найден, пробуем из списка email'ов
     if not result["email"] and all_emails:
+        # если fb_login уже email, то email берем следующий
         if result["fb_login"] and _validate_email(result["fb_login"]):
             for em in all_emails:
                 if em.lower() != result["fb_login"].lower():
@@ -9676,9 +8672,11 @@ def parse_crypto_king_raw_data(raw_text):
         else:
             result["email"] = all_emails[0]
 
+    # если логин пустой — пробуем первым email
     if not result["fb_login"] and all_emails:
         result["fb_login"] = all_emails[0]
 
+    # если email_password пустой — ищем email:password пары
     if not result["email_password"] and result["email"]:
         for pair in result["extra_pairs"]:
             if ":" not in pair:
@@ -9688,6 +8686,7 @@ def parse_crypto_king_raw_data(raw_text):
                 result["email_password"] = pw.strip()
                 break
 
+    # если service пустой — пробуем второй email
     if not result["service"] and len(all_emails) >= 2:
         for em in all_emails:
             if result["email"] and em.lower() == result["email"].lower():
@@ -9697,6 +8696,7 @@ def parse_crypto_king_raw_data(raw_text):
             result["service"] = em
             break
 
+    # ---------- FALLBACK PASSWORD LOGIC ----------
     if not result["fb_password"]:
         lines = _normalize_crypto_lines(text_original)
         for idx, line in enumerate(lines):
@@ -9709,21 +8709,64 @@ def parse_crypto_king_raw_data(raw_text):
                             result["fb_password"] = candidate
                             break
 
+        # ---------- TAB-SEPARATED SINGLE-LINE FALLBACK ----------
+    # Формат типа:
+    # name<TAB>person<TAB>birthdate<TAB>email<TAB>fb_password<TAB>email_password<TAB>2fa_link<TAB>fb_link<TAB>notes
+    if ("\t" in text_original or "    " in text_original):
+        raw_parts = [x.strip() for x in re.split(r"\t+|\s{4,}", str(text_original)) if x.strip()]
+
+        # если в строке есть хотя бы email и достаточно колонок — пробуем этот формат
+        if len(raw_parts) >= 6:
+            email_indexes = [i for i, part in enumerate(raw_parts) if _validate_email(part)]
+
+            if email_indexes:
+                email_idx = email_indexes[0]
+                email_value = _validate_email(raw_parts[email_idx])
+
+                # если явно не нашли логин/email — в этом формате email = и FB Login, и Email
+                if email_value:
+                    if not result["fb_login"]:
+                        result["fb_login"] = email_value
+                    if not result["email"]:
+                        result["email"] = email_value
+
+                    # следующий токен после email = Email Password
+                    if not result["email_password"] and email_idx + 1 < len(raw_parts):
+                        candidate = str(raw_parts[email_idx + 1]).strip()
+                        if candidate and not _validate_email(candidate) and not _validate_2fa(candidate):
+                            if not candidate.lower().startswith("http"):
+                                result["email_password"] = candidate
+
+                    # следующий после Email Password = FB Password
+                    if not result["fb_password"] and email_idx + 2 < len(raw_parts):
+                        candidate = str(raw_parts[email_idx + 2]).strip()
+                        if candidate and not _validate_email(candidate) and not _validate_2fa(candidate):
+                            if not candidate.lower().startswith("http"):
+                                result["fb_password"] = candidate
+
+        # если в fb_login попала facebook profile ссылка — очищаем
     if result["fb_login"] and "facebook.com/profile.php?id=" in str(result["fb_login"]).lower():
         result["fb_login"] = ""
 
+    # если прямого логина нет, используем email как FB Login
     if not result["fb_login"] and result["email"]:
         result["fb_login"] = result["email"]
 
+    # ---------- FINAL SANITY ----------
     result["fb_login"] = _sanitize_login(result["fb_login"])
     result["email"] = _validate_email(result["email"])
     result["twofa"] = _validate_2fa(result["twofa"])
 
+    # если email случайно попал в fb_password — чистим
     if _validate_email(result["fb_password"]):
         result["fb_password"] = ""
+
+    # если email_password случайно выглядит как email — чистим
     if _validate_email(result["email_password"]):
         result["email_password"] = ""
 
+    # если cookies_json не нашли обычным способом —
+    # пробуем вытащить любой валидный JSON-массив из raw текста
     if not result["cookies_json"]:
         result["cookies_json"] = extract_cookie_json_from_raw_king_text(text_original)
 
@@ -9801,14 +8844,6 @@ def is_octo_rate_limit_error(exc_or_text):
         "429" in text
         or "too many requests" in text
         or "rate limit" in text
-    )
-
-def is_octo_profile_limit_error(exc_or_text):
-    text = str(exc_or_text or "").lower()
-    return (
-        "limit_reached" in text
-        or "maximum profiles" in text
-        or ("403" in text and "profiles" in text and "maximum" in text)
     )
 
 def octo_update_profile_description(profile_uuid, description_text):
@@ -9967,437 +9002,6 @@ def get_manager_stats_period():
             end_date = datetime(now.year, now.month + 1, 1)
 
     return start_date, end_date
-
-
-BAN_STORM_TYPES_ORDER = ["KING", "PIXEL", "БМ", "FP", "РК"]
-BAN_STORM_ALERT_THRESHOLDS = [30, 40, 50, 60, 70]
-BAN_STORM_ADMIN_IDS = [7573650707, 7681133609, 7953116439]
-BAN_STORM_MIN_BASE_TOTAL = 30
-SHEET_BAN_MONITOR = "Мониторинг банов"
-BAN_STORM_TYPE_META = {
-    "KING": {"icon": "👑", "details": "кингов"},
-    "PIXEL": {"icon": "🌀", "details": "пикселей"},
-    "БМ": {"icon": "📁", "details": "БМов"},
-    "FP": {"icon": "📑", "details": "ФП"},
-    "РК": {"icon": "🪧", "details": "РК"},
-}
-RUS_MONTH_NAMES_UPPER = {
-    1: "ЯНВАРЬ",
-    2: "ФЕВРАЛЬ",
-    3: "МАРТ",
-    4: "АПРЕЛЬ",
-    5: "МАЙ",
-    6: "ИЮНЬ",
-    7: "ИЮЛЬ",
-    8: "АВГУСТ",
-    9: "СЕНТЯБРЬ",
-    10: "ОКТЯБРЬ",
-    11: "НОЯБРЬ",
-    12: "ДЕКАБРЬ",
-}
-
-
-def normalize_ban_storm_issue_type(value):
-    raw = str(value or "").strip()
-    upper = raw.upper()
-
-    if upper == "KING":
-        return "KING"
-    if upper == "PIXEL":
-        return "PIXEL"
-    if raw in {"БМ", "бм"} or upper == "BM":
-        return "БМ"
-    if upper == "FP":
-        return "FP"
-    if raw in {"РК", "рк"} or upper == "RK":
-        return "РК"
-
-    return ""
-
-
-def is_ban_storm_excluded_target(value):
-    target = str(value or "").strip().lower()
-    return target == "farm"
-
-
-def ensure_ban_monitor_sheet_exists():
-    try:
-        with google_lock:
-            client = get_gspread_client()
-            spreadsheet = client.open_by_key(SPREADSHEET_ID)
-
-            try:
-                sheet = spreadsheet.worksheet(SHEET_BAN_MONITOR)
-            except gspread.exceptions.WorksheetNotFound:
-                sheet = spreadsheet.add_worksheet(title=SHEET_BAN_MONITOR, rows=500, cols=3)
-
-            rows = sheet.get_all_values()
-            need_init = False
-
-            if not rows:
-                need_init = True
-            elif len(rows[0]) < 3:
-                need_init = True
-            elif str(rows[0][0]).strip() != "key":
-                need_init = True
-
-            if need_init:
-                sheet.update("A1:C1", [["key", "value", "updated_at"]])
-
-            return sheet
-
-    except Exception:
-        logging.exception("ensure_ban_monitor_sheet_exists crashed")
-        raise
-
-
-def load_ban_monitor_state():
-    try:
-        sheet = ensure_ban_monitor_sheet_exists()
-        with google_lock:
-            rows = sheet.get_all_values()
-
-        state = {}
-        for raw_row in rows[1:]:
-            row = list(raw_row or [])
-            if len(row) < 2:
-                continue
-            key = str(row[0]).strip()
-            value = str(row[1]).strip()
-            if key:
-                state[key] = value
-
-        return state
-
-    except Exception:
-        logging.exception("load_ban_monitor_state crashed")
-        return {}
-
-
-def save_ban_monitor_state_value(key, value):
-    key = str(key or "").strip()
-    if not key:
-        return
-
-    value = str(value or "").strip()
-    updated_at = datetime.now(MOSCOW_TZ).strftime("%d/%m/%Y %H:%M:%S")
-
-    try:
-        sheet = ensure_ban_monitor_sheet_exists()
-
-        with google_lock:
-            rows = sheet.get_all_values()
-            target_row = None
-
-            for idx, raw_row in enumerate(rows[1:], start=2):
-                row_key = str(raw_row[0]).strip() if raw_row else ""
-                if row_key == key:
-                    target_row = idx
-                    break
-
-            if target_row:
-                sheet.update(f"B{target_row}:C{target_row}", [[value, updated_at]])
-            else:
-                sheet.append_row([key, value, updated_at], value_input_option="USER_ENTERED")
-
-    except Exception:
-        logging.exception(f"save_ban_monitor_state_value crashed: key={key}")
-
-
-def format_ban_storm_short_date(value):
-    return f"{value.day}.{value.month:02d}"
-
-
-def get_ban_storm_week_period(now=None):
-    now = now or datetime.now(MOSCOW_TZ)
-    current_date = now.date()
-
-    # Неделя мониторинга: с субботы по пятницу.
-    days_since_saturday = (current_date.weekday() - 5) % 7
-    start_date = current_date - timedelta(days=days_since_saturday)
-    end_date_inclusive = start_date + timedelta(days=6)
-
-    start_dt = datetime.combine(start_date, datetime.min.time())
-    end_dt = datetime.combine(end_date_inclusive + timedelta(days=1), datetime.min.time())
-    return start_dt, end_dt
-
-def get_ban_storm_month_period(now=None):
-    now = now or datetime.now(MOSCOW_TZ)
-    start_dt = datetime(now.year, now.month, 1)
-    if now.month == 12:
-        end_dt = datetime(now.year + 1, 1, 1)
-    else:
-        end_dt = datetime(now.year, now.month + 1, 1)
-    return start_dt, end_dt
-
-
-def get_ban_storm_week_key(now=None):
-    now = now or datetime.now(MOSCOW_TZ)
-    start_dt, end_dt = get_ban_storm_week_period(now)
-    start_date = start_dt.date().strftime("%Y-%m-%d")
-    end_date = (end_dt - timedelta(days=1)).date().strftime("%Y-%m-%d")
-    return f"{start_date}_{end_date}"
-
-def get_ban_storm_month_key(now=None):
-    now = now or datetime.now(MOSCOW_TZ)
-    return now.strftime("%Y-%m")
-
-
-def is_last_day_of_month(now=None):
-    now = now or datetime.now(MOSCOW_TZ)
-    return (now + timedelta(days=1)).month != now.month
-
-
-def get_ban_storm_period_label(period_type, now=None):
-    now = now or datetime.now(MOSCOW_TZ)
-    if period_type == "week":
-        start_dt, end_dt = get_ban_storm_week_period(now)
-        start_date = start_dt.date()
-        end_date = (end_dt - timedelta(days=1)).date()
-        return f"БАНЫ ЗА НЕДЕЛЮ {format_ban_storm_short_date(start_date)} - {format_ban_storm_short_date(end_date)}"
-
-    month_name = RUS_MONTH_NAMES_UPPER.get(now.month, now.strftime("%B").upper())
-    return f"БАНЫ ЗА МЕСЯЦ {month_name}"
-
-
-def format_ban_storm_amount(value):
-    value = float(value or 0)
-    if abs(value - round(value)) < 1e-9:
-        return str(int(round(value)))
-    text = f"{value:.2f}".rstrip("0").rstrip(".")
-    return text.replace(".", ",")
-
-
-def compute_ban_storm_stats(period_type="week", force=False, now=None):
-    rows = get_sheet_rows_cached(SHEET_ISSUES, force=force)
-    now = now or datetime.now(MOSCOW_TZ)
-
-    if period_type == "month":
-        period_start, period_end = get_ban_storm_month_period(now)
-    else:
-        period_start, period_end = get_ban_storm_week_period(now)
-
-    stats = {
-        issue_type: {
-            "period_total_rows": 0,
-            "period_ban_rows": 0,
-            "period_ban_sum": 0.0,
-            "risk_percent": 0,
-            "effective_total": 0,
-        }
-        for issue_type in BAN_STORM_TYPES_ORDER
-    }
-
-    total_period_bans = 0
-    total_effective_base = 0
-    total_period_ban_sum = 0.0
-    total_before_transfer = 0
-    total_before_transfer_sum = 0.0
-    total_buyer_used = 0
-    total_buyer_used_sum = 0.0
-
-    for raw_row in rows[1:]:
-        row = ensure_row_len(raw_row, 9)
-        issue_type = normalize_ban_storm_issue_type(row[1])
-        if not issue_type:
-            continue
-
-        target = str(row[6]).strip().lower()
-        if is_ban_storm_excluded_target(target):
-            continue
-
-        transfer_date = parse_sheet_date(str(row[4]).strip())
-        if not transfer_date or not (period_start <= transfer_date < period_end):
-            continue
-
-        stats[issue_type]["period_total_rows"] += 1
-
-        if target == "ban":
-            stats[issue_type]["period_ban_rows"] += 1
-            price_value = parse_price(row[3])
-            price_float = float(price_value or 0.0) if price_value is not None else 0.0
-            if price_value is not None:
-                stats[issue_type]["period_ban_sum"] += price_value
-                total_period_ban_sum += price_float
-
-            timing_kind = classify_ban_timing_from_comment(row[8])
-            if timing_kind == "before":
-                total_before_transfer += 1
-                total_before_transfer_sum += price_float
-            elif timing_kind == "used":
-                total_buyer_used += 1
-                total_buyer_used_sum += price_float
-
-    for issue_type in BAN_STORM_TYPES_ORDER:
-        period_total_rows = int(stats[issue_type]["period_total_rows"] or 0)
-        period_ban_rows = int(stats[issue_type]["period_ban_rows"] or 0)
-        effective_total = max(period_total_rows, BAN_STORM_MIN_BASE_TOTAL) if period_total_rows > 0 else BAN_STORM_MIN_BASE_TOTAL
-        risk_percent = int(round((period_ban_rows / effective_total) * 100)) if effective_total > 0 else 0
-
-        stats[issue_type]["effective_total"] = effective_total
-        stats[issue_type]["risk_percent"] = risk_percent
-
-        total_period_bans += period_ban_rows
-        total_effective_base += effective_total
-
-    overall_risk_percent = int(round((total_period_bans / total_effective_base) * 100)) if total_effective_base > 0 else 0
-
-    return {
-        "period_type": period_type,
-        "period_start": period_start,
-        "period_end": period_end,
-        "types": stats,
-        "overall_risk_percent": overall_risk_percent,
-        "total_period_bans": total_period_bans,
-        "total_effective_base": total_effective_base,
-        "total_period_ban_sum": total_period_ban_sum,
-        "total_before_transfer": total_before_transfer,
-        "total_before_transfer_sum": total_before_transfer_sum,
-        "total_buyer_used": total_buyer_used,
-        "total_buyer_used_sum": total_buyer_used_sum,
-    }
-
-
-def build_ban_storm_report_text(period_type="week", now=None, force=False, title_override=None):
-    now = now or datetime.now(MOSCOW_TZ)
-    report = compute_ban_storm_stats(period_type=period_type, force=force, now=now)
-    stats = report["types"]
-
-    lines = [title_override or get_ban_storm_period_label(period_type, now), ""]
-
-    for issue_type in BAN_STORM_TYPES_ORDER:
-        meta = BAN_STORM_TYPE_META.get(issue_type, {})
-        icon = meta.get("icon", "")
-        details_word = meta.get("details", issue_type)
-        item = stats.get(issue_type, {})
-        risk_percent = int(item.get("risk_percent", 0) or 0)
-        period_total_rows = int(item.get("period_total_rows", 0) or 0)
-        period_ban_rows = int(item.get("period_ban_rows", 0) or 0)
-        period_ban_sum = format_ban_storm_amount(item.get("period_ban_sum", 0.0) or 0.0)
-
-        lines.append(f"{icon}{issue_type} ⚠️шанс шторма - {risk_percent}%")
-        lines.append(
-            f"❗️{details_word} всего за период {period_total_rows}, "
-            f"в бане {period_ban_rows} на сумму {period_ban_sum}💰"
-        )
-        lines.append("")
-
-    overall_risk = int(report.get("overall_risk_percent", 0) or 0)
-    total_sum = format_ban_storm_amount(report.get("total_period_ban_sum", 0.0) or 0.0)
-    total_before = int(report.get("total_before_transfer", 0) or 0)
-    total_before_sum = format_ban_storm_amount(report.get("total_before_transfer_sum", 0.0) or 0.0)
-    total_used = int(report.get("total_buyer_used", 0) or 0)
-    total_used_sum = format_ban_storm_amount(report.get("total_buyer_used_sum", 0.0) or 0.0)
-    period_label = "неделю" if period_type == "week" else "месяц"
-
-    lines.append(f"❓общий шанс шторма - {overall_risk}%")
-    lines.append(f"💰общая сумма за {period_label} - {total_sum}")
-    lines.append(f"⏳до передачи - {total_before} на сумму {total_before_sum}")
-    lines.append(f"👤после передачи байеру - {total_used} на сумму {total_used_sum}")
-    return "\n".join(lines).strip()
-
-
-def build_combined_ban_storm_report_text(now=None, force=False):
-    now = now or datetime.now(MOSCOW_TZ)
-    weekly_text = build_ban_storm_report_text(period_type="week", now=now, force=force)
-    monthly_text = build_ban_storm_report_text(period_type="month", now=now, force=force)
-    return f"{weekly_text}\n\n{monthly_text}"
-
-
-def maybe_send_weekly_ban_storm_report():
-    now = datetime.now(MOSCOW_TZ)
-
-    if now.weekday() != 4:
-        return
-
-    if now.hour != 6:
-        return
-
-    sent_key = f"weekly_report_sent:{get_ban_storm_week_key(now)}"
-    state = load_ban_monitor_state()
-    if state.get(sent_key) == "1":
-        return
-
-    text = build_ban_storm_report_text(period_type="week", now=now, force=True)
-    for admin_id in BAN_STORM_ADMIN_IDS:
-        tg_send_message(admin_id, text)
-
-    save_ban_monitor_state_value(sent_key, "1")
-
-
-def maybe_send_monthly_ban_storm_report():
-    now = datetime.now(MOSCOW_TZ)
-
-    if now.hour != 6:
-        return
-
-    if not is_last_day_of_month(now):
-        return
-
-    sent_key = f"monthly_report_sent:{get_ban_storm_month_key(now)}"
-    state = load_ban_monitor_state()
-    if state.get(sent_key) == "1":
-        return
-
-    text = build_ban_storm_report_text(period_type="month", now=now, force=True)
-    for admin_id in BAN_STORM_ADMIN_IDS:
-        tg_send_message(admin_id, text)
-
-    save_ban_monitor_state_value(sent_key, "1")
-
-
-def maybe_send_ban_storm_threshold_alerts():
-    now = datetime.now(MOSCOW_TZ)
-    report = compute_ban_storm_stats(period_type="week", force=True, now=now)
-    stats = report["types"]
-    state = load_ban_monitor_state()
-
-    for issue_type in BAN_STORM_TYPES_ORDER:
-        risk_percent = int(stats.get(issue_type, {}).get("risk_percent", 0) or 0)
-        state_key = f"last_threshold:{issue_type}"
-
-        try:
-            last_threshold = int(state.get(state_key, "0") or 0)
-        except Exception:
-            last_threshold = 0
-
-        if risk_percent < BAN_STORM_ALERT_THRESHOLDS[0]:
-            if last_threshold != 0:
-                save_ban_monitor_state_value(state_key, "0")
-            continue
-
-        next_threshold = 0
-        for threshold in BAN_STORM_ALERT_THRESHOLDS:
-            if threshold > last_threshold and risk_percent >= threshold:
-                next_threshold = threshold
-
-        if not next_threshold:
-            continue
-
-        text = (
-            "⚠️ВНИМАНИЕ ШАНС ШТОРМА⚠️\n"
-            f"{issue_type} ⚠️шанс шторма - {next_threshold}%"
-        )
-
-        for admin_id in BAN_STORM_ADMIN_IDS:
-            tg_send_message(admin_id, text)
-
-        save_ban_monitor_state_value(state_key, str(next_threshold))
-
-
-def ban_storm_monitor_loop():
-    logging.info("ban_storm_monitor_loop started")
-
-    while True:
-        try:
-            touch_background_heartbeat()
-            maybe_send_ban_storm_threshold_alerts()
-            maybe_send_weekly_ban_storm_report()
-            maybe_send_monthly_ban_storm_report()
-            time.sleep(60)
-        except Exception:
-            logging.exception("ban_storm_monitor_loop crashed")
-            time.sleep(60)
 
 def build_manager_stats_summary_text(username):
     if not username:
@@ -10604,186 +9208,6 @@ def build_manager_stats_text(username):
     text_parts.extend(pixels_lines if pixels_lines else ["нет выдач"])
 
     return "\n".join(text_parts)
-
-
-def _normalize_issued_to_buyer_date_key(value):
-    dt = parse_sheet_date(value)
-    if dt:
-        return dt.strftime("%d/%m/%Y")
-    return str(value or "").strip()
-
-
-def _normalize_issued_to_buyer_key(value):
-    return str(value or "").strip().lower()
-
-
-def build_issued_to_buyer_manager_indexes():
-    indexes = {
-        "РК": {},
-        "KING": {},
-        "FP": {},
-        "PIXEL": {},
-    }
-
-    accounts_rows = get_sheet_rows_cached(SHEET_ACCOUNTS)
-    for raw_row in accounts_rows[1:]:
-        row = list(raw_row)
-        if len(row) < 12:
-            row += [''] * (12 - len(row))
-
-        key = (
-            _normalize_issued_to_buyer_key(row[0]),
-            normalize_person_name(row[9]).strip().lower(),
-            _normalize_issued_to_buyer_date_key(row[10]),
-        )
-        who_took = str(row[11] or "").strip()
-        if all(key) and who_took:
-            indexes["РК"][key] = who_took
-
-    for sheet_name in [SHEET_KINGS, SHEET_CRYPTO_KINGS]:
-        rows = get_sheet_rows_cached(sheet_name)
-        for raw_row in rows[1:]:
-            row = list(raw_row)
-            if len(row) < 12:
-                row += [''] * (12 - len(row))
-
-            key = (
-                _normalize_issued_to_buyer_key(row[0]),
-                normalize_person_name(row[5]).strip().lower(),
-                _normalize_issued_to_buyer_date_key(row[6]),
-            )
-            who_took = str(row[8] or "").strip()
-            if all(key) and who_took:
-                indexes["KING"][key] = who_took
-
-    fps_rows = get_sheet_rows_cached(SHEET_FPS)
-    for raw_row in fps_rows[1:]:
-        row = list(raw_row)
-        if len(row) < 9:
-            row += [''] * (9 - len(row))
-
-        key = (
-            _normalize_issued_to_buyer_key(row[0]),
-            normalize_person_name(row[6]).strip().lower(),
-            _normalize_issued_to_buyer_date_key(row[8]),
-        )
-        who_took = str(row[7] or "").strip()
-        if all(key) and who_took:
-            indexes["FP"][key] = who_took
-
-    pixels_rows = get_sheet_rows_cached(SHEET_PIXELS)
-    for raw_row in pixels_rows[1:]:
-        row = list(raw_row)
-        if len(row) < 8:
-            row += [''] * (8 - len(row))
-
-        data_text = row[7] if len(row) > 7 else ""
-        pixel_name = extract_pixel_name_from_data(data_text)
-        pixel_id = extract_pixel_id_from_data(data_text)
-        issue_pixel_value = pixel_id or pixel_name
-
-        key = (
-            _normalize_issued_to_buyer_key(issue_pixel_value),
-            normalize_person_name(row[4]).strip().lower(),
-            _normalize_issued_to_buyer_date_key(row[5]),
-        )
-        who_took = str(row[6] or "").strip()
-        if all(key) and who_took:
-            indexes["PIXEL"][key] = who_took
-
-    return indexes
-
-
-def get_issue_transfer_manager_from_indexes(indexes, issue_type, item_name, buyer_name, transfer_text):
-    issue_key = normalize_ban_storm_issue_type(issue_type)
-    key = (
-        _normalize_issued_to_buyer_key(item_name),
-        normalize_person_name(buyer_name).strip().lower(),
-        _normalize_issued_to_buyer_date_key(transfer_text),
-    )
-    return str((indexes.get(issue_key) or {}).get(key) or "").strip()
-
-
-BUYER_ISSUED_TYPE_ORDER = ["KING", "РК", "FP", "PIXEL"]
-BUYER_ISSUED_TYPE_META = {
-    "KING": {"icon": "👑", "title": "Кинги"},
-    "РК": {"icon": "🪧", "title": "Лички"},
-    "FP": {"icon": "📑", "title": "ФП"},
-    "PIXEL": {"icon": "🌀", "title": "Пиксели"},
-}
-
-
-def build_issued_to_buyer_report_text(buyer_name):
-    buyer_name = normalize_person_name(buyer_name)
-    target = str(buyer_name or "").strip().lower()
-
-    if not target:
-        return "Не удалось определить байера."
-
-    rows = get_sheet_rows_cached(SHEET_ISSUES)
-    grouped = {issue_type: [] for issue_type in BUYER_ISSUED_TYPE_ORDER}
-    manager_indexes = build_issued_to_buyer_manager_indexes()
-
-    for raw_row in rows[1:]:
-        row = list(raw_row)
-        if len(row) < 7:
-            row += [''] * (7 - len(row))
-
-        issue_type = normalize_ban_storm_issue_type(row[1])
-        if issue_type not in grouped:
-            continue
-
-        row_for_whom = normalize_person_name(row[6]).strip().lower()
-        if row_for_whom != target:
-            continue
-
-        transfer_text = str(row[4] or '').strip()
-        transfer_dt = parse_sheet_date(transfer_text) or datetime.min
-        item_name = str(row[0] or "").strip() or "без названия"
-        manager_name = get_issue_transfer_manager_from_indexes(
-            manager_indexes,
-            issue_type,
-            item_name,
-            buyer_name,
-            transfer_text,
-        ) or "не указан"
-
-        grouped[issue_type].append({
-            "name": item_name,
-            "price": row[3] if len(row) > 3 else "",
-            "transfer_text": transfer_text or "не указана",
-            "transfer_dt": transfer_dt,
-            "manager": manager_name,
-        })
-
-    total_items = sum(len(items) for items in grouped.values())
-    if total_items == 0:
-        return f"По байеру {buyer_name} ничего не найдено."
-
-    lines = [
-        f"📦 Выдано байеру: {buyer_name}",
-        "",
-    ]
-
-    for issue_type in BUYER_ISSUED_TYPE_ORDER:
-        items = grouped[issue_type]
-        if not items:
-            continue
-
-        items.sort(key=lambda x: (x["transfer_dt"], x["name"]), reverse=True)
-        meta = BUYER_ISSUED_TYPE_META[issue_type]
-        lines.append(f"{meta['icon']} {meta['title']} — {len(items)}")
-
-        for idx, item in enumerate(items, start=1):
-            lines.append(f"{idx}. {item['name']}")
-            lines.append(f"   💵 Цена: {format_issue_price(item['price'])}")
-            lines.append(f"   📅 Дата передачи: {item['transfer_text']}")
-            lines.append(f"   👤 Кто передал: {item['manager']}")
-
-        lines.append("")
-
-    return "\n".join(lines).strip()
-
 
 def build_farmer_stats_summary_text(username):
     if not username:
@@ -11123,64 +9547,14 @@ def find_last_issue_row(account_number):
             }
     return last_match
 
-def normalize_ban_timing(value):
-    raw = str(value or "").strip().lower()
-
-    if raw in {"before", "до передачи", BTN_BAN_BEFORE_TRANSFER.lower()}:
-        return "before"
-
-    if raw in {"used", "buyer_used", "байер использовал", BTN_BAN_BUYER_USED.lower()}:
-        return "used"
-
-    return ""
-
-
-def build_ban_comment_text(comment_text="", ban_timing="", buyer_before=""):
-    reason = str(comment_text or "").strip()
-    buyer_value = str(buyer_before or "").strip() or "не указан"
-    timing = normalize_ban_timing(ban_timing)
-
-    if timing == "before":
-        prefix = f"до передачи ({buyer_value})"
-    elif timing == "used":
-        prefix = f"байер использовал ({buyer_value})"
-    else:
-        prefix = ""
-
-    if prefix and reason:
-        return f"{prefix}, {reason}"
-    if prefix:
-        return prefix
-    return reason
-
-def classify_ban_timing_from_comment(comment_text=""):
-    raw = str(comment_text or "").strip().lower()
-    if not raw:
-        return ""
-    if raw.startswith("до передачи") or "до передачи" in raw:
-        return "before"
-    if raw.startswith("байер использовал") or "байер использовал" in raw:
-        return "used"
-    return ""
-
-
-def mark_issue_row_as_ban(issue_row_index, comment_text="", ban_timing="", buyer_before=""):
+def mark_issue_row_as_ban(issue_row_index, comment_text=""):
     if not issue_row_index:
         return
 
-    ban_date = datetime.now(MOSCOW_TZ).strftime("%d/%m/%Y")
-    current_row = get_sheet_row_live(SHEET_ISSUES, int(issue_row_index), 9)
-    current_row = ensure_row_len(current_row, 9)
-
-    supplier = str(current_row[5] or "").strip()
-    issue_buyer_before = str(current_row[6] or "").strip()
-    who_issued = str(current_row[7] or "").strip()
-    final_comment = build_ban_comment_text(comment_text, ban_timing, buyer_before or issue_buyer_before)
-
     sheet_update_and_refresh(
         SHEET_ISSUES,
-        f"E{issue_row_index}:I{issue_row_index}",
-        [[ban_date, supplier, "ban", who_issued, final_comment]]
+        f"G{issue_row_index}:I{issue_row_index}",
+        [["ban", "", str(comment_text or "").strip()]]
     )
 
 def set_issue_comment(issue_row_index, comment_text):
@@ -11204,7 +9578,7 @@ def is_banned_account(base_row, issue_row=None):
 
     return base_target == "ban" or issue_target == "ban"
 
-def return_account_to_ban(account_number, comment_text="", ban_timing=""):
+def return_account_to_ban(account_number, comment_text=""):
     base_info = find_account_in_base(account_number)
     issue_info = find_last_issue_row(account_number)
 
@@ -11228,7 +9602,7 @@ def return_account_to_ban(account_number, comment_text="", ban_timing=""):
     )
 
     if issue_info:
-        mark_issue_row_as_ban(issue_info["row_index"], comment_text, ban_timing)
+        mark_issue_row_as_ban(issue_info["row_index"], comment_text)
 
     invalidate_stats_cache()
     return True, "Личка переведена в ban."
@@ -11415,12 +9789,12 @@ def process_bulk_account_return_to_free(account_numbers):
 
     return success_items, failed_items
 
-def process_bulk_account_return_to_ban(account_numbers, comment_text="", ban_timing=""):
+def process_bulk_account_return_to_ban(account_numbers, comment_text=""):
     success_items = []
     failed_items = []
 
     for account_number in (account_numbers or []):
-        ok, message = return_account_to_ban(account_number, comment_text, ban_timing)
+        ok, message = return_account_to_ban(account_number, comment_text)
 
         if ok:
             success_items.append((account_number, message))
@@ -11490,22 +9864,21 @@ def send_free_accounts(chat_id, selected_filter):
 # ADD ACCOUNTS
 # =========================
 def send_bulk_add_instructions(chat_id):
-    text = """Отправь лички сообщением, каждая с новой строки.
-
-Формат:
-номер; дата покупки; цена; поставщик; склады; хэш оплаты
-
-Пример:
-RK001; 15/02/2026; 300; WD; sklad1,sklad2; hash_2870
-RK002; 16/02/2026; 500; WD; sklad3; hash_2871
-
-Хэш оплаты — это хэш из PaymentsRMBot, где вы оплатили этот расходник."""
+    text = (
+        "Отправь лички сообщением, каждая с новой строки.\n\n"
+        "Формат:\n"
+        "номер; дата покупки; цена; поставщик; склады\n\n"
+        "Пример:\n"
+        "RK001; 15/02/2026; 300; WD; sklad1,sklad2\n"
+        "RK002; 16/02/2026; 500; WD; sklad3"
+    )
     tg_send_message(chat_id, text)
 
+
 def add_accounts_from_text(text):
-    ensure_sheet_payment_hash_column(SHEET_ACCOUNTS, ACCOUNTS_REQUEST_COL_NUM)
     existing_rows = get_sheet_rows_cached(SHEET_ACCOUNTS)
     existing_accounts = set()
+
     for row in existing_rows[1:]:
         if row and row[0].strip():
             existing_accounts.add(row[0].strip())
@@ -11517,19 +9890,16 @@ def add_accounts_from_text(text):
 
     for i, line in enumerate(lines, start=1):
         fields = [x.strip() for x in line.split(";")]
-        if len(fields) not in [5, 6]:
-            errors.append(f"Строка {i}: должно быть 6 полей через ';'")
+        if len(fields) != 5:
+            errors.append(f"Строка {i}: должно быть 5 полей через ';'")
             continue
 
-        if len(fields) == 5:
-            account_number, purchase_date_raw, price_raw, supplier, warehouses = fields
-            payment_hash = ""
-        else:
-            account_number, purchase_date_raw, price_raw, supplier, warehouses, payment_hash = fields
+        account_number, purchase_date_raw, price_raw, supplier, warehouses = fields
 
         if not account_number:
             errors.append(f"Строка {i}: пустой номер лички")
             continue
+
         if account_number in existing_accounts:
             duplicates += 1
             continue
@@ -11544,23 +9914,19 @@ def add_accounts_from_text(text):
             errors.append(f"Строка {i}: неверная цена '{price_raw}'")
             continue
 
-        payment_hash = str(payment_hash or "").strip()
         to_append.append([
-            account_number,
-            purchase_date.strftime("%d/%m/%Y"),
-            price,
-            supplier,
-            "",
-            "",
-            "",
-            warehouses,
-            "free",
-            "",
-            "",
-            "",
-            "",
-            "",
-            payment_hash,
+            account_number,                         # A номер
+            purchase_date.strftime("%d/%m/%Y"),    # B дата покупки
+            price,                                 # C цена
+            supplier,                              # D поставщик
+            "",                                    # E лимит
+            "",                                    # F трешхолд
+            "",                                    # G GMT
+            warehouses,                            # H склады
+            "free",                                # I статус
+            "",                                    # J кому выдали
+            "",                                    # K дата взятия
+            ""                                     # L кто взял
         ])
         existing_accounts.add(account_number)
 
@@ -11568,11 +9934,18 @@ def add_accounts_from_text(text):
         sheet_append_rows_and_refresh(SHEET_ACCOUNTS, to_append)
         invalidate_stats_cache()
 
-    message = f"Готово.\nДобавлено: {len(to_append)}\nДубликатов пропущено: {duplicates}\nОшибок: {len(errors)}"
+    message = (
+        f"Готово.\n"
+        f"Добавлено: {len(to_append)}\n"
+        f"Дубликатов пропущено: {duplicates}\n"
+        f"Ошибок: {len(errors)}"
+    )
+
     if errors:
         message += "\n\nОшибки:\n" + "\n".join(errors[:10])
         if len(errors) > 10:
             message += f"\n... и ещё {len(errors) - 10}"
+
     return message
 
 def find_oldest_free_account(exclude_account=None):
@@ -11696,19 +10069,20 @@ def show_found_account(chat_id, user_id, found):
     tg_send_message(chat_id, text, keyboard)
 
 
-def append_issue_row(account_number, purchase_date, price, transfer_date, supplier, for_whom, payment_hash=""):
-    append_issue_row_fixed([
-        account_number,
-        "РК",
-        purchase_date,
-        normalize_numeric_for_sheet(price),
-        transfer_date,
-        supplier,
-        for_whom,
-        "",
-        "",
-        str(payment_hash or "").strip(),
-    ])
+def append_issue_row(account_number, purchase_date, price, transfer_date, supplier, for_whom):
+    sheet_append_row_and_refresh(
+        SHEET_ISSUES,
+        [
+            account_number,
+            "РК",
+            purchase_date,
+            normalize_numeric_for_sheet(price),
+            transfer_date,
+            supplier,
+            for_whom
+        ],
+        value_input_option="USER_ENTERED"
+    )
 
 def issue_accounts_bulk(account_numbers, for_whom, username):
     today = datetime.now(MOSCOW_TZ).strftime("%d/%m/%Y")
@@ -11772,10 +10146,7 @@ def issue_accounts_bulk(account_numbers, for_whom, username):
                 normalize_numeric_for_sheet(row[2]),
                 today,
                 row[3],
-                for_whom,
-                "",
-                "",
-                get_payment_hash_from_accounts_row(row)
+                for_whom
             ])
 
             issued.append({
@@ -11808,6 +10179,7 @@ def issue_accounts_bulk(account_numbers, for_whom, username):
         "who_took_text": who_took_text,
         "for_whom": for_whom
     }
+
 
 def issue_next_quick_account_for_person(for_whom, username):
     today = datetime.now(MOSCOW_TZ).strftime("%d/%m/%Y")
@@ -11855,8 +10227,7 @@ def issue_next_quick_account_for_person(for_whom, username):
             row[2],
             today,
             row[3],
-            for_whom,
-            get_payment_hash_from_accounts_row(row)
+            for_whom
         )
 
         invalidate_stats_cache()
@@ -12355,11 +10726,6 @@ def start_kings_bulk_proxy_step(chat_id, user_id):
         f"socks5://host:port"
     )
 
-    # Сохраняем state ДО отправки сообщения — защита от race condition
-    # (пользователь может ответить до того как set_state выполнится)
-    state["mode"] = KING_OCTO_MODE_BULK_PROXY
-    set_state_with_custom_ttl(user_id, state, KING_BULK_PROXY_TTL)
-
     sent = tg_send_inline_message(
         chat_id,
         text,
@@ -12371,15 +10737,17 @@ def start_kings_bulk_proxy_step(chat_id, user_id):
         ]]
     )
 
+    state["mode"] = KING_OCTO_MODE_BULK_PROXY
+
     try:
         if isinstance(sent, dict):
             message_id = sent.get("result", {}).get("message_id")
             if message_id:
-                state = get_state(user_id)
                 state["kings_bulk_proxy_message_id"] = message_id
-                set_state_with_custom_ttl(user_id, state, KING_BULK_PROXY_TTL)
     except Exception:
         logging.exception("start_kings_bulk_proxy_step failed to save message_id")
+
+    set_state_with_custom_ttl(user_id, state, KING_BULK_PROXY_TTL)
 
 def confirm_farm_king_octo_issue(chat_id, user_id, username):
     try:
@@ -12615,13 +10983,9 @@ def confirm_king_octo_issue(chat_id, user_id, username):
 def process_kings_bulk_proxy_step(chat_id, user_id, username, proxy_text):
     state = get_state(user_id)
 
-    if state.get("mode") not in [KING_OCTO_MODE_BULK_PROXY, KING_OCTO_MODE_BULK_CONFIRM]:
+    if state.get("mode") != KING_OCTO_MODE_BULK_PROXY:
         send_kings_menu(chat_id, "Сначала начни выдачу king заново.")
         return
-
-    if state.get("mode") != KING_OCTO_MODE_BULK_PROXY:
-        state["mode"] = KING_OCTO_MODE_BULK_PROXY
-        set_state_with_custom_ttl(user_id, state, KING_BULK_PROXY_TTL)
 
     queue = state.get("kings_bulk_queue", [])
     current_index = int(state.get("kings_bulk_current_index", 0))
@@ -12719,8 +11083,7 @@ def process_kings_bulk_proxy_step(chat_id, user_id, username, proxy_text):
                         price=row[2],
                         transfer_date=today,
                         supplier=row[3],
-                        for_whom=state.get("king_for_whom", ""),
-                        payment_hash=get_payment_hash_from_king_row(row)
+                        for_whom=state.get("king_for_whom", "")
                     )
 
                     invalidate_stats_cache()
@@ -12932,8 +11295,7 @@ def process_farm_kings_bulk_proxy_step(chat_id, user_id, username, proxy_text):
             price=row[2],
             transfer_date=today,
             supplier=row[3],
-            for_whom="farm",
-            payment_hash=get_payment_hash_from_king_row(row)
+            for_whom="farm"
         )
 
         results.append({
@@ -13138,9 +11500,10 @@ def find_free_bm(exclude_bm_id=None):
     candidates = []
 
     for idx, row in enumerate(rows[1:], start=2):
-        row = ensure_row_len(row, 9)
+        if len(row) < 9:
+            row = row + [''] * (9 - len(row))
 
-        effective_bm_id = get_bm_effective_id_from_row(row)
+        bm_id = str(row[0]).strip()
         purchase_date_raw = str(row[1]).strip()
         status = str(row[4]).strip().lower()
         data_text = str(row[8]).strip()
@@ -13148,13 +11511,14 @@ def find_free_bm(exclude_bm_id=None):
         if status != "free":
             continue
 
-        if exclude_bm_id and effective_bm_id == str(exclude_bm_id).strip():
+        if exclude_bm_id and bm_id == exclude_bm_id:
             continue
 
         purchase_date = parse_date(purchase_date_raw) or datetime.max
+
         candidates.append({
             "row_index": idx,
-            "bm_id": effective_bm_id,
+            "bm_id": bm_id,
             "purchase_date_obj": purchase_date,
             "purchase_date": purchase_date_raw,
             "price": row[2],
@@ -13184,30 +11548,32 @@ def count_free_bms():
 
 def find_bm_in_base(bm_id):
     rows = get_sheet_rows_cached(SHEET_BMS)
-    target = str(bm_id or "").strip()
-
-    if not target:
-        return None
 
     for idx, row in enumerate(rows[1:], start=2):
-        row = ensure_row_len(row, 9)
-        if bm_row_matches_query(row, target, allow_data_contains=False):
-            return {"row_index": idx, "row": row}
+        if len(row) < 9:
+            row = row + [''] * (9 - len(row))
 
-    for idx, row in enumerate(rows[1:], start=2):
-        row = ensure_row_len(row, 9)
-        if bm_row_matches_query(row, target, allow_data_contains=True):
-            return {"row_index": idx, "row": row}
+        if str(row[0]).strip() == str(bm_id).strip():
+            return {
+                "row_index": idx,
+                "row": row
+            }
 
     return None
 
+
 def build_bm_search_text(bm_id):
     bm_info = find_bm_in_base(bm_id)
+
     if not bm_info:
         return None
 
-    row = ensure_row_len(bm_info["row"], 9)
-    effective_bm_id = get_bm_effective_id_from_row(row) or "не найден"
+    row = bm_info["row"]
+
+    if len(row) < 9:
+        row = row + [''] * (9 - len(row))
+
+    bm_id = row[0]
     purchase_date = row[1] or "не указана"
     price = row[2] or "не указана"
     status = row[4] or "не указан"
@@ -13216,8 +11582,8 @@ def build_bm_search_text(bm_id):
     issue_date = row[7] or "не указана"
     data_text = row[8] or "нет данных"
 
-    return (
-        f"ID БМа: {effective_bm_id}\n"
+    text = (
+        f"ID БМа: {bm_id}\n"
         f"Дата покупки: {purchase_date}\n"
         f"Цена: {price}\n"
         f"Статус: {status}\n"
@@ -13227,53 +11593,71 @@ def build_bm_search_text(bm_id):
         f"Данные:\n{data_text}"
     )
 
-def return_bm_to_ban(bm_id, comment_text="", ban_timing=""):
+    return text
+
+def return_bm_to_ban(bm_id, comment_text=""):
     bm_info = find_bm_in_base(bm_id)
     if not bm_info:
         return False, "БМ не найден в База_БМ."
 
-    row = ensure_row_len(bm_info["row"], 10)
-    effective_bm_id = get_bm_effective_id_from_row(row) or str(bm_id).strip()
+    row = bm_info["row"]
+    if len(row) < 9:
+        row = row + [''] * (9 - len(row))
 
     status = str(row[4]).strip().lower()
+
     if status == "ban":
         return False, "Этот БМ уже в ban."
 
-    sheet_update_and_refresh(SHEET_BMS, f"E{bm_info['row_index']}:F{bm_info['row_index']}", [["ban", "ban"]])
+    sheet_update_and_refresh(
+        SHEET_BMS,
+        f"E{bm_info['row_index']}:F{bm_info['row_index']}",
+        [["ban", "ban"]]
+    )
 
+    row = ensure_row_len(row, 26)
     sync_id = row[9]
+    
     if sync_id:
         sync_status_to_basebot(BASEBOT_SHEET_BMS, sync_id, "ban")
 
-    issue_info = find_last_bm_issue_row(effective_bm_id)
+    issue_info = find_last_bm_issue_row(bm_id)
     if issue_info:
-        mark_issue_row_as_ban(issue_info["row_index"], comment_text, ban_timing)
+        mark_issue_row_as_ban(issue_info["row_index"], comment_text)
 
     invalidate_stats_cache()
-    return True, f"БМ '{effective_bm_id}' переведён в ban."
+    return True, f"БМ '{bm_id}' переведён в ban."
 
 def return_bm_to_free(bm_id):
     bm_info = find_bm_in_base(bm_id)
     if not bm_info:
         return False, "БМ не найден в База_БМ."
 
-    row = ensure_row_len(bm_info["row"], 10)
-    effective_bm_id = get_bm_effective_id_from_row(row) or str(bm_id).strip()
+    row = bm_info["row"]
+    if len(row) < 9:
+        row = row + [''] * (9 - len(row))
 
     status = str(row[4]).strip().lower()
+
     if status == "free":
         return False, "Этот БМ уже free."
 
-    sheet_update_and_refresh(SHEET_BMS, f"E{bm_info['row_index']}:H{bm_info['row_index']}", [["free", "", "", ""]])
+    sheet_update_and_refresh(
+        SHEET_BMS,
+        f"E{bm_info['row_index']}:H{bm_info['row_index']}",
+        [["free", "", "", ""]]
+    )
 
+    row = ensure_row_len(row, 26)
     sync_id = row[9]
+
     if sync_id:
         sync_status_to_basebot(BASEBOT_SHEET_BMS, sync_id, "free")
 
-    delete_last_bm_issue_row(effective_bm_id)
+    delete_last_bm_issue_row(bm_id)
 
     invalidate_stats_cache()
-    return True, f"БМ '{effective_bm_id}' возвращён в free."
+    return True, f"БМ '{bm_id}' возвращён в free."
 
 def show_found_bm(chat_id, user_id, found):
     state = get_state(user_id)
@@ -13281,11 +11665,9 @@ def show_found_bm(chat_id, user_id, found):
     state["bm_row"] = found["row_index"]
     set_state(user_id, state)
 
-    display_bm_id = found.get("bm_id") or "не найден"
-
     text = (
         "🔍Найден БМ:\n\n"
-        f"🔥ID БМа: {display_bm_id}\n"
+        f"🔥ID БМа: {found['bm_id']}\n"
         f"💵цена: {found['price']}\n"
         f"👨‍💻Для кого: {state.get('bm_for_whom', 'не указано')}"
     )
@@ -13296,6 +11678,7 @@ def show_found_bm(chat_id, user_id, found):
     ]
 
     tg_send_message(chat_id, text, keyboard)
+
 
 def confirm_bm_issue(chat_id, user_id, username):
     try:
@@ -13319,47 +11702,77 @@ def confirm_bm_issue(chat_id, user_id, username):
                 return
 
             rows = get_sheet_rows_cached(SHEET_BMS, force=True)
+
             if row_index - 1 >= len(rows):
                 clear_state(user_id)
                 send_bms_menu(chat_id, "БМ не найден в таблице. Начни заново.")
                 return
 
-            row = ensure_row_len(rows[row_index - 1], 10)
+            row = rows[row_index - 1]
+            row = ensure_row_len(row, 10)
             sync_id = row[9]
+
             status = str(row[4]).strip().lower()
 
             if status == "taken":
                 clear_state(user_id)
                 send_bms_menu(chat_id, "Этот БМ уже занят.")
                 return
+
             if status == "ban":
                 clear_state(user_id)
                 send_bms_menu(chat_id, "Этот БМ уже в ban.")
                 return
+
             if status != "free":
                 clear_state(user_id)
                 send_bms_menu(chat_id, "Этот БМ недоступен.")
                 return
 
-            bm_id = get_bm_effective_id_from_row(row)
+            bm_id = row[0]
             purchase_date = row[1]
             price = row[2]
+            supplier = row[3]
             data_text = row[8]
 
             today = datetime.now(MOSCOW_TZ).strftime("%d/%m/%Y")
             who_took_text = f"@{username}" if username else "без username"
 
-            sheet_update_and_refresh(SHEET_BMS, f"E{row_index}:H{row_index}", [["taken", bm_for_whom, who_took_text, today]])
+            sheet_update_and_refresh(
+                SHEET_BMS,
+                f"E{row_index}:H{row_index}",
+                [[
+                    "taken",
+                    bm_for_whom,
+                    who_took_text,
+                    today
+                ]]
+            )
 
             if sync_id:
                 sync_status_to_basebot(BASEBOT_SHEET_BMS, sync_id, "taken")
 
-            append_issue_row_fixed([bm_id, "БМ", purchase_date, normalize_numeric_for_sheet(price), today, row[3], bm_for_whom, "", "", get_payment_hash_from_bm_row(row)])
+            append_issue_row_fixed([
+                bm_id,
+                "БМ",
+                purchase_date,
+                normalize_numeric_for_sheet(price),
+                today,
+                supplier,
+                bm_for_whom
+            ])
 
             invalidate_stats_cache()
             clear_state(user_id)
 
-        tg_send_message(chat_id, f"Готово ✅\n\nБМ выдан.\n🔥ID БМа: {bm_id or 'не найден'}\n💵Цена: {format_issue_price(price)}\n👨‍💻Для кого: {bm_for_whom}")
+        tg_send_message(
+            chat_id,
+            f"Готово ✅\n\n"
+            f"БМ выдан.\n"
+            f"🔥ID БМа: {bm_id}\n"
+            f"💵Цена: {format_issue_price(price)}\n"
+            f"👨‍💻Для кого: {bm_for_whom}"
+        )
 
         if data_text:
             tg_send_message(chat_id, data_text)
@@ -13391,9 +11804,12 @@ def issue_bms_bulk(chat_id, user_id, username, count_needed):
         candidates = []
 
         for idx, row in enumerate(rows[1:], start=2):
-            row = ensure_row_len(row, 9)
+            if len(row) < 9:
+                row = row + [''] * (9 - len(row))
+
             if str(row[4]).strip().lower() != "free":
                 continue
+
             purchase_date = parse_date(row[1]) or datetime.max
             candidates.append((idx, purchase_date, row))
 
@@ -13420,27 +11836,56 @@ def issue_bms_bulk(chat_id, user_id, username, count_needed):
                     send_bms_menu(chat_id, "Один из БМов пропал из таблицы. Начни заново.")
                     return
 
-                row = ensure_row_len(current_rows[row_index - 1], 10)
+                row = current_rows[row_index - 1]
+                row = ensure_row_len(row, 26)
+                sync_id = row[9]
+
                 if str(row[4]).strip().lower() != "free":
                     clear_state(user_id)
                     send_bms_menu(chat_id, "Один из БМов уже не свободен. Начни заново.")
                     return
 
             for row_index, _, _ in selected:
-                row = ensure_row_len(current_rows[row_index - 1], 10)
-                sync_id = row[9]
-                effective_bm_id = get_bm_effective_id_from_row(row)
+                row = current_rows[row_index - 1]
+                if len(row) < 9:
+                    row = row + [''] * (9 - len(row))
 
-                sheet_update_raw(SHEET_BMS, f"E{row_index}:H{row_index}", [["taken", bm_for_whom, who_took_text, today]])
+                sheet_update_raw(
+                    SHEET_BMS,
+                    f"E{row_index}:H{row_index}",
+                    [[
+                        "taken",
+                        bm_for_whom,
+                        who_took_text,
+                        today
+                    ]]
+                )
 
-                issue_rows.append([effective_bm_id, "БМ", row[1], normalize_numeric_for_sheet(row[2]), today, row[3], bm_for_whom, "", "", get_payment_hash_from_bm_row(row)])
+                issue_rows.append([
+                    row[0],
+                    "БМ",
+                    row[1],
+                    normalize_numeric_for_sheet(row[2]),
+                    today,
+                    row[3],
+                    bm_for_whom
+                ])
 
-                issued_items.append({"bm_id": effective_bm_id, "price": row[2], "data_text": row[8] if len(row) > 8 else "", "sync_id": sync_id})
+                issued_items.append({
+                    "bm_id": row[0],
+                    "price": row[2],
+                    "data_text": row[8] if len(row) > 8 else "",
+                    "sync_id": sync_id
+                })
 
             refresh_sheet_cache(SHEET_BMS)
 
             if issue_rows:
-                sheet_append_rows_and_refresh(SHEET_ISSUES, issue_rows, value_input_option="USER_ENTERED")
+                sheet_append_rows_and_refresh(
+                    SHEET_ISSUES,
+                    issue_rows,
+                    value_input_option="USER_ENTERED"
+                )
 
             for item in issued_items:
                 if item["sync_id"]:
@@ -13451,7 +11896,16 @@ def issue_bms_bulk(chat_id, user_id, username, count_needed):
         clear_state(user_id)
 
         for item in issued_items:
-            tg_send_message(chat_id, f"Готово ✅\n\nБМ выдан.\nID БМа: {item['bm_id'] or 'не найден'}\nЦена: {format_issue_price(item.get('price', ''))}\nДля кого: {bm_for_whom}\nКто взял в боте: {who_took_text}")
+            tg_send_message(
+                chat_id,
+                f"Готово ✅\n\n"
+                f"БМ выдан.\n"
+                f"ID БМа: {item['bm_id']}\n"
+                f"Цена: {format_issue_price(item.get('price', ''))}\n"
+                f"Для кого: {bm_for_whom}\n"
+                f"Кто взял в боте: {who_took_text}"
+            )
+
             if item["data_text"]:
                 tg_send_message(chat_id, item["data_text"])
             else:
@@ -13463,7 +11917,7 @@ def issue_bms_bulk(chat_id, user_id, username, count_needed):
         logging.exception("issue_bms_bulk crashed")
         tg_send_message(chat_id, "Ошибка массовой выдачи БМов. Попробуй ещё раз.")
         send_accounts_main_menu(chat_id, "Меню Accounts:")
-
+    
 def show_found_king(chat_id, user_id, found):
     state = get_state(user_id)
 
@@ -13583,8 +12037,7 @@ def confirm_king_issue(chat_id, user_id, username):
                 price=row[2],
                 transfer_date=today,
                 supplier=row[3],
-                for_whom=king_for_whom,
-                payment_hash=get_payment_hash_from_king_row(row)
+                for_whom=king_for_whom
             )
 
             invalidate_stats_cache()
@@ -13753,8 +12206,7 @@ def issue_kings_bulk(chat_id, user_id, username, king_names):
                     "supplier": row[3],
                     "geo": row[7],
                     "data_text": get_full_king_data_from_row(row),
-                    "sync_id": sync_id,
-                    "payment_hash": get_payment_hash_from_king_row(row)
+                    "sync_id": sync_id
                 })
 
             logging.info(f"issue_kings_bulk updated {len(issued_items)} kings for user_id={user_id}")
@@ -13775,8 +12227,7 @@ def issue_kings_bulk(chat_id, user_id, username, king_names):
                     price=item["price"],
                     transfer_date=today,
                     supplier=item["supplier"],
-                    for_whom=king_for_whom,
-                    payment_hash=item.get("payment_hash", "")
+                    for_whom=king_for_whom
                 )
 
             invalidate_stats_cache()
@@ -14189,10 +12640,7 @@ def process_crypto_bulk_proxy_step(chat_id, user_id, username, proxy_text):
         normalize_numeric_for_sheet(row[2]),
         today,
         row[3],
-        king_for_whom,
-        "",
-        "",
-        get_payment_hash_from_king_row(row)
+        king_for_whom
     ])
 
     results.append({
@@ -14215,7 +12663,7 @@ def process_crypto_bulk_proxy_step(chat_id, user_id, username, proxy_text):
 
     start_crypto_kings_bulk_proxy_step(chat_id, user_id)
 
-def append_king_to_issues_sheet(king_name, purchase_date, price, transfer_date, supplier, for_whom, payment_hash=""):
+def append_king_to_issues_sheet(king_name, purchase_date, price, transfer_date, supplier, for_whom):
     append_issue_row_fixed([
         king_name,
         "KING",
@@ -14223,10 +12671,7 @@ def append_king_to_issues_sheet(king_name, purchase_date, price, transfer_date, 
         normalize_numeric_for_sheet(price),
         transfer_date,
         supplier,
-        for_whom,
-        "",
-        "",
-        str(payment_hash or "").strip(),
+        for_whom
     ])
 
 def find_last_king_issue_row(king_name):
@@ -14339,7 +12784,7 @@ def find_king_in_base_by_name(king_name):
     return None
 
 
-def return_king_to_ban(king_name, comment_text="", ban_timing=""):
+def return_king_to_ban(king_name, comment_text=""):
     base_info = find_king_in_base_by_name(king_name)
     if not base_info:
         return False, "Кинг не найден в базах."
@@ -14372,7 +12817,7 @@ def return_king_to_ban(king_name, comment_text="", ban_timing=""):
 
     issue_info = find_last_king_issue_row(king_name)
     if issue_info:
-        mark_issue_row_as_ban(issue_info["row_index"], comment_text, ban_timing)
+        mark_issue_row_as_ban(issue_info["row_index"], comment_text)
 
     invalidate_stats_cache()
     return True, f"Кинг '{king_name}' переведён в ban."
@@ -14444,7 +12889,7 @@ def find_crypto_king_in_base_by_name(king_name):
     return None
 
 
-def return_crypto_king_to_ban(king_name, comment_text="", ban_timing=""):
+def return_crypto_king_to_ban(king_name, comment_text=""):
     base_info = find_crypto_king_in_base_by_name(king_name)
     if not base_info:
         return False, "Crypto king не найден в База_крипта_кинги."
@@ -14471,7 +12916,7 @@ def return_crypto_king_to_ban(king_name, comment_text="", ban_timing=""):
 
     issue_info = find_last_king_issue_row(king_name)
     if issue_info:
-        mark_issue_row_as_ban(issue_info["row_index"], comment_text, ban_timing)
+        mark_issue_row_as_ban(issue_info["row_index"], comment_text)
 
     invalidate_stats_cache()
     return True, f"Crypto king '{king_name}' переведён в ban."
@@ -14487,7 +12932,6 @@ def build_king_search_text(king_name):
 
     row = found["row"]
     sheet_name = found["sheet_name"]
-    row_index = int(found.get("row_index", 0) or 0)
 
     source_title = "Crypto king" if sheet_name == SHEET_CRYPTO_KINGS else "Кинг"
 
@@ -14518,13 +12962,9 @@ def build_king_search_text(king_name):
         "title": source_title,
         "king_name": name,
         "meta_text": meta_text,
-        "data_text": data_text,
-        "sheet_name": sheet_name,
-        "row_index": row_index,
-        "status": status,
-        "for_whom": for_whom
+        "data_text": data_text
     }
-
+    
 def build_stats_text():
 
     # ---------- КИНГИ ----------
@@ -15184,7 +13624,7 @@ def run_sheet_structure_checks():
 
     for sheet_name, min_cols, title in checks:
         try:
-            rows = _get_rows_cached_safe(sheet_name)
+            rows = get_sheet_rows_cached(sheet_name, force=True)
 
             if not rows:
                 add_result(f"{title}: лист не пустой", False, "Лист пустой")
@@ -15370,7 +13810,7 @@ def find_row_in_sheet_by_sync_id(sheet_name, sync_id, sync_col_index=0, basebot=
     if basebot:
         rows = basebot_get_all_rows(sheet_name)
     else:
-        rows = _get_rows_cached_safe(sheet_name)
+        rows = get_sheet_rows_cached(sheet_name, force=True)
 
     target = str(sync_id or "").strip()
 
@@ -15539,25 +13979,7 @@ def parse_proxy_input(text):
 
     return None
 
-def octo_extract_profile_items(data):
-    items = []
-
-    if isinstance(data, dict):
-        if isinstance(data.get("data"), list):
-            items = data["data"]
-        elif isinstance(data.get("profiles"), list):
-            items = data["profiles"]
-        elif isinstance(data.get("items"), list):
-            items = data["items"]
-        elif isinstance(data.get("list"), list):
-            items = data["list"]
-    elif isinstance(data, list):
-        items = data
-
-    return items
-
-
-def octo_find_profile_by_title(profile_title, max_pages=10):
+def octo_find_profile_by_title(profile_title):
     logging.info("OCTO_FIND_V3_RUNNING")
     headers = {
         "X-Octo-Api-Token": OCTO_API_TOKEN,
@@ -15565,34 +13987,27 @@ def octo_find_profile_by_title(profile_title, max_pages=10):
     }
 
     target = str(profile_title or "").strip().lower()
-    if not target:
-        return None
 
-    max_pages = max(1, int(max_pages or 10))
-
-    for page in range(0, max_pages):
+    for page in range(0, 10):
         url = f"{OCTO_API_BASE}/profiles?page={page}&page_len=100&fields=title"
 
-        for attempt in range(5):
-            resp = requests.get(url, headers=headers, timeout=60)
-            if resp.status_code == 429:
-                wait = 2 ** attempt
-                logging.warning(
-                    f"OCTO 429 rate limit (page={page}, attempt={attempt}), ждём {wait}s"
-                )
-                time.sleep(wait)
-                continue
-
-            resp.raise_for_status()
-            break
-        else:
-            resp.raise_for_status()
-
-        if page > 0:
-            time.sleep(0.3)
+        resp = requests.get(url, headers=headers, timeout=60)
+        resp.raise_for_status()
 
         data = resp.json()
-        items = octo_extract_profile_items(data)
+
+        items = []
+        if isinstance(data, dict):
+            if isinstance(data.get("data"), list):
+                items = data["data"]
+            elif isinstance(data.get("profiles"), list):
+                items = data["profiles"]
+            elif isinstance(data.get("items"), list):
+                items = data["items"]
+            elif isinstance(data.get("list"), list):
+                items = data["list"]
+        elif isinstance(data, list):
+            items = data
 
         for item in items:
             title_val = str(item.get("title", "")).strip().lower()
@@ -15601,56 +14016,8 @@ def octo_find_profile_by_title(profile_title, max_pages=10):
             if title_val == target or name_val == target:
                 return item
 
-        if not items or len(items) < 100:
+        if not items:
             break
-
-    return None
-
-
-def octo_find_profile_by_title_deep(profile_title, max_pages=80, sleep_between=0.0):
-    target = str(profile_title or "").strip().lower()
-    if not target:
-        return None
-
-    headers = {
-        "X-Octo-Api-Token": OCTO_API_TOKEN,
-        "Content-Type": "application/json",
-    }
-
-    max_pages = max(1, int(max_pages or 80))
-
-    for page in range(0, max_pages):
-        url = f"{OCTO_API_BASE}/profiles?page={page}&page_len=100&fields=title"
-
-        for attempt in range(5):
-            resp = requests.get(url, headers=headers, timeout=60)
-            if resp.status_code == 429:
-                wait = 2 ** attempt
-                logging.warning(
-                    f"OCTO 429 rate limit (deep page={page}, attempt={attempt}), ждём {wait}s"
-                )
-                time.sleep(wait)
-                continue
-
-            resp.raise_for_status()
-            break
-        else:
-            resp.raise_for_status()
-
-        data = resp.json()
-        items = octo_extract_profile_items(data)
-
-        for item in items:
-            title_val = str(item.get("title", "")).strip().lower()
-            name_val = str(item.get("name", "")).strip().lower()
-            if title_val == target or name_val == target:
-                return item
-
-        if not items or len(items) < 100:
-            break
-
-        if sleep_between:
-            time.sleep(float(sleep_between))
 
     return None
 
@@ -15703,18 +14070,8 @@ def octo_debug_list_profiles():
     }
 
     url = f"{OCTO_API_BASE}/profiles?page=0&page_len=100&fields=title"
-
-    for attempt in range(5):
-        resp = requests.get(url, headers=headers, timeout=60)
-        if resp.status_code == 429:
-            wait = 2 ** attempt
-            logging.warning(f"OCTO 429 rate limit (debug_list, attempt={attempt}), ждём {wait}s")
-            time.sleep(wait)
-            continue
-        resp.raise_for_status()
-        break
-    else:
-        resp.raise_for_status()
+    resp = requests.get(url, headers=headers, timeout=60)
+    resp.raise_for_status()
 
     data = resp.json()
 
@@ -15933,15 +14290,14 @@ def ensure_octo_profile_for_farm_king(profile_name, parsed, proxy_data=None):
     try:
         existing = octo_find_profile_by_title(profile_name)
         if existing:
-            profile_uuid = extract_octo_profile_uuid_from_result(existing)
-            if profile_uuid:
-                try:
-                    # Используем uuid — не делаем повторный поиск по всем страницам
-                    octo_update_profile_tags_by_uuid(profile_uuid, [OCTO_TAG_FARMERS])
-                except Exception:
-                    logging.exception("ensure_octo_profile_for_farm_king tag update failed for existing profile")
+            try:
+                octo_update_profile_tags_by_title(profile_name, [OCTO_TAG_FARMERS])
+            except Exception:
+                logging.exception("ensure_octo_profile_for_farm_king tag update failed for existing profile")
 
-                try:
+            try:
+                profile_uuid = extract_octo_profile_uuid_from_result(existing)
+                if profile_uuid:
                     octo_update_profile_extensions_by_uuid(
                         profile_uuid,
                         OCTO_FARM_EXTENSIONS
@@ -15962,8 +14318,8 @@ def ensure_octo_profile_for_farm_king(profile_name, parsed, proxy_data=None):
                             },
                             timeout=30
                         )
-                except Exception:
-                    logging.exception("farm king setup failed for existing profile")
+            except Exception:
+                logging.exception("farm king setup failed for existing profile")
 
             return True, existing
 
@@ -15976,11 +14332,13 @@ def ensure_octo_profile_for_farm_king(profile_name, parsed, proxy_data=None):
         result = octo_create_profile(payload)
 
         try:
+            octo_update_profile_tags_by_title(profile_name, [OCTO_TAG_FARMERS])
+        except Exception:
+            logging.exception("ensure_octo_profile_for_farm_king tag update failed after create")
+
+        try:
             profile_uuid = extract_octo_profile_uuid_from_result(result)
             if profile_uuid:
-                # Используем uuid сразу — не делаем повторный поиск по всем страницам
-                octo_update_profile_tags_by_uuid(profile_uuid, [OCTO_TAG_FARMERS])
-
                 octo_update_profile_extensions_by_uuid(
                     profile_uuid,
                     OCTO_FARM_EXTENSIONS
@@ -16316,91 +14674,23 @@ def octo_create_profile(payload):
 
     url = f"{OCTO_API_BASE}/profiles"
 
-    def _post_once(post_payload):
-        logging.info(f"OCTO CREATE URL: {url}")
-        logging.info(f"OCTO CREATE PAYLOAD: {json.dumps(post_payload, ensure_ascii=False)}")
+    logging.info(f"OCTO CREATE URL: {url}")
+    logging.info(f"OCTO CREATE PAYLOAD: {json.dumps(payload, ensure_ascii=False)}")
 
-        resp = requests.post(
-            url,
-            json=post_payload,
-            headers=headers,
-            timeout=60
-        )
+    resp = requests.post(
+        url,
+        json=payload,
+        headers=headers,
+        timeout=60
+    )
 
-        logging.info(f"OCTO STATUS: {resp.status_code}")
-        logging.info(f"OCTO RESPONSE: {resp.text}")
-        return resp
-
-    def _try_find_existing_by_title(title):
-        title = str(title or "").strip()
-        if not title:
-            return None
-
-        try:
-            time.sleep(1)
-            return octo_find_profile_by_title_deep(title, max_pages=80)
-        except Exception:
-            logging.exception("octo_create_profile deep title search failed")
-            return None
-
-    resp = _post_once(payload)
+    logging.info(f"OCTO STATUS: {resp.status_code}")
+    logging.info(f"OCTO RESPONSE: {resp.text}")
 
     if resp.status_code >= 400:
-        error_text = f"Octo API error {resp.status_code}: {resp.text}"
+        raise RuntimeError(f"Octo API error {resp.status_code}: {resp.text}")
 
-        if is_octo_profile_limit_error(error_text):
-            title = str((payload or {}).get("title") or "").strip()
-
-            existing = _try_find_existing_by_title(title)
-            if existing:
-                logging.warning(
-                    f"OCTO CREATE fallback: found existing profile after limit_reached title={title}"
-                )
-                return existing
-
-            if isinstance(payload, dict) and payload.get("template_id"):
-                retry_payload = dict(payload)
-                retry_payload.pop("template_id", None)
-
-                logging.warning(
-                    f"OCTO CREATE fallback: retry without template_id title={title}"
-                )
-
-                retry_resp = _post_once(retry_payload)
-                if retry_resp.status_code < 400:
-                    return retry_resp.json()
-
-                retry_error_text = f"Octo API error {retry_resp.status_code}: {retry_resp.text}"
-
-                if is_octo_profile_limit_error(retry_error_text):
-                    existing = _try_find_existing_by_title(title)
-                    if existing:
-                        logging.warning(
-                            f"OCTO CREATE fallback after retry: found existing profile title={title}"
-                        )
-                        return existing
-
-                raise RuntimeError(retry_error_text)
-
-        raise RuntimeError(error_text)
-
-    data = resp.json()
-
-    if isinstance(data, dict) and data.get("success") is False:
-        error_text = f"Octo API error: {data}"
-
-        if is_octo_profile_limit_error(error_text):
-            title = str((payload or {}).get("title") or "").strip()
-            existing = _try_find_existing_by_title(title)
-            if existing:
-                logging.warning(
-                    f"OCTO CREATE fallback: found existing profile on success=false title={title}"
-                )
-                return existing
-
-        raise RuntimeError(error_text)
-
-    return data
+    return resp.json()
 
 def ensure_octo_profile_for_warehouse(profile_name, proxy_data):
     existing = octo_find_profile_by_title(profile_name)
@@ -16531,8 +14821,8 @@ def handle_message(msg):
             FARM_MENU_KING, FARM_MENU_BM, FARM_MENU_FP,
             BTN_BACK_TO_FARMERS, BTN_BACK_FROM_ADMIN, BTN_BACK_FROM_ACCOUNTANTS,
             BTN_BACK_FROM_ADMIN_FARMERS, MENU_CANCEL,
-            MENU_MISC, BTN_BACK_FROM_MISC, ADMIN_ADD_STICKERS, ADMIN_CHECK_BANS,
-            MISC_FREE_RESOURCES
+            MENU_MISC, BTN_BACK_FROM_MISC, ADMIN_ADD_STICKERS,
+            MISC_FREE_RESOURCES, MISC_DAILY_FREE_RESOURCES
         }
 
         now = time.time()
@@ -16710,14 +15000,6 @@ def handle_message(msg):
                 send_person_menu(chat_id, prev_state.get("issue_department"))
                 return
 
-            if mode == "awaiting_buyer_issued_department":
-                send_department_menu(chat_id, "Выбери отдел байера:")
-                return
-
-            if mode == "awaiting_buyer_issued_person":
-                send_person_menu(chat_id, prev_state.get("buyer_report_department"))
-                return
-
             if mode == "awaiting_account_return_action":
                 send_return_action_menu(chat_id, "личкой")
                 return
@@ -16751,10 +15033,6 @@ def handle_message(msg):
                     ),
                     [[{"text": BTN_RETURN_CONFIRM}, {"text": MENU_CANCEL}]]
                 )
-                return
-
-            if mode == "awaiting_ban_stage":
-                send_ban_timing_menu(chat_id)
                 return
 
             if mode == KING_OCTO_MODE_COUNT:
@@ -16855,36 +15133,12 @@ def handle_message(msg):
                 send_department_menu(chat_id, "Выбери для кого ФП:")
                 return
 
-            if mode == "awaiting_fp_return_action":
-                send_fp_return_action_menu(chat_id, farm=False)
-                return
-
-            if mode == "awaiting_farm_fp_return_action":
-                send_fp_return_action_menu(chat_id, farm=True)
-                return
-
             if mode == "awaiting_return_fp_ban":
                 send_text_input_prompt(chat_id, "Впиши ссылку ФП, которую нужно перевести в ban.")
                 return
 
-            if mode == "awaiting_return_fp_ban_warehouse":
-                send_text_input_prompt(chat_id, "Впиши название склада ФП, который нужно целиком перевести в ban.")
-                return
-
-            if mode == "awaiting_ban_reason_fp_warehouse":
-                send_text_input_prompt(chat_id, "Напиши причину бана для всего склада ФП.")
-                return
-
             if mode == "awaiting_farm_return_fp_ban":
                 send_text_input_prompt(chat_id, "Впиши ссылку farm FP, которую нужно перевести в ban.")
-                return
-
-            if mode == "awaiting_farm_return_fp_ban_warehouse":
-                send_text_input_prompt(chat_id, "Впиши название склада farm FP, который нужно целиком перевести в ban.")
-                return
-
-            if mode == "awaiting_ban_reason_farm_fp_warehouse":
-                send_text_input_prompt(chat_id, "Напиши причину бана для всего склада farm FP.")
                 return
 
             if mode == "awaiting_fp_for_whom":
@@ -16973,9 +15227,42 @@ def handle_message(msg):
             send_misc_menu(chat_id, "Меню Прочее:")
             return
 
+        if text == MISC_FREE_RESOURCES:
+            if not can_see_misc(user_id):
+                send_main_menu(chat_id, "Главное меню:", user_id=user_id)
+                return
+
+            clear_state(user_id)
+            send_live_free_resources_report(chat_id)
+            send_misc_menu(chat_id, "Меню Прочее:")
+            return
+
+        if text == MISC_DAILY_FREE_RESOURCES:
+            if not can_see_misc(user_id):
+                send_main_menu(chat_id, "Главное меню:", user_id=user_id)
+                return
+
+            clear_state(user_id)
+            send_free_snapshot_period_menu(chat_id)
+            return
+
+        if state.get("mode") == "awaiting_free_snapshot_date":
+            target_date = parse_snapshot_date_input(text)
+            if not target_date:
+                tg_send_message(chat_id, "Впиши дату в формате ДД.ММ.ГГГГ")
+                return
+
+            clear_state(user_id)
+            show_single_free_snapshot_by_date(chat_id, target_date)
+            return
+
         if text == ADMIN_ADD_STICKERS:
-            if not is_admin(user_id):
+            if not has_access(user_id):
                 tg_send_message(chat_id, "Нет доступа.")
+                return
+
+            if not can_see_misc(user_id):
+                send_main_menu(chat_id, "Главное меню:", user_id=user_id)
                 return
 
             set_state(user_id, {
@@ -16987,15 +15274,6 @@ def handle_message(msg):
                 chat_id,
                 "Пришли стикер одним сообщением — я добавлю его в очередь."
             )
-            return
-
-        if text == MISC_FREE_RESOURCES:
-            if not can_see_misc(user_id):
-                send_main_menu(chat_id, "Главное меню:", user_id=user_id)
-                return
-
-            tg_send_message(chat_id, build_free_resources_summary_text())
-            send_misc_menu(chat_id, "Меню Прочее:")
             return
 
         if text == BTN_BACK_FROM_MISC:
@@ -17016,12 +15294,6 @@ def handle_message(msg):
             )
 
             send_accounts_main_menu(chat_id, "Меню Accounts:")
-            return
-
-        if text == MENU_ISSUED_TO_BUYER:
-            clear_state(user_id)
-            update_state(user_id, mode="awaiting_buyer_issued_department")
-            send_department_menu(chat_id, "Выбери отдел байера:")
             return
 
         if text == MENU_FARMER_STATS:
@@ -17132,15 +15404,6 @@ def handle_message(msg):
                 tg_send_message(chat_id, f"Ошибка в статистике всех:\n{e}")
             return
 
-        if text == ADMIN_CHECK_BANS:
-            if not has_access(user_id):
-                tg_send_message(chat_id, "У вас нет доступа.")
-                return
-
-            tg_send_message(chat_id, build_combined_ban_storm_report_text(force=True))
-            send_misc_menu(chat_id, "Меню Прочее:")
-            return
-
         if text == ADMIN_BOT_CHECK:
             if not is_admin(user_id):
                 tg_send_message(chat_id, "У вас нет доступа.")
@@ -17220,14 +15483,6 @@ def handle_message(msg):
         if text == BTN_BACK_TO_MENU:
             last_accounts_section = state.get("last_accounts_section", "")
             last_farmers_section = state.get("last_farmers_section", "")
-            current_mode = str(state.get("mode", "") or "").strip()
-
-            # Если это верхнее меню раздела без активного сценария, возвращаем в главное меню.
-            if not current_mode:
-                clear_state(user_id)
-                send_main_menu(chat_id, user_id=user_id)
-                return
-
             clear_state(user_id)
 
             if last_farmers_section == "kings":
@@ -17517,28 +15772,6 @@ def handle_message(msg):
             show_found_account(chat_id, user_id, found)
             return
 
-        if state.get("mode") == "awaiting_ban_stage":
-            ban_timing = normalize_ban_timing(text)
-            if not ban_timing:
-                send_ban_timing_menu(chat_id)
-                return
-
-            next_mode = str(state.get("ban_reason_mode", "")).strip()
-            prompt_text = str(state.get("ban_reason_prompt", "Напиши причину бана.")).strip() or "Напиши причину бана."
-            if not next_mode:
-                clear_state(user_id)
-                send_main_menu(chat_id, "Сначала выбери действие заново.", user_id=user_id)
-                return
-
-            next_state = dict(state)
-            next_state["mode"] = next_mode
-            next_state["ban_timing"] = ban_timing
-            next_state.pop("ban_reason_mode", None)
-            next_state.pop("ban_reason_prompt", None)
-            set_state(user_id, next_state)
-            send_text_input_prompt(chat_id, prompt_text)
-            return
-
         if text == BTN_RETURN_CONFIRM:
             if state.get("mode") == "awaiting_return_confirm":
                 account_numbers = list(state.get("return_account_numbers") or [])
@@ -17547,91 +15780,68 @@ def handle_message(msg):
                 if not account_numbers and single_account:
                     account_numbers = [single_account]
 
-                prompt_text = "Напиши причину бана для личек." if len(account_numbers) > 1 else "Напиши причину бана для лички."
-                start_ban_reason_flow(
-                    chat_id,
-                    user_id,
-                    {
-                        "return_account_numbers": account_numbers,
-                        "return_account_number": single_account,
-                        "return_account_missing_numbers": list(state.get("return_account_missing_numbers") or []),
-                        "ban_reason_mode": "awaiting_ban_reason_account"
-                    },
-                    prompt_text
-                )
+                next_state = {
+                    "mode": "awaiting_ban_reason_account",
+                    "return_account_numbers": account_numbers,
+                    "return_account_number": single_account,
+                    "return_account_missing_numbers": list(state.get("return_account_missing_numbers") or [])
+                }
+
+                set_state(user_id, next_state)
+
+                if len(account_numbers) > 1:
+                    send_text_input_prompt(chat_id, "Напиши причину бана для личек.")
+                else:
+                    send_text_input_prompt(chat_id, "Напиши причину бана для лички.")
                 return
 
             if state.get("mode") == "awaiting_return_king_confirm":
-                start_ban_reason_flow(
-                    chat_id,
-                    user_id,
-                    {
-                        "return_king_name": state.get("return_king_name", ""),
-                        "return_king_source": state.get("return_king_source", "normal"),
-                        "ban_reason_mode": "awaiting_ban_reason_king"
-                    },
-                    "Напиши причину бана для кинга."
-                )
+                set_state(user_id, {
+                    "mode": "awaiting_ban_reason_king",
+                    "return_king_name": state.get("return_king_name", ""),
+                    "return_king_source": state.get("return_king_source", "normal")
+                })
+                send_text_input_prompt(chat_id, "Напиши причину бана для кинга.")
                 return
 
             if state.get("mode") == "awaiting_return_bm_confirm":
-                start_ban_reason_flow(
-                    chat_id,
-                    user_id,
-                    {
-                        "return_bm_id": state.get("return_bm_id", ""),
-                        "ban_reason_mode": "awaiting_ban_reason_bm"
-                    },
-                    "Напиши причину бана для БМа."
-                )
+                set_state(user_id, {
+                    "mode": "awaiting_ban_reason_bm",
+                    "return_bm_id": state.get("return_bm_id", "")
+                })
+                send_text_input_prompt(chat_id, "Напиши причину бана для БМа.")
                 return
 
             if state.get("mode") == "awaiting_return_pixel_confirm":
-                start_ban_reason_flow(
-                    chat_id,
-                    user_id,
-                    {
-                        "return_pixel_query": state.get("return_pixel_query", ""),
-                        "ban_reason_mode": "awaiting_ban_reason_pixel"
-                    },
-                    "Напиши причину бана для Пикселя."
-                )
+                set_state(user_id, {
+                    "mode": "awaiting_ban_reason_pixel",
+                    "return_pixel_query": state.get("return_pixel_query", "")
+                })
+                send_text_input_prompt(chat_id, "Напиши причину бана для Пикселя.")
                 return
 
             if state.get("mode") == "awaiting_farm_return_bm_confirm":
-                start_ban_reason_flow_direct(
-                    chat_id,
-                    user_id,
-                    {
-                        "return_farm_bm_id": state.get("return_farm_bm_id", ""),
-                        "ban_reason_mode": "awaiting_ban_reason_farm_bm"
-                    },
-                    "Напиши причину бана для farm BM."
-                )
+                set_state(user_id, {
+                    "mode": "awaiting_ban_reason_farm_bm",
+                    "return_farm_bm_id": state.get("return_farm_bm_id", "")
+                })
+                send_text_input_prompt(chat_id, "Напиши причину бана для farm BM.")
                 return
 
             if state.get("mode") == "awaiting_return_fp_ban_confirm":
-                start_ban_reason_flow(
-                    chat_id,
-                    user_id,
-                    {
-                        "return_fp_link": state.get("return_fp_link", ""),
-                        "ban_reason_mode": "awaiting_ban_reason_fp"
-                    },
-                    "Напиши причину бана для ФП."
-                )
+                set_state(user_id, {
+                    "mode": "awaiting_ban_reason_fp",
+                    "return_fp_link": state.get("return_fp_link", "")
+                })
+                send_text_input_prompt(chat_id, "Напиши причину бана для ФП.")
                 return
 
             if state.get("mode") == "awaiting_farm_return_fp_ban_confirm":
-                start_ban_reason_flow_direct(
-                    chat_id,
-                    user_id,
-                    {
-                        "return_fp_link": state.get("return_fp_link", ""),
-                        "ban_reason_mode": "awaiting_ban_reason_farm_fp"
-                    },
-                    "Напиши причину бана для farm FP."
-                )
+                set_state(user_id, {
+                    "mode": "awaiting_ban_reason_farm_fp",
+                    "return_fp_link": state.get("return_fp_link", "")
+                })
+                send_text_input_prompt(chat_id, "Напиши причину бана для farm FP.")
                 return
 
             send_accounts_menu(chat_id, "Сначала выбери действие заново.")
@@ -17754,16 +15964,12 @@ def handle_message(msg):
                 send_kings_menu(chat_id, "Сначала выбери действие заново.")
                 return
 
-            start_ban_reason_flow(
-                chat_id,
-                user_id,
-                {
-                    "return_king_name": state.get("return_king_name", ""),
-                    "return_king_source": state.get("return_king_source", "normal"),
-                    "ban_reason_mode": "awaiting_ban_reason_king"
-                },
-                "Напиши причину бана для кинга."
-            )
+            set_state(user_id, {
+                "mode": "awaiting_ban_reason_king",
+                "return_king_name": state.get("return_king_name", ""),
+                "return_king_source": state.get("return_king_source", "normal")
+            })
+            send_text_input_prompt(chat_id, "Напиши причину бана для кинга.")
             return
 
         if text == BTN_PIXEL_RETURN_FREE_CONFIRM:
@@ -17960,27 +16166,19 @@ def handle_message(msg):
 
         if text == BTN_BM_BAN_CONFIRM:
             if state.get("mode") == "awaiting_return_bm_confirm":
-                start_ban_reason_flow(
-                    chat_id,
-                    user_id,
-                    {
-                        "return_bm_id": state.get("return_bm_id", ""),
-                        "ban_reason_mode": "awaiting_ban_reason_bm"
-                    },
-                    "Напиши причину бана для БМа."
-                )
+                set_state(user_id, {
+                    "mode": "awaiting_ban_reason_bm",
+                    "return_bm_id": state.get("return_bm_id", "")
+                })
+                send_text_input_prompt(chat_id, "Напиши причину бана для БМа.")
                 return
 
             if state.get("mode") == "awaiting_farm_return_bm_confirm":
-                start_ban_reason_flow_direct(
-                    chat_id,
-                    user_id,
-                    {
-                        "return_farm_bm_id": state.get("return_farm_bm_id", ""),
-                        "ban_reason_mode": "awaiting_ban_reason_farm_bm"
-                    },
-                    "Напиши причину бана для farm BM."
-                )
+                set_state(user_id, {
+                    "mode": "awaiting_ban_reason_farm_bm",
+                    "return_farm_bm_id": state.get("return_farm_bm_id", "")
+                })
+                send_text_input_prompt(chat_id, "Напиши причину бана для farm BM.")
                 return
 
             send_main_menu(chat_id, "Сначала выбери действие заново.", user_id=user_id)
@@ -18014,7 +16212,7 @@ def handle_message(msg):
 
         if text == SUBMENU_RETURN_FP:
             update_state(user_id, mode="awaiting_fp_return_action")
-            send_fp_return_action_menu(chat_id, farm=False)
+            send_return_action_menu(chat_id, "ФП")
             return
 
         if text == SUBMENU_GET_FP:
@@ -18037,7 +16235,7 @@ def handle_message(msg):
                 send_fps_menu(chat_id, "Начни заново.")
                 return
 
-            found = find_free_fp(exclude_link=state.get("found_fp_link"), user_id=user_id)
+            found = find_free_fp(exclude_link=state.get("found_fp_link"))
 
             if not found:
                 clear_state(user_id)
@@ -18087,15 +16285,11 @@ def handle_message(msg):
                 send_pixels_menu(chat_id, "Сначала выбери действие заново.")
                 return
 
-            start_ban_reason_flow(
-                chat_id,
-                user_id,
-                {
-                    "return_pixel_query": state.get("return_pixel_query", ""),
-                    "ban_reason_mode": "awaiting_ban_reason_pixel"
-                },
-                "Напиши причину бана для Пикселя."
-            )
+            set_state(user_id, {
+                "mode": "awaiting_ban_reason_pixel",
+                "return_pixel_query": state.get("return_pixel_query", "")
+            })
+            send_text_input_prompt(chat_id, "Напиши причину бана для Пикселя.")
             return
         
         # ========= FARMERS =========
@@ -18106,7 +16300,9 @@ def handle_message(msg):
 
         if text == FARM_SUBMENU_GET_KINGS:
             clear_state(user_id)
-            set_state(user_id, {"mode": FARM_KING_OCTO_MODE_COUNT})
+            set_state(user_id, {
+                "mode": FARM_KING_OCTO_MODE_COUNT
+            })
             send_text_input_prompt(chat_id, "Сколько farm king нужно?")
             return
 
@@ -18152,7 +16348,7 @@ def handle_message(msg):
 
         if text == FARM_SUBMENU_RETURN_FP:
             update_state(user_id, mode="awaiting_farm_fp_return_action")
-            send_fp_return_action_menu(chat_id, farm=True)
+            send_return_action_menu(chat_id, "farm FP")
             return
 
         if text == BTN_FARM_KINGS_PARTIAL_CONFIRM:
@@ -18365,12 +16561,7 @@ def handle_message(msg):
                 send_text_input_prompt(chat_id, "Впиши ссылку ФП, которую нужно вернуть.")
                 return
 
-            if text == BTN_RETURN_FP_BAN_ALL:
-                update_state(user_id, mode="awaiting_return_fp_ban_warehouse")
-                send_text_input_prompt(chat_id, "Впиши название склада ФП, который нужно целиком перевести в ban.")
-                return
-
-            send_fp_return_action_menu(chat_id, farm=False)
+            send_return_action_menu(chat_id, "ФП")
             return
 
         if state.get("mode") == "awaiting_bm_return_action":
@@ -18398,12 +16589,7 @@ def handle_message(msg):
                 send_text_input_prompt(chat_id, "Впиши ссылку farm FP, которую нужно вернуть.")
                 return
 
-            if text == BTN_RETURN_FP_BAN_ALL:
-                update_state(user_id, mode="awaiting_farm_return_fp_ban_warehouse")
-                send_text_input_prompt(chat_id, "Впиши название склада farm FP, который нужно целиком перевести в ban.")
-                return
-
-            send_fp_return_action_menu(chat_id, farm=True)
+            send_return_action_menu(chat_id, "farm FP")
             return
 
         if state.get("mode") == "awaiting_farm_bm_return_action":
@@ -18641,35 +16827,9 @@ def handle_message(msg):
             send_accounts_main_menu(chat_id, "Меню Accounts:")
             return
 
-        # ========= СОСТОЯНИЯ: ВЫДАЧА БАЙЕРУ =========
-        if state.get("mode") == "awaiting_buyer_issued_department":
-            if text not in get_supported_departments():
-                send_department_menu(chat_id, "Нужно выбрать отдел кнопкой:")
-                return
-
-            state["mode"] = "awaiting_buyer_issued_person"
-            state["buyer_report_department"] = text
-            set_state(user_id, state)
-
-            send_person_menu(chat_id, text)
-            return
-
-        if state.get("mode") == "awaiting_buyer_issued_person":
-            allowed_names = get_department_people(state.get("buyer_report_department"))
-
-            if text not in allowed_names:
-                send_person_menu(chat_id, state.get("buyer_report_department"))
-                return
-
-            buyer_name = normalize_person_name(text)
-            clear_state(user_id)
-            tg_send_long_message(chat_id, build_issued_to_buyer_report_text(buyer_name))
-            send_accounts_main_menu(chat_id, "Меню Accounts:")
-            return
-
         # ========= СОСТОЯНИЯ: ВЫДАЧА ЛИЧЕК =========
         if state.get("mode") == "awaiting_issue_department":
-            if text not in get_supported_departments():
+            if text not in [DEPT_CRYPTO, DEPT_GAMBLA]:
                 send_department_menu(chat_id, "Нужно выбрать отдел кнопкой:")
                 return
 
@@ -18681,7 +16841,12 @@ def handle_message(msg):
             return
 
         if state.get("mode") == "awaiting_issue_for_whom":
-            allowed_names = get_department_people(state.get("issue_department"))
+            allowed_names = []
+
+            if state.get("issue_department") == DEPT_CRYPTO:
+                allowed_names = CRYPTO_NAMES
+            elif state.get("issue_department") == DEPT_GAMBLA:
+                allowed_names = GAMBLA_NAMES
 
             if text not in allowed_names:
                 send_person_menu(chat_id, state.get("issue_department"))
@@ -18819,7 +16984,7 @@ def handle_message(msg):
             return
 
         if state.get("mode") == "awaiting_quick_issue_department":
-            if text not in get_supported_departments():
+            if text not in [DEPT_CRYPTO, DEPT_GAMBLA]:
                 send_department_menu(chat_id, "Нужно выбрать отдел кнопкой:")
                 return
 
@@ -18831,7 +16996,12 @@ def handle_message(msg):
             return
 
         if state.get("mode") == "awaiting_quick_issue_for_whom":
-            allowed_names = get_department_people(state.get("issue_department"))
+            allowed_names = []
+
+            if state.get("issue_department") == DEPT_CRYPTO:
+                allowed_names = CRYPTO_NAMES
+            elif state.get("issue_department") == DEPT_GAMBLA:
+                allowed_names = GAMBLA_NAMES
 
             if text not in allowed_names:
                 send_person_menu(chat_id, state.get("issue_department"))
@@ -18905,7 +17075,7 @@ def handle_message(msg):
             return
 
         if state.get("mode") == KING_OCTO_MODE_DEPARTMENT:
-            if text not in get_supported_departments():
+            if text not in [DEPT_CRYPTO, DEPT_GAMBLA]:
                 send_department_menu(chat_id, "Нужно выбрать отдел кнопкой:")
                 return
 
@@ -18919,7 +17089,11 @@ def handle_message(msg):
         if state.get("mode") == KING_OCTO_MODE_PERSON:
             department = state.get("king_department")
 
-            allowed_names = get_department_people(department)
+            allowed_names = []
+            if department == DEPT_CRYPTO:
+                allowed_names = CRYPTO_NAMES
+            elif department == DEPT_GAMBLA:
+                allowed_names = GAMBLA_NAMES
 
             if text not in allowed_names:
                 send_person_menu(chat_id, department)
@@ -19109,7 +17283,11 @@ def handle_message(msg):
         if state.get("mode") == "awaiting_crypto_king_person_bulk":
             department = state.get("crypto_bulk_department")
 
-            allowed_names = get_department_people(department)
+            allowed_names = []
+            if department == DEPT_CRYPTO:
+                allowed_names = CRYPTO_NAMES
+            elif department == DEPT_GAMBLA:
+                allowed_names = GAMBLA_NAMES
 
             if text not in allowed_names:
                 send_person_menu(chat_id, department)
@@ -19183,205 +17361,7 @@ def handle_message(msg):
             )
             return
 
-        if state.get("mode") == KING_OCTO_MODE_SINGLE_PROXY:
-            try:
-                proxy_raw = text.strip()
-
-                if proxy_raw == "__SKIP_PROXY_KING_SINGLE__":
-                    proxy_data = None
-                else:
-                    proxy_data = parse_proxy_input(proxy_raw)
-                    if not proxy_data:
-                        send_text_input_prompt(
-                            chat_id,
-                            "Неверный формат proxy.\n\nИспользуй:\nsocks5://login:password@host:port"
-                        )
-                        return
-
-                king_row = state.get("king_row")
-                king_name = str(state.get("king_name", "")).strip()
-                king_for_whom = str(state.get("king_for_whom", "")).strip()
-                parsed_king = state.get("parsed_king", {}) or {}
-                geo_value = str(state.get("king_geo_value", "")).strip()
-                data_text = str(state.get("king_data_text", "")).strip()
-                sync_id = state.get("king_sync_id")
-                today = str(state.get("king_today", "")).strip()
-                who_took_text = str(state.get("king_who_took_text", "")).strip()
-
-                if not king_row or not king_name or not king_for_whom:
-                    clear_state(user_id)
-                    send_kings_menu(chat_id, "Потеряны данные king. Начни заново.")
-                    return
-
-                row = get_sheet_row_live(SHEET_KINGS, king_row, 13)
-
-                if not row or not any(str(x).strip() for x in row):
-                    clear_state(user_id)
-                    send_kings_menu(chat_id, "King не найден в таблице. Начни заново.")
-                    return
-
-                status = str(row[4]).strip().lower()
-
-                if status == "taken":
-                    clear_state(user_id)
-                    send_kings_menu(chat_id, "Этот king уже занят.")
-                    return
-
-                if status == "ban":
-                    clear_state(user_id)
-                    send_kings_menu(chat_id, "Этот king уже в ban.")
-                    return
-
-                if status != "free":
-                    clear_state(user_id)
-                    send_kings_menu(chat_id, "Этот king недоступен.")
-                    return
-
-                octo_ok = False
-                octo_msg = ""
-                octo_result = None
-                profile_uuid = ""
-
-                cookies_ok = False
-                cookies_msg = ""
-                cookies_payload = None
-
-                try:
-                    octo_ok, octo_result = ensure_octo_profile_with_retry(
-                        ensure_func=ensure_octo_profile_for_crypto_king,
-                        profile_name=king_name,
-                        parsed=parsed_king,
-                        proxy_data=proxy_data
-                    )
-                    octo_msg = str(octo_result)
-                except Exception as octo_error:
-                    logging.exception("KING_SINGLE_PROXY: Octo create crashed")
-                    octo_msg = str(octo_error)
-
-                if not octo_ok:
-                    tg_send_long_message(
-                        chat_id,
-                        f"❌ Не удалось создать Octo профиль\n{octo_msg or 'неизвестная ошибка'}"
-                    )
-                    return
-
-                try:
-                    profile_uuid = extract_octo_profile_uuid_from_result(octo_result)
-                    cookies_payload = normalize_crypto_cookies_for_import(
-                        parsed_king.get("cookies_json", "")
-                    )
-                    if cookies_payload and profile_uuid:
-                        cookies_ok, cookies_msg = try_import_crypto_king_cookies(
-                            profile_uuid=profile_uuid,
-                            cookies_payload=cookies_payload
-                        )
-                    else:
-                        cookies_msg = "cookies не найдены или profile_uuid пустой"
-                except Exception as cookies_error:
-                    logging.exception("KING_SINGLE_PROXY: cookies import crashed")
-                    cookies_msg = str(cookies_error)
-
-                sheet_update_raw(
-                    SHEET_KINGS,
-                    f"A{king_row}:I{king_row}",
-                    [[
-                        king_name,
-                        row[1],
-                        row[2],
-                        row[3],
-                        "taken",
-                        king_for_whom,
-                        today,
-                        geo_value,
-                        who_took_text
-                    ]]
-                )
-                mark_sheet_cache_stale(SHEET_KINGS)
-
-                if sync_id:
-                    sync_status_to_basebot(BASEBOT_SHEET_KINGS, sync_id, "taken")
-
-                append_king_to_issues_sheet(
-                    king_name=king_name,
-                    purchase_date=row[1],
-                    price=row[2],
-                    transfer_date=today,
-                    supplier=row[3],
-                    for_whom=king_for_whom,
-                    payment_hash=get_payment_hash_from_king_row(row)
-                )
-
-                invalidate_stats_cache()
-
-                preview_message_id = state.get("king_preview_message_id")
-
-                set_state(user_id, {
-                    "mode": "king_octo_issued",
-                    "last_king_name": king_name,
-                    "last_king_data_text": data_text,
-                    "king_preview_message_id": preview_message_id,
-                })
-
-                if preview_message_id:
-                    mark_king_octo_preview_as_issued(
-                        chat_id=chat_id,
-                        message_id=preview_message_id,
-                        king_name=king_name,
-                        king_for_whom=king_for_whom,
-                        price=row[2],
-                        geo_value=parsed_king.get("geo", geo_value)
-                    )
-
-                download_token = save_king_download_bundle(
-                    owner_user_id=user_id,
-                    bundle_kind="king_single",
-                    items=[{
-                        "king_name": king_name,
-                        "data_text": data_text,
-                    }]
-                )
-
-                tg_send_inline_message(
-                    chat_id,
-                    f"✅ King заведен в Octo\n\n"
-                    f"✏️Название: {king_name}\n"
-                    f"👨‍💻Для кого: {king_for_whom}\n"
-                    f"💵Цена: {row[2]}\n"
-                    f"🌐Гео: {parsed_king.get('geo', geo_value)}",
-                    [[{
-                        "text": "📄 Скачать txt",
-                        "callback_data": f"dkst:{download_token}" if download_token else f"download_king_txt:{user_id}"
-                    }]]
-                )
-
-                cookies_json = str(parsed_king.get("cookies_json", "")).strip()
-
-                if cookies_json:
-                    if cookies_ok:
-                        tg_send_message(
-                            chat_id,
-                            "Куки вставлены✅\n\n"
-                            "После сохранения Куки открыв профиль на редактирование — куки не отображаются. И это нормально"
-                        )
-                    else:
-                        tg_send_long_message(
-                            chat_id,
-                            f"Куки не вставлены❌\n\n"
-                            f"Ошибка Octo:\n{cookies_msg or 'пустая ошибка'}"
-                        )
-
-                return
-
-            except Exception:
-                logging.exception("KING_SINGLE_PROXY crashed")
-                tg_send_message(chat_id, "Ошибка выдачи king. Попробуй ещё раз.")
-                send_kings_menu(chat_id, "Меню кингов:")
-
-        if state.get("mode") in [KING_OCTO_MODE_BULK_PROXY, KING_OCTO_MODE_BULK_CONFIRM]:
-            if state.get("mode") != KING_OCTO_MODE_BULK_PROXY:
-                state["mode"] = KING_OCTO_MODE_BULK_PROXY
-                set_state_with_custom_ttl(user_id, state, KING_BULK_PROXY_TTL)
-
+        if state.get("mode") == KING_OCTO_MODE_BULK_PROXY:
             process_kings_bulk_proxy_step(
                 chat_id=chat_id,
                 user_id=user_id,
@@ -19476,7 +17456,7 @@ def handle_message(msg):
             return
 
         if state.get("mode") == "awaiting_king_department":
-            if text not in get_supported_departments():
+            if text not in [DEPT_CRYPTO, DEPT_GAMBLA]:
                 send_department_menu(chat_id, "Нужно выбрать отдел кнопкой:")
                 return
 
@@ -19488,7 +17468,12 @@ def handle_message(msg):
             return
 
         if state.get("mode") == "awaiting_king_for_whom":
-            allowed_names = get_department_people(state.get("king_department"))
+            allowed_names = []
+
+            if state.get("king_department") == DEPT_CRYPTO:
+                allowed_names = CRYPTO_NAMES
+            elif state.get("king_department") == DEPT_GAMBLA:
+                allowed_names = GAMBLA_NAMES
 
             if text not in allowed_names:
                 send_person_menu(chat_id, state.get("king_department"))
@@ -19605,32 +17590,14 @@ def handle_message(msg):
                 send_kings_menu(chat_id, "Кинг не найден.")
                 return
 
-            edit_token = create_king_search_edit_session(user_id, result)
-
             tg_send_king_search_result_as_txt(
                 chat_id=chat_id,
                 title=result["title"],
                 king_name=result["king_name"],
                 meta_text=result["meta_text"],
-                data_text=result["data_text"],
-                inline_buttons=build_king_search_entry_inline_buttons(edit_token)
+                data_text=result["data_text"]
             )
 
-            send_kings_menu(chat_id, "Меню кингов:")
-            return
-
-        if state.get("mode") == "awaiting_king_search_edit_name":
-            new_king_name = text.strip()
-            session_token = str(state.get("king_search_edit_token", "")).strip()
-
-            if not new_king_name:
-                send_text_input_prompt(chat_id, "Напиши новое название для кинга.")
-                return
-
-            ok, message = rename_searched_king(session_token, new_king_name)
-            clear_state(user_id)
-
-            tg_send_message(chat_id, message)
             send_kings_menu(chat_id, "Меню кингов:")
             return
             
@@ -19728,7 +17695,7 @@ def handle_message(msg):
 
         # ========= СОСТОЯНИЯ: БМы =========
         if state.get("mode") == "awaiting_bm_department":
-            if text not in get_supported_departments():
+            if text not in [DEPT_CRYPTO, DEPT_GAMBLA]:
                 send_department_menu(chat_id, "Нужно выбрать отдел кнопкой:")
                 return
 
@@ -19740,7 +17707,12 @@ def handle_message(msg):
             return
 
         if state.get("mode") == "awaiting_bm_for_whom":
-            allowed_names = get_department_people(state.get("bm_department"))
+            allowed_names = []
+
+            if state.get("bm_department") == DEPT_CRYPTO:
+                allowed_names = CRYPTO_NAMES
+            elif state.get("bm_department") == DEPT_GAMBLA:
+                allowed_names = GAMBLA_NAMES
 
             if text not in allowed_names:
                 send_person_menu(chat_id, state.get("bm_department"))
@@ -19936,7 +17908,7 @@ def handle_message(msg):
             return
 
         if state.get("mode") == "awaiting_pixel_department":
-            if text not in get_supported_departments():
+            if text not in [DEPT_CRYPTO, DEPT_GAMBLA]:
                 send_department_menu(chat_id, "Нужно выбрать отдел кнопкой:")
                 return
 
@@ -19949,7 +17921,12 @@ def handle_message(msg):
 
 
         if state.get("mode") == "awaiting_pixel_for_whom":
-            allowed_names = get_department_people(state.get("pixel_department"))
+            allowed_names = []
+
+            if state.get("pixel_department") == DEPT_CRYPTO:
+                allowed_names = CRYPTO_NAMES
+            elif state.get("pixel_department") == DEPT_GAMBLA:
+                allowed_names = GAMBLA_NAMES
 
             if text not in allowed_names:
                 send_person_menu(chat_id, state.get("pixel_department"))
@@ -20006,7 +17983,7 @@ def handle_message(msg):
             return
 
         if state.get("mode") == "awaiting_fp_department":
-            if text not in get_supported_departments():
+            if text not in [DEPT_CRYPTO, DEPT_GAMBLA]:
                 send_department_menu(chat_id, "Нужно выбрать отдел кнопкой:")
                 return
 
@@ -20018,7 +17995,12 @@ def handle_message(msg):
             return
 
         if state.get("mode") == "awaiting_fp_for_whom":
-            allowed_names = get_department_people(state.get("fp_department"))
+            allowed_names = []
+
+            if state.get("fp_department") == DEPT_CRYPTO:
+                allowed_names = CRYPTO_NAMES
+            elif state.get("fp_department") == DEPT_GAMBLA:
+                allowed_names = GAMBLA_NAMES
 
             if text not in allowed_names:
                 send_person_menu(chat_id, state.get("fp_department"))
@@ -20176,8 +18158,7 @@ def handle_message(msg):
                     price=row[2],
                     transfer_date=today,
                     supplier=row[3],
-                    for_whom="farm",
-                    payment_hash=get_payment_hash_from_king_row(row)
+                    for_whom="farm"
                 )
 
                 invalidate_stats_cache()
@@ -20613,28 +18594,23 @@ def handle_message(msg):
                 send_farm_kings_menu(chat_id, "Кинг не найден.")
                 return
 
-            start_ban_reason_flow_direct(
-                chat_id,
-                user_id,
-                {
-                    "return_king_name": king_name,
-                    "ban_reason_mode": "awaiting_ban_reason_farm_king"
-                },
-                "Напиши причину бана для farm king."
-            )
+            set_state(user_id, {
+                "mode": "awaiting_ban_reason_farm_king",
+                "return_king_name": king_name
+            })
+            send_text_input_prompt(chat_id, "Напиши причину бана для farm king.")
             return
 
 
         if state.get("mode") == "awaiting_ban_reason_farm_king":
             comment_text = text.strip()
-            ban_timing = state.get("ban_timing", "")
 
             if not comment_text:
                 send_text_input_prompt(chat_id, "Напиши причину бана для farm king.")
                 return
 
             king_name = state.get("return_king_name", "")
-            ok, message = return_farm_king_to_ban(king_name, comment_text, ban_timing)
+            ok, message = return_farm_king_to_ban(king_name, comment_text)
             clear_state(user_id)
             send_farm_kings_menu(chat_id, message)
             return
@@ -20751,45 +18727,8 @@ def handle_message(msg):
             send_farm_fps_menu(chat_id, "Выбери следующее действие:")
             return
 
-        if state.get("mode") == "awaiting_return_fp_ban_warehouse":
-            warehouse_name = text.strip()
-
-            if not warehouse_name:
-                send_text_input_prompt(chat_id, "Впиши название склада ФП, который нужно целиком перевести в ban.")
-                return
-
-            start_ban_reason_flow(
-                chat_id,
-                user_id,
-                {
-                    "return_fp_warehouse": warehouse_name,
-                    "ban_reason_mode": "awaiting_ban_reason_fp_warehouse"
-                },
-                f"Напиши причину бана для всего склада ФП '{warehouse_name}'."
-            )
-            return
-
-        if state.get("mode") == "awaiting_farm_return_fp_ban_warehouse":
-            warehouse_name = text.strip()
-
-            if not warehouse_name:
-                send_text_input_prompt(chat_id, "Впиши название склада farm FP, который нужно целиком перевести в ban.")
-                return
-
-            start_ban_reason_flow_direct(
-                chat_id,
-                user_id,
-                {
-                    "return_fp_warehouse": warehouse_name,
-                    "ban_reason_mode": "awaiting_ban_reason_farm_fp_warehouse"
-                },
-                f"Напиши причину бана для всего склада farm FP '{warehouse_name}'."
-            )
-            return
-
         if state.get("mode") == "awaiting_ban_reason_account":
             comment_text = text.strip()
-            ban_timing = state.get("ban_timing", "")
             account_numbers = list(state.get("return_account_numbers") or [])
 
             if not comment_text:
@@ -20815,7 +18754,7 @@ def handle_message(msg):
                 send_accounts_main_menu(chat_id, message)
                 return
 
-            success_items, failed_items = process_bulk_account_return_to_ban(account_numbers, comment_text, ban_timing)
+            success_items, failed_items = process_bulk_account_return_to_ban(account_numbers, comment_text)
             missing_numbers = list(state.get("return_account_missing_numbers") or [])
 
             clear_state(user_id)
@@ -20834,7 +18773,6 @@ def handle_message(msg):
 
         if state.get("mode") == "awaiting_ban_reason_king":
             comment_text = text.strip()
-            ban_timing = state.get("ban_timing", "")
             if not comment_text:
                 send_text_input_prompt(chat_id, "Напиши причину бана для кинга.")
                 return
@@ -20843,9 +18781,9 @@ def handle_message(msg):
             source = state.get("return_king_source", "normal")
 
             if source == "crypto":
-                ok, message = return_crypto_king_to_ban(king_name, comment_text, ban_timing)
+                ok, message = return_crypto_king_to_ban(king_name, comment_text)
             else:
-                ok, message = return_king_to_ban(king_name, comment_text, ban_timing)
+                ok, message = return_king_to_ban(king_name, comment_text)
 
             clear_state(user_id)
             send_kings_menu(chat_id, message)
@@ -20854,13 +18792,12 @@ def handle_message(msg):
 
         if state.get("mode") == "awaiting_ban_reason_bm":
             comment_text = text.strip()
-            ban_timing = state.get("ban_timing", "")
             if not comment_text:
                 send_text_input_prompt(chat_id, "Напиши причину бана для БМа.")
                 return
 
             bm_id = state.get("return_bm_id", "")
-            ok, message = return_bm_to_ban(bm_id, comment_text, ban_timing)
+            ok, message = return_bm_to_ban(bm_id, comment_text)
             clear_state(user_id)
             send_bms_menu(chat_id, message)
             return
@@ -20868,13 +18805,12 @@ def handle_message(msg):
 
         if state.get("mode") == "awaiting_ban_reason_pixel":
             comment_text = text.strip()
-            ban_timing = state.get("ban_timing", "")
             if not comment_text:
                 send_text_input_prompt(chat_id, "Напиши причину бана для Пикселя.")
                 return
 
             pixel_query = state.get("return_pixel_query", "")
-            ok, message = return_pixel_to_ban(pixel_query, comment_text, ban_timing)
+            ok, message = return_pixel_to_ban(pixel_query, comment_text)
             clear_state(user_id)
             send_pixels_menu(chat_id, message)
             return
@@ -20882,13 +18818,12 @@ def handle_message(msg):
 
         if state.get("mode") == "awaiting_ban_reason_farm_bm":
             comment_text = text.strip()
-            ban_timing = state.get("ban_timing", "")
             if not comment_text:
                 send_text_input_prompt(chat_id, "Напиши причину бана для farm BM.")
                 return
 
             bm_id = state.get("return_farm_bm_id", "")
-            ok, message = return_farm_bm_to_ban(bm_id, comment_text, ban_timing)
+            ok, message = return_farm_bm_to_ban(bm_id, comment_text)
             clear_state(user_id)
             send_farm_bms_menu(chat_id, message)
             return
@@ -20896,13 +18831,12 @@ def handle_message(msg):
 
         if state.get("mode") == "awaiting_ban_reason_fp":
             comment_text = text.strip()
-            ban_timing = state.get("ban_timing", "")
             if not comment_text:
                 send_text_input_prompt(chat_id, "Напиши причину бана для ФП.")
                 return
 
             fp_link = state.get("return_fp_link", "")
-            ok, message = return_fp_to_ban(fp_link, comment_text, ban_timing)
+            ok, message = return_fp_to_ban(fp_link, comment_text)
             clear_state(user_id)
             send_fps_menu(chat_id, message)
             return
@@ -20910,39 +18844,12 @@ def handle_message(msg):
 
         if state.get("mode") == "awaiting_ban_reason_farm_fp":
             comment_text = text.strip()
-            ban_timing = state.get("ban_timing", "")
             if not comment_text:
                 send_text_input_prompt(chat_id, "Напиши причину бана для farm FP.")
                 return
 
             fp_link = state.get("return_fp_link", "")
-            ok, message = return_farm_fp_to_ban(fp_link, comment_text, ban_timing)
-            clear_state(user_id)
-            send_farm_fps_menu(chat_id, message)
-            return
-
-        if state.get("mode") == "awaiting_ban_reason_fp_warehouse":
-            comment_text = text.strip()
-            ban_timing = state.get("ban_timing", "")
-            if not comment_text:
-                send_text_input_prompt(chat_id, "Напиши причину бана для всего склада ФП.")
-                return
-
-            warehouse_name = state.get("return_fp_warehouse", "")
-            ok, message = return_fp_warehouse_to_ban(warehouse_name, comment_text, farm=False, ban_timing=ban_timing)
-            clear_state(user_id)
-            send_fps_menu(chat_id, message)
-            return
-
-        if state.get("mode") == "awaiting_ban_reason_farm_fp_warehouse":
-            comment_text = text.strip()
-            ban_timing = state.get("ban_timing", "")
-            if not comment_text:
-                send_text_input_prompt(chat_id, "Напиши причину бана для всего склада farm FP.")
-                return
-
-            warehouse_name = state.get("return_fp_warehouse", "")
-            ok, message = return_fp_warehouse_to_ban(warehouse_name, comment_text, farm=True, ban_timing=ban_timing)
+            ok, message = return_farm_fp_to_ban(fp_link, comment_text)
             clear_state(user_id)
             send_farm_fps_menu(chat_id, message)
             return
@@ -21078,8 +18985,7 @@ def handle_message(msg):
                     price=row[2],
                     transfer_date=today,
                     supplier=row[3],
-                    for_whom=king_for_whom,
-                    payment_hash=get_payment_hash_from_king_row(row)
+                    for_whom=king_for_whom
                 )
 
                 invalidate_stats_cache()
@@ -21472,6 +19378,105 @@ def handle_callback_query(callback_query):
             tg_answer_callback_query(callback_id, "Нет доступа")
             return
 
+        if data == "freehist:menu":
+            tg_answer_callback_query(callback_id)
+            tg_edit_message_text(
+                chat_id,
+                message_id,
+                "📦 Остатки по дням\n\nВыберите период:",
+                inline_buttons=build_free_snapshot_period_buttons()
+            )
+            return jsonify({"ok": True})
+
+        if data == "freehist:today":
+            tg_answer_callback_query(callback_id)
+            target_date = datetime.now(MOSCOW_TZ).date()
+            ensure_today_free_snapshot_if_needed()
+            items = load_free_snapshot_items_for_date(target_date)
+            if not items:
+                tg_edit_message_text(
+                    chat_id,
+                    message_id,
+                    f"Нет сохранённых остатков на {target_date.strftime('%d.%m.%Y')}",
+                    inline_buttons=[[{"text": "📅 К периодам", "callback_data": "freehist:menu"}]]
+                )
+                return jsonify({"ok": True})
+
+            tg_edit_message_text(
+                chat_id,
+                message_id,
+                build_free_snapshot_day_block(target_date, items),
+                inline_buttons=[[{"text": "📅 К периодам", "callback_data": "freehist:menu"}]]
+            )
+            return jsonify({"ok": True})
+
+        if data == "freehist:current_month":
+            tg_answer_callback_query(callback_id)
+            ensure_today_free_snapshot_if_needed()
+            month_key = datetime.now(MOSCOW_TZ).strftime("%Y-%m")
+            page_text, page, total_pages = build_free_snapshot_month_page_text(month_key, 0)
+            if not page_text:
+                tg_edit_message_text(
+                    chat_id,
+                    message_id,
+                    f"Нет сохранённых остатков за {month_key_to_label(month_key)}",
+                    inline_buttons=[[{"text": "📅 К периодам", "callback_data": "freehist:menu"}]]
+                )
+                return jsonify({"ok": True})
+
+            tg_edit_message_text(
+                chat_id,
+                message_id,
+                page_text,
+                inline_buttons=build_free_snapshot_month_nav_buttons(month_key, page, total_pages)
+            )
+            return jsonify({"ok": True})
+
+        if data == "freehist:choose_month":
+            tg_answer_callback_query(callback_id)
+            tg_edit_message_text(
+                chat_id,
+                message_id,
+                "📦 Остатки по дням\n\nВыбери месяц:",
+                inline_buttons=build_free_snapshot_month_choice_buttons()
+            )
+            return jsonify({"ok": True})
+
+        if data == "freehist:choose_date":
+            tg_answer_callback_query(callback_id)
+            set_state(user_id, {"mode": "awaiting_free_snapshot_date"})
+            tg_send_message(chat_id, "Впиши дату в формате ДД.ММ.ГГГГ")
+            return jsonify({"ok": True})
+
+        if data.startswith("freehist_month:"):
+            tg_answer_callback_query(callback_id)
+            _, month_key, page_str = data.split(":", 2)
+            try:
+                page = int(page_str)
+            except Exception:
+                page = 0
+
+            if month_key == datetime.now(MOSCOW_TZ).strftime("%Y-%m"):
+                ensure_today_free_snapshot_if_needed()
+
+            page_text, page, total_pages = build_free_snapshot_month_page_text(month_key, page)
+            if not page_text:
+                tg_edit_message_text(
+                    chat_id,
+                    message_id,
+                    f"Нет сохранённых остатков за {month_key_to_label(month_key)}",
+                    inline_buttons=[[{"text": "📅 К периодам", "callback_data": "freehist:menu"}]]
+                )
+                return jsonify({"ok": True})
+
+            tg_edit_message_text(
+                chat_id,
+                message_id,
+                page_text,
+                inline_buttons=build_free_snapshot_month_nav_buttons(month_key, page, total_pages)
+            )
+            return jsonify({"ok": True})
+
         if data.startswith("fullstats_accounts:"):
             username = data.split(":", 1)[1]
             tg_answer_callback_query(callback_id)
@@ -21614,130 +19619,6 @@ def handle_callback_query(callback_query):
                 logging.exception("msg_reply edit failed")
 
             tg_send_message(chat_id, "Отправь сообщение или стикер")
-            return jsonify({"ok": True})
-
-        if data.startswith("edit_king_data:"):
-            session_token = data.split(":", 1)[1]
-            session = get_king_search_edit_session(session_token)
-
-            if not session:
-                tg_answer_callback_query(callback_id, "Кнопка устарела. Найди кинга заново")
-                return jsonify({"ok": True})
-
-            if int(session.get("user_id", 0)) != int(user_id):
-                tg_answer_callback_query(callback_id, "Это не ваша кнопка")
-                return jsonify({"ok": True})
-
-            tg_answer_callback_query(callback_id, "Выбери, что изменить")
-            tg_edit_message_reply_markup(
-                chat_id,
-                message_id,
-                inline_buttons=build_king_search_edit_inline_buttons(session_token)
-            )
-            return jsonify({"ok": True})
-
-        if data.startswith("edit_king_rename:"):
-            session_token = data.split(":", 1)[1]
-            session = get_king_search_edit_session(session_token)
-
-            if not session:
-                tg_answer_callback_query(callback_id, "Кнопка устарела. Найди кинга заново")
-                return jsonify({"ok": True})
-
-            if int(session.get("user_id", 0)) != int(user_id):
-                tg_answer_callback_query(callback_id, "Это не ваша кнопка")
-                return jsonify({"ok": True})
-
-            tg_answer_callback_query(callback_id)
-            set_state(user_id, {
-                "mode": "awaiting_king_search_edit_name",
-                "king_search_edit_token": session_token
-            })
-            send_text_input_prompt(chat_id, "Напиши новое название для кинга.")
-            return jsonify({"ok": True})
-
-        if data.startswith("edit_king_buyer:"):
-            session_token = data.split(":", 1)[1]
-            session = get_king_search_edit_session(session_token)
-
-            if not session:
-                tg_answer_callback_query(callback_id, "Кнопка устарела. Найди кинга заново")
-                return jsonify({"ok": True})
-
-            if int(session.get("user_id", 0)) != int(user_id):
-                tg_answer_callback_query(callback_id, "Это не ваша кнопка")
-                return jsonify({"ok": True})
-
-            tg_answer_callback_query(callback_id, "Выбери отдел")
-            tg_edit_message_reply_markup(
-                chat_id,
-                message_id,
-                inline_buttons=build_king_search_buyer_department_inline_buttons(session_token)
-            )
-            return jsonify({"ok": True})
-
-        if data.startswith("edit_king_buyer_dept:"):
-            _, session_token, department_key = data.split(":", 2)
-            session = get_king_search_edit_session(session_token)
-
-            if not session:
-                tg_answer_callback_query(callback_id, "Кнопка устарела. Найди кинга заново")
-                return jsonify({"ok": True})
-
-            if int(session.get("user_id", 0)) != int(user_id):
-                tg_answer_callback_query(callback_id, "Это не ваша кнопка")
-                return jsonify({"ok": True})
-
-            if department_key not in ["crypto", "gambla", "misc"]:
-                tg_answer_callback_query(callback_id, "Неизвестный отдел")
-                return jsonify({"ok": True})
-
-            tg_answer_callback_query(callback_id, "Выбери байера")
-            tg_edit_message_reply_markup(
-                chat_id,
-                message_id,
-                inline_buttons=build_king_search_buyer_person_inline_buttons(session_token, department_key)
-            )
-            return jsonify({"ok": True})
-
-        if data.startswith("edit_king_buyer_person:"):
-            _, session_token, department_key, person_index_raw = data.split(":", 3)
-            session = get_king_search_edit_session(session_token)
-
-            if not session:
-                tg_answer_callback_query(callback_id, "Кнопка устарела. Найди кинга заново")
-                return jsonify({"ok": True})
-
-            if int(session.get("user_id", 0)) != int(user_id):
-                tg_answer_callback_query(callback_id, "Это не ваша кнопка")
-                return jsonify({"ok": True})
-
-            names = get_department_people_by_key(department_key)
-            if not names:
-                tg_answer_callback_query(callback_id, "Неизвестный отдел")
-                return jsonify({"ok": True})
-
-            try:
-                person_index = int(person_index_raw)
-            except Exception:
-                tg_answer_callback_query(callback_id, "Не удалось определить байера")
-                return jsonify({"ok": True})
-
-            if person_index < 0 or person_index >= len(names):
-                tg_answer_callback_query(callback_id, "Не удалось определить байера")
-                return jsonify({"ok": True})
-
-            buyer_name = normalize_person_name(names[person_index])
-            ok, message = change_searched_king_buyer(session_token, buyer_name)
-
-            tg_answer_callback_query(callback_id, "Байер изменён" if ok else "Не удалось изменить байера")
-
-            tg_edit_message_reply_markup(
-                chat_id,
-                message_id,
-                inline_buttons=build_king_search_edit_inline_buttons(session_token)
-            )
-            tg_send_message(chat_id, message)
             return jsonify({"ok": True})
 
         if data.startswith("backstats_farmers:"):
@@ -22023,7 +19904,6 @@ def handle_callback_query(callback_query):
         if data == f"kings_bulk_skip_all_proxies:{user_id}":
             state = get_state(user_id)
             state["kings_bulk_skip_all_proxies"] = True
-            state["mode"] = KING_OCTO_MODE_BULK_PROXY
 
             if message_id:
                 state["kings_bulk_proxy_message_id"] = message_id
@@ -22058,14 +19938,11 @@ def handle_callback_query(callback_query):
             tg_answer_callback_query(callback_id)
 
             state = get_state(user_id)
-            state["mode"] = KING_OCTO_MODE_BULK_PROXY
 
             if message_id:
                 state["kings_bulk_confirm_message_id"] = message_id
+                set_state_with_custom_ttl(user_id, state, KING_BULK_PROXY_TTL)
 
-            set_state_with_custom_ttl(user_id, state, KING_BULK_PROXY_TTL)
-
-            if message_id:
                 tg_edit_message_text(
                     chat_id,
                     message_id,
@@ -22176,20 +20053,6 @@ def handle_callback_query(callback_query):
 
             state = get_state(user_id)
 
-            # === РЕЗЕРВИРОВАНИЕ: сразу занять все строки за этим пользователем ===
-            queue = state.get("farm_kings_bulk_queue", [])
-            row_indices = [item["row_index"] for item in queue if item.get("row_index")]
-            if row_indices and not reserve_farm_king_rows(user_id, row_indices):
-                tg_send_message(
-                    chat_id,
-                    "⚠️ Часть farm king уже была взята другим пользователем.\n"
-                    "Пожалуйста, начни выдачу заново."
-                )
-                clear_state(user_id)
-                send_farm_kings_menu(chat_id, "Меню Farm King:")
-                return jsonify({"ok": True})
-            # ====================================================================
-
             if message_id:
                 state["farm_kings_bulk_confirm_message_id"] = message_id
                 set_state_with_custom_ttl(user_id, state, FARM_KING_BULK_PROXY_TTL)
@@ -22212,7 +20075,6 @@ def handle_callback_query(callback_query):
                 return
 
             tg_answer_callback_query(callback_id, "Выдача отменена")
-            release_farm_king_rows(user_id)  # Снять резерв
             clear_state(user_id)
 
             if message_id:
@@ -22224,30 +20086,6 @@ def handle_callback_query(callback_query):
                 )
 
             send_farm_kings_menu(chat_id, "Меню Farm King:")
-            return jsonify({"ok": True})
-
-        if data.startswith("king_skip_proxy:"):
-            target_user_id = data.split(":", 1)[1]
-
-            if str(user_id) != str(target_user_id):
-                tg_answer_callback_query(callback_id, "Это не ваша кнопка")
-                return
-
-            tg_answer_callback_query(callback_id, "Прокси пропущены")
-
-            if message_id:
-                tg_edit_message_text(
-                    chat_id,
-                    message_id,
-                    "✅ Прокси пропущены",
-                    inline_buttons=[]
-                )
-
-            handle_message({
-                "chat": {"id": chat_id},
-                "from": {"id": user_id, "username": callback_query["from"].get("username", "")},
-                "text": "__SKIP_PROXY_KING_SINGLE__"
-            })
             return jsonify({"ok": True})
 
         if data.startswith("farm_king_skip_proxy:"):
@@ -22999,11 +20837,6 @@ def auto_healthcheck_loop():
             logging.exception("auto_healthcheck_loop crashed")
             time.sleep(60)
 
-try:
-    ensure_payment_hash_columns_ready()
-except Exception:
-    logging.exception("ensure_payment_hash_columns_ready crashed")
-
 def start_background_threads_once():
     global background_threads_started
 
@@ -23020,8 +20853,8 @@ def start_background_threads_once():
         auto_health_thread = threading.Thread(target=auto_healthcheck_loop, daemon=True)
         auto_health_thread.start()
 
-        ban_storm_thread = threading.Thread(target=ban_storm_monitor_loop, daemon=True)
-        ban_storm_thread.start()
+        free_snapshot_thread = threading.Thread(target=free_snapshot_scheduler_loop, daemon=True)
+        free_snapshot_thread.start()
 
         if ENABLE_SCHEDULED_STICKER_BROADCAST:
             sticker_thread = threading.Thread(target=sticker_broadcast_loop, daemon=True)
