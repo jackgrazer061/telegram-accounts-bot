@@ -2155,6 +2155,7 @@ def send_admin_menu(chat_id, text="Меню Admin:", user_id=None):
 def send_misc_menu(chat_id, text="Меню Прочее:"):
     keyboard = [
         [{"text": ADMIN_CHECK_BANS}],
+        [{"text": MISC_FREE_RESOURCES}],
         [{"text": BTN_BACK_FROM_MISC}]
     ]
     tg_send_message(chat_id, text, keyboard)
@@ -16530,7 +16531,8 @@ def handle_message(msg):
             FARM_MENU_KING, FARM_MENU_BM, FARM_MENU_FP,
             BTN_BACK_TO_FARMERS, BTN_BACK_FROM_ADMIN, BTN_BACK_FROM_ACCOUNTANTS,
             BTN_BACK_FROM_ADMIN_FARMERS, MENU_CANCEL,
-            MENU_MISC, BTN_BACK_FROM_MISC, ADMIN_ADD_STICKERS, ADMIN_CHECK_BANS
+            MENU_MISC, BTN_BACK_FROM_MISC, ADMIN_ADD_STICKERS, ADMIN_CHECK_BANS,
+            MISC_FREE_RESOURCES
         }
 
         now = time.time()
