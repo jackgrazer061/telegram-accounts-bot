@@ -2187,10 +2187,48 @@ def parse_int_safe(value, default=0):
 
 
 def _safe_float_sum_value(value):
-    parsed = parse_price(value)
-    if parsed is None:
+    """Берёт число из ячейки цены для отчётов по свободным остаткам.
+
+    В таблицах цена иногда хранится не чистым числом, а как текст с валютой,
+    пробелами или символами. Обычный parse_price такие значения возвращал как None,
+    из-за этого количество free считалось, а сумма выходила 0.
+    """
+    if value is None:
         return 0.0
-    return float(parsed)
+
+    parsed = parse_price(value)
+    if parsed is not None:
+        return float(parsed)
+
+    text = str(value or '').strip()
+    if not text:
+        return 0.0
+
+    # Убираем частые обозначения валюты/денег, оставляем только числовую часть.
+    cleaned = (
+        text.replace('💰', '')
+            .replace('$', '')
+            .replace('₽', '')
+            .replace('руб', '')
+            .replace('р.', '')
+            .replace(' ', '')
+            .replace('\u00a0', '')
+            .replace(',', '.')
+    )
+
+    try:
+        return float(cleaned)
+    except Exception:
+        pass
+
+    match = re.search(r'-?\d+(?:[.,]\d+)?', text.replace(' ', '').replace('\u00a0', ''))
+    if not match:
+        return 0.0
+
+    try:
+        return float(match.group(0).replace(',', '.'))
+    except Exception:
+        return 0.0
 
 
 def _format_summary_money(value):
