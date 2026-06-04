@@ -296,6 +296,11 @@ MENU_CANCEL = 'Отмена'
 MENU_MISC = 'Прочее'
 BTN_BACK_FROM_MISC = 'Назад из Прочее'
 MISC_FREE_RESOURCES = '📊 Остатки расходников'
+MISC_FREE_RESOURCES_DAILY = '📦 Остатки по дням'
+SHEET_FREE_RESOURCES_HISTORY = 'История_остатков'
+FREE_RESOURCES_HISTORY_DAYS_PER_PAGE = 5
+FREE_RESOURCES_HISTORY_MODE_MONTH = 'awaiting_free_resources_history_month'
+FREE_RESOURCES_HISTORY_MODE_DATE = 'awaiting_free_resources_history_date'
 
 SUBMENU_GET_PIXELS = '➡️Получить Пиксели'
 SUBMENU_SEARCH_PIXEL = '🔎Найти Пиксель'
@@ -2156,6 +2161,7 @@ def send_misc_menu(chat_id, text="Меню Прочее:"):
     keyboard = [
         [{"text": ADMIN_CHECK_BANS}],
         [{"text": MISC_FREE_RESOURCES}],
+        [{"text": MISC_FREE_RESOURCES_DAILY}],
         [{"text": BTN_BACK_FROM_MISC}]
     ]
     tg_send_message(chat_id, text, keyboard)
@@ -2168,6 +2174,16 @@ def _get_rows_cached_safe(sheet_name):
     except Exception as e:
         logging.warning(f"Не удалось прочитать лист {sheet_name}: {e}")
         return []
+
+
+def parse_int_safe(value, default=0):
+    try:
+        text = str(value or '').strip().replace(' ', '').replace(',', '.')
+        if not text:
+            return default
+        return int(float(text))
+    except Exception:
+        return default
 
 
 def _safe_float_sum_value(value):
@@ -2243,6 +2259,282 @@ def build_free_resources_summary_text():
     )
 
     return "\n".join(lines)
+
+
+FREE_RESOURCES_SECTIONS = [
+    ("👤 Лички", SHEET_ACCOUNTS, 8, 2, 12, "accounts"),
+    ("👑 Кинги", SHEET_KINGS, 4, 2, 13, "kings"),
+    ("🪙 Crypto king", SHEET_CRYPTO_KINGS, 4, 2, 13, "crypto_king"),
+    ("🌀 Пиксели", SHEET_PIXELS, 3, 1, 9, "pixels"),
+    ("📁 БМ", SHEET_BMS, 4, 2, 10, "bms"),
+    ("📑 ФП", SHEET_FPS, 5, 2, 9, "fps"),
+    ("🌾 Farm king", SHEET_FARM_KINGS, 4, 2, 13, "farm_king"),
+    ("🌾 Farm BM", SHEET_FARM_BMS, 4, 2, 10, "farm_bm"),
+    ("🌾 Farm FP", SHEET_FARM_FPS, 5, 2, 9, "farm_fp"),
+]
+
+FREE_RESOURCES_HISTORY_HEADERS = [
+    "Дата", "Дата_снимка",
+    "Лички_шт", "Лички_сумма",
+    "Кинги_шт", "Кинги_сумма",
+    "Crypto_king_шт", "Crypto_king_сумма",
+    "Пиксели_шт", "Пиксели_сумма",
+    "БМ_шт", "БМ_сумма",
+    "ФП_шт", "ФП_сумма",
+    "Farm_king_шт", "Farm_king_сумма",
+    "Farm_BM_шт", "Farm_BM_сумма",
+    "Farm_FP_шт", "Farm_FP_сумма",
+    "Итого_шт", "Итого_сумма",
+]
+
+last_free_resources_snapshot_date = None
+free_resources_history_lock = threading.Lock()
+
+
+def get_or_create_free_resources_history_sheet():
+    def _do():
+        with google_lock:
+            client = get_gspread_client()
+            spreadsheet = client.open_by_key(SPREADSHEET_ID)
+            try:
+                sheet = spreadsheet.worksheet(SHEET_FREE_RESOURCES_HISTORY)
+            except Exception:
+                sheet = spreadsheet.add_worksheet(
+                    title=SHEET_FREE_RESOURCES_HISTORY,
+                    rows=2000,
+                    cols=len(FREE_RESOURCES_HISTORY_HEADERS) + 2
+                )
+                sheet.update("A1:V1", [FREE_RESOURCES_HISTORY_HEADERS])
+                return sheet
+
+            rows = sheet.get_all_values()
+            if not rows:
+                sheet.update("A1:V1", [FREE_RESOURCES_HISTORY_HEADERS])
+            else:
+                header = rows[0]
+                if len(header) < len(FREE_RESOURCES_HISTORY_HEADERS) or header[:len(FREE_RESOURCES_HISTORY_HEADERS)] != FREE_RESOURCES_HISTORY_HEADERS:
+                    sheet.update("A1:V1", [FREE_RESOURCES_HISTORY_HEADERS])
+            return sheet
+
+    return google_write_with_retry(_do)
+
+
+def build_free_resources_snapshot():
+    items = []
+    total_count = 0
+    total_sum = 0.0
+
+    for title, sheet_name, status_index, price_index, row_len, key in FREE_RESOURCES_SECTIONS:
+        rows = _get_rows_cached_safe(sheet_name)
+        stats = _summarize_free_rows(rows, status_index, price_index, row_len)
+        count = int(stats["count"])
+        amount = float(stats["sum"] or 0)
+        total_count += count
+        total_sum += amount
+        items.append({
+            "title": title,
+            "key": key,
+            "count": count,
+            "sum": amount,
+        })
+
+    return {
+        "items": items,
+        "total_count": total_count,
+        "total_sum": total_sum,
+    }
+
+
+def snapshot_to_history_row(snapshot, snapshot_dt=None):
+    snapshot_dt = snapshot_dt or datetime.now(MOSCOW_TZ)
+    values = [snapshot_dt.strftime("%d.%m.%Y"), snapshot_dt.strftime("%d.%m.%Y %H:%M:%S")]
+
+    by_key = {item["key"]: item for item in snapshot.get("items", [])}
+    for _, _, _, _, _, key in FREE_RESOURCES_SECTIONS:
+        item = by_key.get(key, {})
+        values.append(int(item.get("count", 0) or 0))
+        values.append(_format_summary_money(item.get("sum", 0)))
+
+    values.append(int(snapshot.get("total_count", 0) or 0))
+    values.append(_format_summary_money(snapshot.get("total_sum", 0)))
+    return values
+
+
+def save_free_resources_snapshot(snapshot_dt=None):
+    snapshot_dt = snapshot_dt or datetime.now(MOSCOW_TZ)
+    snapshot_date = snapshot_dt.strftime("%d.%m.%Y")
+
+    with free_resources_history_lock:
+        sheet = get_or_create_free_resources_history_sheet()
+        rows = sheet.get_all_values()
+        row_values = snapshot_to_history_row(build_free_resources_snapshot(), snapshot_dt)
+
+        target_row = None
+        for idx, row in enumerate(rows[1:], start=2):
+            if row and str(row[0]).strip() == snapshot_date:
+                target_row = idx
+                break
+
+        end_col = col_to_letter(len(row_values))
+        if target_row:
+            sheet.update(f"A{target_row}:{end_col}{target_row}", [row_values])
+        else:
+            next_row = len(rows) + 1 if rows else 2
+            sheet.update(f"A{next_row}:{end_col}{next_row}", [row_values])
+
+    return True
+
+
+def parse_free_resources_history_row(row):
+    row = ensure_row_len(row, len(FREE_RESOURCES_HISTORY_HEADERS))
+    date_text = str(row[0]).strip()
+    try:
+        day = datetime.strptime(date_text, "%d.%m.%Y").date()
+    except Exception:
+        return None
+
+    idx = 2
+    items = []
+    for title, _, _, _, _, key in FREE_RESOURCES_SECTIONS:
+        count = parse_int_safe(row[idx]) if idx < len(row) else 0
+        amount = _safe_float_sum_value(row[idx + 1]) if idx + 1 < len(row) else 0.0
+        items.append({"title": title, "key": key, "count": count, "sum": amount})
+        idx += 2
+
+    total_count = parse_int_safe(row[20]) if len(row) > 20 else sum(x["count"] for x in items)
+    total_sum = _safe_float_sum_value(row[21]) if len(row) > 21 else sum(x["sum"] for x in items)
+    return {"date": day, "items": items, "total_count": total_count, "total_sum": total_sum}
+
+
+def get_free_resources_history_records():
+    sheet = get_or_create_free_resources_history_sheet()
+    rows = sheet.get_all_values()
+    records = []
+    for row in rows[1:]:
+        record = parse_free_resources_history_row(row)
+        if record:
+            records.append(record)
+    records.sort(key=lambda x: x["date"])
+    return records
+
+
+def format_free_resources_history_record(record, first=False):
+    date_text = record["date"].strftime("%d.%m.%Y")
+    lines = []
+    if first:
+        lines.append(f"📦 СВОБОДНЫЕ ОСТАТКИ НА {date_text}")
+    else:
+        lines.append(f"НА {date_text}")
+    lines.append("")
+
+    for item in record.get("items", []):
+        lines.append(f"{item['title']}: {int(item.get('count', 0) or 0)} шт. — {_format_summary_money(item.get('sum', 0))}💰")
+
+    lines.append("")
+    lines.append(f"💵 Итого free: {int(record.get('total_count', 0) or 0)} шт. — {_format_summary_money(record.get('total_sum', 0))}💰")
+    return "\n".join(lines)
+
+
+def build_free_resources_history_text(records, page=0):
+    if not records:
+        return "📦 СВОБОДНЫЕ ОСТАТКИ\n\nНет сохранённых остатков за выбранный период."
+
+    page = max(0, int(page or 0))
+    start = page * FREE_RESOURCES_HISTORY_DAYS_PER_PAGE
+    end = start + FREE_RESOURCES_HISTORY_DAYS_PER_PAGE
+    selected = records[start:end]
+
+    parts = []
+    for i, record in enumerate(selected):
+        parts.append(format_free_resources_history_record(record, first=(page == 0 and i == 0)))
+    return "\n\n".join(parts)
+
+
+def make_free_resources_history_nav_buttons(prefix, page, total_records):
+    buttons = []
+    max_page = max(0, (len(range(total_records)) - 1) // FREE_RESOURCES_HISTORY_DAYS_PER_PAGE) if total_records else 0
+    row = []
+    if page > 0:
+        row.append({"text": "⬅️ Назад", "callback_data": f"{prefix}:{page - 1}"})
+    if page < max_page:
+        row.append({"text": "➡️ Далее", "callback_data": f"{prefix}:{page + 1}"})
+    if row:
+        buttons.append(row)
+    return buttons
+
+
+def send_free_resources_history_menu(chat_id):
+    tg_send_inline_message(
+        chat_id,
+        "📦 Остатки по дням\n\nВыберите период:",
+        [
+            [{"text": "Сегодня", "callback_data": "frh_today"}],
+            [{"text": "Текущий месяц", "callback_data": "frh_month_current:0"}],
+            [{"text": "Выбрать месяц", "callback_data": "frh_choose_month"}],
+            [{"text": "Выбрать дату", "callback_data": "frh_choose_date"}],
+        ]
+    )
+
+
+def handle_free_resources_history_month(chat_id, month_text, page=0, message_id=None):
+    month_text = str(month_text).strip()
+    try:
+        month_dt = datetime.strptime(month_text, "%m.%Y")
+    except Exception:
+        try:
+            month_dt = datetime.strptime(month_text, "%Y-%m")
+        except Exception:
+            tg_send_message(chat_id, "Напиши месяц в формате ММ.ГГГГ, например 06.2026")
+            return
+
+    records = [r for r in get_free_resources_history_records() if r["date"].year == month_dt.year and r["date"].month == month_dt.month]
+    text = build_free_resources_history_text(records, page=page)
+    prefix = f"frh_month:{month_dt.strftime('%Y-%m')}"
+    buttons = make_free_resources_history_nav_buttons(prefix, int(page or 0), len(records))
+
+    if message_id:
+        tg_edit_message_text(chat_id, message_id, text, buttons)
+    else:
+        tg_send_inline_message(chat_id, text, buttons) if buttons else tg_send_message(chat_id, text)
+
+
+def handle_free_resources_history_date(chat_id, date_text):
+    date_text = str(date_text).strip()
+    try:
+        target = datetime.strptime(date_text, "%d.%m.%Y").date()
+    except Exception:
+        tg_send_message(chat_id, "Напиши дату в формате ДД.ММ.ГГГГ, например 03.06.2026")
+        return
+
+    records = [r for r in get_free_resources_history_records() if r["date"] == target]
+    tg_send_message(chat_id, build_free_resources_history_text(records, page=0))
+
+
+def maybe_save_daily_free_resources_snapshot():
+    global last_free_resources_snapshot_date
+    now = datetime.now(MOSCOW_TZ)
+    today = now.date()
+
+    if now.hour < 6:
+        return
+    if last_free_resources_snapshot_date == today:
+        return
+
+    save_free_resources_snapshot(now.replace(hour=6, minute=0, second=0, microsecond=0))
+    last_free_resources_snapshot_date = today
+    logging.info(f"Free resources daily snapshot saved for {today}")
+
+
+def free_resources_history_scheduler_loop():
+    logging.info("free_resources_history_scheduler_loop started")
+    while True:
+        try:
+            touch_background_heartbeat()
+            maybe_save_daily_free_resources_snapshot()
+            time.sleep(60)
+        except Exception:
+            logging.exception("free_resources_history_scheduler_loop crashed")
+            time.sleep(60)
 
 def send_admin_farmers_menu(chat_id, text="Admin / Фармеры:"):
     keyboard = [
@@ -16532,7 +16824,7 @@ def handle_message(msg):
             BTN_BACK_TO_FARMERS, BTN_BACK_FROM_ADMIN, BTN_BACK_FROM_ACCOUNTANTS,
             BTN_BACK_FROM_ADMIN_FARMERS, MENU_CANCEL,
             MENU_MISC, BTN_BACK_FROM_MISC, ADMIN_ADD_STICKERS, ADMIN_CHECK_BANS,
-            MISC_FREE_RESOURCES
+            MISC_FREE_RESOURCES, MISC_FREE_RESOURCES_DAILY
         }
 
         now = time.time()
@@ -16989,6 +17281,21 @@ def handle_message(msg):
             )
             return
 
+        state = get_state(user_id)
+        mode = state.get("mode")
+
+        if mode == FREE_RESOURCES_HISTORY_MODE_MONTH:
+            clear_state(user_id)
+            handle_free_resources_history_month(chat_id, text, page=0)
+            send_misc_menu(chat_id, "Меню Прочее:")
+            return
+
+        if mode == FREE_RESOURCES_HISTORY_MODE_DATE:
+            clear_state(user_id)
+            handle_free_resources_history_date(chat_id, text)
+            send_misc_menu(chat_id, "Меню Прочее:")
+            return
+
         if text == MISC_FREE_RESOURCES:
             if not can_see_misc(user_id):
                 send_main_menu(chat_id, "Главное меню:", user_id=user_id)
@@ -16996,6 +17303,15 @@ def handle_message(msg):
 
             tg_send_message(chat_id, build_free_resources_summary_text())
             send_misc_menu(chat_id, "Меню Прочее:")
+            return
+
+        if text == MISC_FREE_RESOURCES_DAILY:
+            if not can_see_misc(user_id):
+                send_main_menu(chat_id, "Главное меню:", user_id=user_id)
+                return
+
+            clear_state(user_id)
+            send_free_resources_history_menu(chat_id)
             return
 
         if text == BTN_BACK_FROM_MISC:
@@ -21472,6 +21788,40 @@ def handle_callback_query(callback_query):
             tg_answer_callback_query(callback_id, "Нет доступа")
             return
 
+        if data == "frh_today":
+            tg_answer_callback_query(callback_id)
+            today = datetime.now(MOSCOW_TZ).date()
+            records = [r for r in get_free_resources_history_records() if r["date"] == today]
+            tg_edit_message_text(chat_id, message_id, build_free_resources_history_text(records, page=0), inline_buttons=[])
+            return jsonify({"ok": True})
+
+        if data.startswith("frh_month_current:"):
+            tg_answer_callback_query(callback_id)
+            page = int(data.split(":", 1)[1] or 0)
+            now = datetime.now(MOSCOW_TZ)
+            handle_free_resources_history_month(chat_id, now.strftime("%m.%Y"), page=page, message_id=message_id)
+            return jsonify({"ok": True})
+
+        if data.startswith("frh_month:"):
+            tg_answer_callback_query(callback_id)
+            parts = data.split(":")
+            month_key = parts[1]
+            page = int(parts[2]) if len(parts) > 2 else 0
+            handle_free_resources_history_month(chat_id, month_key, page=page, message_id=message_id)
+            return jsonify({"ok": True})
+
+        if data == "frh_choose_month":
+            tg_answer_callback_query(callback_id)
+            set_state(user_id, {"mode": FREE_RESOURCES_HISTORY_MODE_MONTH, "updated_at": time.time()})
+            tg_send_message(chat_id, "Напиши месяц в формате ММ.ГГГГ, например 06.2026")
+            return jsonify({"ok": True})
+
+        if data == "frh_choose_date":
+            tg_answer_callback_query(callback_id)
+            set_state(user_id, {"mode": FREE_RESOURCES_HISTORY_MODE_DATE, "updated_at": time.time()})
+            tg_send_message(chat_id, "Напиши дату в формате ДД.ММ.ГГГГ, например 03.06.2026")
+            return jsonify({"ok": True})
+
         if data.startswith("fullstats_accounts:"):
             username = data.split(":", 1)[1]
             tg_answer_callback_query(callback_id)
@@ -23022,6 +23372,9 @@ def start_background_threads_once():
 
         ban_storm_thread = threading.Thread(target=ban_storm_monitor_loop, daemon=True)
         ban_storm_thread.start()
+
+        free_resources_history_thread = threading.Thread(target=free_resources_history_scheduler_loop, daemon=True)
+        free_resources_history_thread.start()
 
         if ENABLE_SCHEDULED_STICKER_BROADCAST:
             sticker_thread = threading.Thread(target=sticker_broadcast_loop, daemon=True)
