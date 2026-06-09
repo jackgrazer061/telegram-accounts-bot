@@ -123,6 +123,7 @@ ACCOUNTS_USERS = {
     7045494795: "TessaYang_Accmanager",
     8309499971: "petedavidson_accountmanager",
     7299873991: "Head_of_financeR",
+    8888862689: "vitoscaletta_accountmanager",
 }
 
 FARMERS_USERS = {
