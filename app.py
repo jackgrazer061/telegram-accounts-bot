@@ -557,6 +557,97 @@ CRYPTO_BULK_MODE_CONFIRM = "awaiting_crypto_kings_confirm_bulk"
 
 FARM_KING_BULK_PROXY_TTL = CRYPTO_BULK_PROXY_TTL
 
+# Надёжная память для массовой выдачи king через Octo.
+# Нужна, чтобы бот не терял шаг с proxy и не писал "не понял команду",
+# если обычный user_state был очищен/перезаписан между сообщениями.
+kings_bulk_pending_sessions = {}
+kings_bulk_pending_lock = threading.Lock()
+KINGS_BULK_PENDING_TTL = 60 * 60 * 6
+
+
+def save_kings_bulk_pending_session(user_id, state):
+    try:
+        payload = dict(state or {})
+        payload["_saved_at"] = time.time()
+        with kings_bulk_pending_lock:
+            kings_bulk_pending_sessions[str(user_id)] = payload
+    except Exception:
+        logging.exception("save_kings_bulk_pending_session failed")
+
+
+def get_kings_bulk_pending_session(user_id):
+    try:
+        with kings_bulk_pending_lock:
+            payload = kings_bulk_pending_sessions.get(str(user_id))
+            if not payload:
+                return {}
+            if time.time() - float(payload.get("_saved_at", 0) or 0) > KINGS_BULK_PENDING_TTL:
+                kings_bulk_pending_sessions.pop(str(user_id), None)
+                return {}
+            return dict(payload)
+    except Exception:
+        logging.exception("get_kings_bulk_pending_session failed")
+        return {}
+
+
+def clear_kings_bulk_pending_session(user_id):
+    try:
+        with kings_bulk_pending_lock:
+            kings_bulk_pending_sessions.pop(str(user_id), None)
+    except Exception:
+        logging.exception("clear_kings_bulk_pending_session failed")
+
+
+def is_proxy_like_text(text):
+    text = str(text or "").strip().lower()
+    if not text:
+        return False
+    return (
+        text.startswith("socks5://")
+        or text.startswith("socks4://")
+        or text.startswith("http://")
+        or text.startswith("https://")
+        or re.search(r"\b\d{1,3}(?:\.\d{1,3}){3}:\d{2,5}\b", text) is not None
+        or (":" in text and "@" in text and "." in text)
+    )
+
+
+def recover_kings_bulk_success_results_from_sheet(state):
+    """Если выдача уже записалась в таблицу/Octo, но state с results потерялся,
+    восстанавливаем результат, чтобы бот не писал ложное 'не удалось выдать ни одного king'.
+    """
+    recovered = []
+    queue = list((state or {}).get("kings_bulk_queue", []) or [])
+    if not queue:
+        return []
+
+    try:
+        rows = get_sheet_rows_cached(SHEET_KINGS, force=True)
+    except Exception:
+        logging.exception("recover_kings_bulk_success_results_from_sheet failed to read sheet")
+        return []
+
+    for item in queue:
+        current = dict(item or {})
+        row_index = int(current.get("row_index", 0) or 0)
+        king_name = str(current.get("king_name", "")).strip()
+        if row_index <= 1 or row_index - 1 >= len(rows):
+            continue
+        row = ensure_row_len(rows[row_index - 1], 13)
+        row_name = str(row[0]).strip()
+        row_status = str(row[4]).strip().lower()
+        if row_status == "taken" and (not king_name or row_name.lower() == king_name.lower()):
+            current["king_name"] = row_name or king_name
+            current["price"] = current.get("price") or row[2]
+            current["geo"] = current.get("geo") or row[7]
+            current["data_text"] = current.get("data_text") or get_full_king_data_from_row(row)
+            current["octo_ok"] = True
+            current["error_text"] = ""
+            current["recovered_from_sheet"] = True
+            recovered.append(current)
+    return recovered
+
+
 FARM_KING_OCTO_MODE_SUPPLIER = "awaiting_farm_king_supplier_octo"
 
 FARM_KING_OCTO_MODE_COUNT = "awaiting_farm_kings_count_octo"
@@ -3973,6 +4064,7 @@ def finish_crypto_kings_bulk(chat_id, user_id):
         "updated_at": time.time()
     }
     set_state(user_id, download_state)
+    clear_kings_bulk_pending_session(user_id)
 
     send_kings_menu(chat_id, "Выбери следующее действие:")
 
@@ -12706,6 +12798,7 @@ def send_kings_bulk_found_preview_once(chat_id, user_id):
         logging.exception("send_kings_bulk_found_preview_once failed to save message_id")
 
     set_state_with_custom_ttl(user_id, state, KING_BULK_PROXY_TTL)
+    save_kings_bulk_pending_session(user_id, state)
 
 
 def start_kings_bulk_proxy_step(chat_id, user_id):
@@ -12747,6 +12840,7 @@ def start_kings_bulk_proxy_step(chat_id, user_id):
     # (пользователь может ответить до того как set_state выполнится)
     state["mode"] = KING_OCTO_MODE_BULK_PROXY
     set_state_with_custom_ttl(user_id, state, KING_BULK_PROXY_TTL)
+    save_kings_bulk_pending_session(user_id, state)
 
     sent = tg_send_inline_message(
         chat_id,
@@ -12766,6 +12860,7 @@ def start_kings_bulk_proxy_step(chat_id, user_id):
                 state = get_state(user_id)
                 state["kings_bulk_proxy_message_id"] = message_id
                 set_state_with_custom_ttl(user_id, state, KING_BULK_PROXY_TTL)
+                save_kings_bulk_pending_session(user_id, state)
     except Exception:
         logging.exception("start_kings_bulk_proxy_step failed to save message_id")
 
@@ -13004,8 +13099,14 @@ def process_kings_bulk_proxy_step(chat_id, user_id, username, proxy_text):
     state = get_state(user_id)
 
     if state.get("mode") not in [KING_OCTO_MODE_BULK_PROXY, KING_OCTO_MODE_BULK_CONFIRM]:
-        send_kings_menu(chat_id, "Сначала начни выдачу king заново.")
-        return
+        pending_state = get_kings_bulk_pending_session(user_id)
+        if pending_state and pending_state.get("kings_bulk_queue"):
+            state = pending_state
+            state["mode"] = KING_OCTO_MODE_BULK_PROXY
+            set_state_with_custom_ttl(user_id, state, KING_BULK_PROXY_TTL)
+        else:
+            send_kings_menu(chat_id, "Сначала начни выдачу king заново.")
+            return
 
     if state.get("mode") != KING_OCTO_MODE_BULK_PROXY:
         state["mode"] = KING_OCTO_MODE_BULK_PROXY
@@ -13130,6 +13231,7 @@ def process_kings_bulk_proxy_step(chat_id, user_id, username, proxy_text):
     state["kings_bulk_username"] = username
 
     set_state_with_custom_ttl(user_id, state, KING_BULK_PROXY_TTL)
+    save_kings_bulk_pending_session(user_id, state)
 
     if state["kings_bulk_current_index"] >= len(queue):
         finish_kings_bulk(chat_id, user_id)
@@ -13472,9 +13574,15 @@ def finish_kings_bulk(chat_id, user_id):
     for_whom = state.get("king_for_whom", "")
 
     if not results:
-        clear_state(user_id)
-        send_kings_menu(chat_id, "Не удалось выдать ни одного king.")
-        return
+        results = recover_kings_bulk_success_results_from_sheet(state)
+        if results:
+            state["kings_bulk_results"] = results
+            set_state_with_custom_ttl(user_id, state, KING_BULK_PROXY_TTL)
+        else:
+            clear_state(user_id)
+            clear_kings_bulk_pending_session(user_id)
+            send_kings_menu(chat_id, "Не удалось выдать ни одного king. Проверь логи — результата выдачи не нашёл ни в состоянии, ни в таблице.")
+            return
 
     message_parts = build_kings_bulk_result_messages(results, for_whom)
 
@@ -21850,6 +21958,18 @@ def handle_message(msg):
                 send_main_menu(chat_id, "Главное меню:", user_id=user_id)
             return
 
+        pending_state = get_kings_bulk_pending_session(user_id)
+        if pending_state and pending_state.get("kings_bulk_queue") and is_proxy_like_text(text):
+            pending_state["mode"] = KING_OCTO_MODE_BULK_PROXY
+            set_state_with_custom_ttl(user_id, pending_state, KING_BULK_PROXY_TTL)
+            process_kings_bulk_proxy_step(
+                chat_id=chat_id,
+                user_id=user_id,
+                username=username,
+                proxy_text=text
+            )
+            return
+
         send_main_menu(chat_id, "Не понял команду. Выбери кнопку из меню:", user_id=user_id)
 
     except Exception as e:
@@ -22475,6 +22595,7 @@ def handle_callback_query(callback_query):
                 state["kings_bulk_proxy_message_id"] = message_id
 
             set_state_with_custom_ttl(user_id, state, KING_BULK_PROXY_TTL)
+            save_kings_bulk_pending_session(user_id, state)
 
             if message_id:
                 tg_edit_message_text(
@@ -22510,6 +22631,7 @@ def handle_callback_query(callback_query):
                 state["kings_bulk_confirm_message_id"] = message_id
 
             set_state_with_custom_ttl(user_id, state, KING_BULK_PROXY_TTL)
+            save_kings_bulk_pending_session(user_id, state)
 
             if message_id:
                 tg_edit_message_text(
@@ -22531,6 +22653,7 @@ def handle_callback_query(callback_query):
 
             tg_answer_callback_query(callback_id, "Выдача отменена")
             clear_state(user_id)
+            clear_kings_bulk_pending_session(user_id)
 
             if message_id:
                 tg_edit_message_text(
