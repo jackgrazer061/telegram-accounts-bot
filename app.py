@@ -2564,16 +2564,16 @@ def maybe_save_daily_free_resources_snapshot():
     logging.info(f"Free resources daily snapshot saved for {today}")
 
 
-def free_resources_history_scheduler_loop():
-    logging.info("free_resources_history_scheduler_loop started")
-    while True:
-        try:
-            touch_background_heartbeat()
-            maybe_save_daily_free_resources_snapshot()
-            time.sleep(60)
-        except Exception:
-            logging.exception("free_resources_history_scheduler_loop crashed")
-            time.sleep(60)
+#def free_resources_history_scheduler_loop():
+    #logging.info("free_resources_history_scheduler_loop started")
+    #while True:
+        #try:
+            #touch_background_heartbeat()
+            #maybe_save_daily_free_resources_snapshot()
+            #time.sleep(60)
+        #except Exception:
+            #logging.exception("free_resources_history_scheduler_loop crashed")
+            #time.sleep(60)
 
 def send_admin_farmers_menu(chat_id, text="Admin / Фармеры:"):
     keyboard = [
