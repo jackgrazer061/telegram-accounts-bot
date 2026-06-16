@@ -2564,16 +2564,16 @@ def maybe_save_daily_free_resources_snapshot():
     logging.info(f"Free resources daily snapshot saved for {today}")
 
 
-#def free_resources_history_scheduler_loop():
-    #logging.info("free_resources_history_scheduler_loop started")
-    #while True:
-        #try:
-            #touch_background_heartbeat()
-            #maybe_save_daily_free_resources_snapshot()
-            #time.sleep(60)
-        #except Exception:
-            #logging.exception("free_resources_history_scheduler_loop crashed")
-            #time.sleep(60)
+def free_resources_history_scheduler_loop():
+    logging.info("free_resources_history_scheduler_loop started")
+    while True:
+        try:
+            touch_background_heartbeat()
+            maybe_save_daily_free_resources_snapshot()
+            time.sleep(60)
+        except Exception:
+            logging.exception("free_resources_history_scheduler_loop crashed")
+            time.sleep(60)
 
 def send_admin_farmers_menu(chat_id, text="Admin / Фармеры:"):
     keyboard = [
@@ -23412,8 +23412,8 @@ def start_background_threads_once():
         ban_storm_thread = threading.Thread(target=ban_storm_monitor_loop, daemon=True)
         ban_storm_thread.start()
 
-        free_resources_history_thread = threading.Thread(target=free_resources_history_scheduler_loop, daemon=True)
-        free_resources_history_thread.start()
+        #free_resources_history_thread = threading.Thread(target=free_resources_history_scheduler_loop, daemon=True)
+        #free_resources_history_thread.start()
 
         if ENABLE_SCHEDULED_STICKER_BROADCAST:
             sticker_thread = threading.Thread(target=sticker_broadcast_loop, daemon=True)
