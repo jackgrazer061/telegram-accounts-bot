@@ -592,6 +592,12 @@ google_error_until = 0
 GOOGLE_ERROR_COOLDOWN = 5
 google_error_count = 0
 
+# Фоновые задачи не должны валить Telegram-бота, если Google Sheets дал лимит 429.
+GOOGLE_QUOTA_BACKGROUND_SLEEP = int(os.environ.get("GOOGLE_QUOTA_BACKGROUND_SLEEP", "600"))  # 10 минут
+FREE_RESOURCES_HISTORY_CHECK_INTERVAL = int(os.environ.get("FREE_RESOURCES_HISTORY_CHECK_INTERVAL", "900"))  # 15 минут
+BAN_STORM_MONITOR_INTERVAL = int(os.environ.get("BAN_STORM_MONITOR_INTERVAL", "900"))  # 15 минут
+AUTO_HEALTHCHECK_INITIAL_DELAY = int(os.environ.get("AUTO_HEALTHCHECK_INITIAL_DELAY", "900"))  # 15 минут после старта
+
 def reset_google_cache():
     global gspread_client, sheet_cache, table_cache, basebot_sheet_cache
     gspread_client = None
@@ -947,10 +953,36 @@ def is_google_quota_error(exc):
     text = str(exc).lower()
     return (
         "quota exceeded" in text
+        or "read requests per minute per user" in text
         or "write requests per minute per user" in text
         or "[429]" in text
         or "too many requests" in text
+        or "resource has been exhausted" in text
     )
+
+def is_google_temporarily_unavailable_error(exc):
+    text = str(exc).lower()
+    return (
+        is_google_quota_error(exc)
+        or "google sheets временно перегружен" in text
+        or "temporarily overloaded" in text
+        or "try again" in text
+        or "deadline exceeded" in text
+        or "timed out" in text
+    )
+
+def _set_google_cooldown(seconds):
+    global google_error_until
+    try:
+        seconds = int(seconds)
+    except Exception:
+        seconds = GOOGLE_QUOTA_BACKGROUND_SLEEP
+    google_error_until = max(float(google_error_until or 0), time.time() + max(1, seconds))
+
+def sleep_for_google_cooldown(default_seconds=None):
+    default_seconds = GOOGLE_QUOTA_BACKGROUND_SLEEP if default_seconds is None else int(default_seconds)
+    wait_left = int(max(0, float(google_error_until or 0) - time.time()))
+    time.sleep(max(default_seconds, wait_left))
 
 def google_read_with_retry(action, retries=5):
     delay = 2
@@ -959,10 +991,15 @@ def google_read_with_retry(action, retries=5):
         try:
             return action()
         except Exception as e:
-            if not is_google_quota_error(e) or attempt == retries - 1:
+            if not is_google_quota_error(e):
+                raise
+
+            if attempt == retries - 1:
+                _set_google_cooldown(GOOGLE_QUOTA_BACKGROUND_SLEEP)
                 raise
 
             logging.warning(f"Google read quota hit, retry in {delay}s: {e}")
+            _set_google_cooldown(delay)
             time.sleep(delay)
             delay = min(delay * 2, 12)
 
@@ -973,10 +1010,15 @@ def google_write_with_retry(action, retries=5):
         try:
             return action()
         except Exception as e:
-            if not is_google_quota_error(e) or attempt == retries - 1:
+            if not is_google_quota_error(e):
+                raise
+
+            if attempt == retries - 1:
+                _set_google_cooldown(GOOGLE_QUOTA_BACKGROUND_SLEEP)
                 raise
 
             logging.warning(f"Google write quota hit, retry in {delay}s: {e}")
+            _set_google_cooldown(delay)
             time.sleep(delay)
             delay = min(delay * 2, 12)
 
@@ -2346,13 +2388,10 @@ def get_or_create_free_resources_history_sheet():
                 sheet.update("A1:V1", [FREE_RESOURCES_HISTORY_HEADERS])
                 return sheet
 
-            rows = sheet.get_all_values()
-            if not rows:
+            header_values = sheet.get("A1:V1")
+            header = header_values[0] if header_values else []
+            if len(header) < len(FREE_RESOURCES_HISTORY_HEADERS) or header[:len(FREE_RESOURCES_HISTORY_HEADERS)] != FREE_RESOURCES_HISTORY_HEADERS:
                 sheet.update("A1:V1", [FREE_RESOURCES_HISTORY_HEADERS])
-            else:
-                header = rows[0]
-                if len(header) < len(FREE_RESOURCES_HISTORY_HEADERS) or header[:len(FREE_RESOURCES_HISTORY_HEADERS)] != FREE_RESOURCES_HISTORY_HEADERS:
-                    sheet.update("A1:V1", [FREE_RESOURCES_HISTORY_HEADERS])
             return sheet
 
     return google_write_with_retry(_do)
@@ -2405,21 +2444,31 @@ def save_free_resources_snapshot(snapshot_dt=None):
 
     with free_resources_history_lock:
         sheet = get_or_create_free_resources_history_sheet()
-        rows = sheet.get_all_values()
         row_values = snapshot_to_history_row(build_free_resources_snapshot(), snapshot_dt)
 
+        def _read_dates():
+            with google_lock:
+                return sheet.col_values(1)
+
+        dates = google_read_with_retry(_read_dates)
+
         target_row = None
-        for idx, row in enumerate(rows[1:], start=2):
-            if row and str(row[0]).strip() == snapshot_date:
+        for idx, value in enumerate(dates[1:], start=2):
+            if str(value).strip() == snapshot_date:
                 target_row = idx
                 break
 
         end_col = col_to_letter(len(row_values))
-        if target_row:
-            sheet.update(f"A{target_row}:{end_col}{target_row}", [row_values])
-        else:
-            next_row = len(rows) + 1 if rows else 2
-            sheet.update(f"A{next_row}:{end_col}{next_row}", [row_values])
+
+        def _write_snapshot():
+            with google_lock:
+                if target_row:
+                    sheet.update(f"A{target_row}:{end_col}{target_row}", [row_values])
+                else:
+                    next_row = len(dates) + 1 if dates else 2
+                    sheet.update(f"A{next_row}:{end_col}{next_row}", [row_values])
+
+        google_write_with_retry(_write_snapshot)
 
     return True
 
@@ -2570,10 +2619,14 @@ def free_resources_history_scheduler_loop():
         try:
             touch_background_heartbeat()
             maybe_save_daily_free_resources_snapshot()
-            time.sleep(60)
-        except Exception:
-            logging.exception("free_resources_history_scheduler_loop crashed")
-            time.sleep(60)
+            time.sleep(FREE_RESOURCES_HISTORY_CHECK_INTERVAL)
+        except Exception as e:
+            if is_google_temporarily_unavailable_error(e):
+                logging.warning(f"free_resources_history_scheduler_loop paused: Google Sheets limit/slowdown: {e}")
+                sleep_for_google_cooldown(GOOGLE_QUOTA_BACKGROUND_SLEEP)
+            else:
+                logging.exception("free_resources_history_scheduler_loop crashed")
+                time.sleep(300)
 
 def send_admin_farmers_menu(chat_id, text="Admin / Фармеры:"):
     keyboard = [
@@ -10725,10 +10778,14 @@ def ban_storm_monitor_loop():
             maybe_send_ban_storm_threshold_alerts()
             maybe_send_weekly_ban_storm_report()
             maybe_send_monthly_ban_storm_report()
-            time.sleep(60)
-        except Exception:
-            logging.exception("ban_storm_monitor_loop crashed")
-            time.sleep(60)
+            time.sleep(BAN_STORM_MONITOR_INTERVAL)
+        except Exception as e:
+            if is_google_temporarily_unavailable_error(e):
+                logging.warning(f"ban_storm_monitor_loop paused: Google Sheets limit/slowdown: {e}")
+                sleep_for_google_cooldown(GOOGLE_QUOTA_BACKGROUND_SLEEP)
+            else:
+                logging.exception("ban_storm_monitor_loop crashed")
+                time.sleep(300)
 
 def build_manager_stats_summary_text(username):
     if not username:
@@ -23377,6 +23434,8 @@ def run_auto_healthcheck_once():
 
 
 def auto_healthcheck_loop():
+    logging.info("auto_healthcheck_loop started")
+    time.sleep(AUTO_HEALTHCHECK_INITIAL_DELAY)
     while True:
         try:
             touch_background_heartbeat()
@@ -23384,14 +23443,25 @@ def auto_healthcheck_loop():
             run_auto_healthcheck_once()
             time.sleep(1800)  # каждые 30 минут
         except Exception as e:
-            notify_admin_about_error("auto_healthcheck_loop", str(e))
-            logging.exception("auto_healthcheck_loop crashed")
-            time.sleep(60)
+            if is_google_temporarily_unavailable_error(e):
+                logging.warning(f"auto_healthcheck_loop paused: Google Sheets limit/slowdown: {e}")
+                sleep_for_google_cooldown(GOOGLE_QUOTA_BACKGROUND_SLEEP)
+            else:
+                notify_admin_about_error("auto_healthcheck_loop", str(e))
+                logging.exception("auto_healthcheck_loop crashed")
+                time.sleep(300)
 
-try:
-    ensure_payment_hash_columns_ready()
-except Exception:
-    logging.exception("ensure_payment_hash_columns_ready crashed")
+def startup_google_maintenance_loop():
+    logging.info("startup_google_maintenance_loop started")
+    time.sleep(20)
+    try:
+        ensure_payment_hash_columns_ready()
+        logging.info("startup_google_maintenance_loop finished")
+    except Exception as e:
+        if is_google_temporarily_unavailable_error(e):
+            logging.warning(f"startup_google_maintenance_loop skipped: Google Sheets limit/slowdown: {e}")
+        else:
+            logging.exception("startup_google_maintenance_loop crashed")
 
 def start_background_threads_once():
     global background_threads_started
@@ -23406,14 +23476,17 @@ def start_background_threads_once():
         watchdog_thread = threading.Thread(target=watchdog_loop, daemon=True)
         watchdog_thread.start()
 
+        startup_google_maintenance_thread = threading.Thread(target=startup_google_maintenance_loop, daemon=True)
+        startup_google_maintenance_thread.start()
+
         auto_health_thread = threading.Thread(target=auto_healthcheck_loop, daemon=True)
         auto_health_thread.start()
 
-        #ban_storm_thread = threading.Thread(target=ban_storm_monitor_loop, daemon=True)
-        #ban_storm_thread.start()
+        ban_storm_thread = threading.Thread(target=ban_storm_monitor_loop, daemon=True)
+        ban_storm_thread.start()
 
-        #free_resources_history_thread = threading.Thread(target=free_resources_history_scheduler_loop, daemon=True)
-        #free_resources_history_thread.start()
+        free_resources_history_thread = threading.Thread(target=free_resources_history_scheduler_loop, daemon=True)
+        free_resources_history_thread.start()
 
         if ENABLE_SCHEDULED_STICKER_BROADCAST:
             sticker_thread = threading.Thread(target=sticker_broadcast_loop, daemon=True)
