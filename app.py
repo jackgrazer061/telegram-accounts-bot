@@ -10716,19 +10716,19 @@ def maybe_send_ban_storm_threshold_alerts():
         save_ban_monitor_state_value(state_key, str(next_threshold))
 
 
-#def ban_storm_monitor_loop():
-    #logging.info("ban_storm_monitor_loop started")
+def ban_storm_monitor_loop():
+    logging.info("ban_storm_monitor_loop started")
 
-    #while True:
-        #try:
-            #touch_background_heartbeat()
-            #maybe_send_ban_storm_threshold_alerts()
-            #maybe_send_weekly_ban_storm_report()
-            #maybe_send_monthly_ban_storm_report()
-            #time.sleep(60)
-        #except Exception:
-            #logging.exception("ban_storm_monitor_loop crashed")
-            #time.sleep(60)
+    while True:
+        try:
+            touch_background_heartbeat()
+            maybe_send_ban_storm_threshold_alerts()
+            maybe_send_weekly_ban_storm_report()
+            maybe_send_monthly_ban_storm_report()
+            time.sleep(60)
+        except Exception:
+            logging.exception("ban_storm_monitor_loop crashed")
+            time.sleep(60)
 
 def build_manager_stats_summary_text(username):
     if not username:
@@ -23409,8 +23409,8 @@ def start_background_threads_once():
         auto_health_thread = threading.Thread(target=auto_healthcheck_loop, daemon=True)
         auto_health_thread.start()
 
-        ban_storm_thread = threading.Thread(target=ban_storm_monitor_loop, daemon=True)
-        ban_storm_thread.start()
+        #ban_storm_thread = threading.Thread(target=ban_storm_monitor_loop, daemon=True)
+        #ban_storm_thread.start()
 
         #free_resources_history_thread = threading.Thread(target=free_resources_history_scheduler_loop, daemon=True)
         #free_resources_history_thread.start()
