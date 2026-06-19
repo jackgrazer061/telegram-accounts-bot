@@ -116,14 +116,11 @@ ERROR_NOTIFY_COOLDOWN = 300  # 5 минут на одинаковую ошибк
 ACCOUNTS_USERS = {
     7953116439: "WillemDafoe_Accmanager",
     8334712952: "Ariana_Grande_Account_manager",
-    7851493919: "CateBlanchettAccountManager",
     7426931469: "JimCarrey_AccountManager",
-    8035275476: "SeanConneryManager",
     8435159019: "Robert_Pattinson_Account_Manager",
     7045494795: "TessaYang_Accmanager",
     8309499971: "petedavidson_accountmanager",
     7299873991: "Head_of_financeR",
-    8888862689: "vitoscaletta_accountmanager",
 }
 
 FARMERS_USERS = {
