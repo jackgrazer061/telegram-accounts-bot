@@ -129,7 +129,6 @@ FARMERS_USERS = {
     8589105033: "owenwilson_farmer",
     8503147017: "zendaya_farmer",
     8797795819: "markzuckerberg_farm",
-    8436601290: "BillGates_Farmer",
 }
 
 MISC_HIDDEN_USERS = {
@@ -6876,6 +6875,154 @@ def build_pixel_search_text(pixel_query):
         f"Дата выдачи: {row[5] or 'не указана'}\n"
         f"Кто взял: {row[6] or 'не указано'}\n\n"
         f"Данные:\n{row[7] or 'нет данных'}"
+    )
+
+
+# =========================
+# EDIT PIXEL BUYER FROM SEARCH
+# =========================
+pixel_search_edit_sessions = {}
+pixel_search_edit_lock = threading.Lock()
+PIXEL_SEARCH_EDIT_TTL = 60 * 60 * 24
+
+def cleanup_pixel_search_edit_sessions():
+    now = time.time()
+    with pixel_search_edit_lock:
+        expired = []
+        for token, payload in pixel_search_edit_sessions.items():
+            last_ts = max(float(payload.get("created_at", 0) or 0), float(payload.get("updated_at", 0) or 0))
+            if not last_ts or now - last_ts > PIXEL_SEARCH_EDIT_TTL:
+                expired.append(token)
+        for token in expired:
+            pixel_search_edit_sessions.pop(token, None)
+
+def create_pixel_search_edit_session(user_id, found):
+    cleanup_pixel_search_edit_sessions()
+    token = uuid.uuid4().hex[:12]
+    row = ensure_row_len(found.get("row", []), 9)
+    data_text = str(row[7] or "")
+    payload = {
+        "user_id": int(user_id),
+        "row_index": int(found.get("row_index", 0) or 0),
+        "pixel_name": extract_pixel_name_from_data(data_text),
+        "pixel_id": extract_pixel_id_from_data(data_text),
+        "created_at": time.time(),
+        "updated_at": time.time(),
+    }
+    with pixel_search_edit_lock:
+        pixel_search_edit_sessions[token] = payload
+    return token
+
+def get_pixel_search_edit_session(token):
+    cleanup_pixel_search_edit_sessions()
+    with pixel_search_edit_lock:
+        payload = pixel_search_edit_sessions.get(str(token))
+        if not payload:
+            return None
+        return dict(payload)
+
+def update_pixel_search_edit_session(token, **kwargs):
+    with pixel_search_edit_lock:
+        payload = pixel_search_edit_sessions.get(str(token))
+        if not payload:
+            return False
+        payload.update(kwargs)
+        payload["updated_at"] = time.time()
+        pixel_search_edit_sessions[str(token)] = payload
+        return True
+
+def build_pixel_search_entry_inline_buttons(token):
+    return [[{
+        "text": "Поменять байера",
+        "callback_data": f"edit_pixel_buyer:{token}"
+    }]]
+
+def build_pixel_buyer_department_inline_buttons(token):
+    return [
+        [
+            {"text": DEPT_CRYPTO, "callback_data": f"edit_pixel_buyer_dept:{token}:crypto"},
+            {"text": DEPT_GAMBLA, "callback_data": f"edit_pixel_buyer_dept:{token}:gambla"},
+        ],
+        [{"text": DEPT_OTHER, "callback_data": f"edit_pixel_buyer_dept:{token}:misc"}],
+        [{"text": "⬅️ Назад", "callback_data": f"edit_pixel_back:{token}"}],
+    ]
+
+def build_pixel_buyer_person_inline_buttons(token, department_key):
+    names = get_department_people_by_key(department_key)
+    if not names:
+        return build_pixel_buyer_department_inline_buttons(token)
+
+    keyboard = []
+    row = []
+    for idx, name in enumerate(names):
+        row.append({
+            "text": str(name),
+            "callback_data": f"edit_pixel_buyer_person:{token}:{department_key}:{idx}"
+        })
+        if len(row) == 2:
+            keyboard.append(row)
+            row = []
+    if row:
+        keyboard.append(row)
+    keyboard.append([{
+        "text": "⬅️ Назад",
+        "callback_data": f"edit_pixel_buyer:{token}"
+    }])
+    return keyboard
+
+def change_searched_pixel_buyer(session_token, new_for_whom):
+    session = get_pixel_search_edit_session(session_token)
+    if not session:
+        return False, "Кнопка устарела. Найди пиксель заново."
+
+    row_index = int(session.get("row_index", 0) or 0)
+    new_for_whom = str(new_for_whom or "").strip()
+    if not row_index:
+        return False, "Не удалось определить пиксель. Найди его заново."
+    if not new_for_whom:
+        return False, "Не удалось определить нового байера."
+
+    live_row = get_sheet_row_live(SHEET_PIXELS, row_index, 10)
+    if not live_row or not any(str(x).strip() for x in live_row):
+        return False, "Строка пикселя не найдена. Найди его заново."
+
+    live_row = ensure_row_len(live_row, 10)
+    status = str(live_row[3]).strip().lower()
+    old_for_whom = str(live_row[4]).strip()
+    data_text = str(live_row[7] or "")
+    pixel_name = extract_pixel_name_from_data(data_text)
+    pixel_id = extract_pixel_id_from_data(data_text)
+
+    if status != "taken":
+        return False, "Байера можно менять только у выданного пикселя."
+    if old_for_whom == new_for_whom:
+        return False, "Это уже текущий байер."
+
+    sheet_update_and_refresh(
+        SHEET_PIXELS,
+        f"E{row_index}:E{row_index}",
+        [[new_for_whom]]
+    )
+
+    issue_info = find_last_pixel_issue_row(pixel_name=pixel_name, pixel_id=pixel_id)
+    issue_updated = False
+    if issue_info:
+        sheet_update_and_refresh(
+            SHEET_ISSUES,
+            f"G{issue_info['row_index']}:G{issue_info['row_index']}",
+            [[new_for_whom]]
+        )
+        issue_updated = True
+
+    update_pixel_search_edit_session(session_token, pixel_name=pixel_name, pixel_id=pixel_id)
+    invalidate_stats_cache()
+
+    title = pixel_id or pixel_name or "пикселя"
+    if issue_updated:
+        return True, f"Байер изменён для пикселя {title}: {old_for_whom or 'не указано'} → {new_for_whom}"
+    return True, (
+        f"Байер изменён для пикселя {title}: {old_for_whom or 'не указано'} → {new_for_whom}\n"
+        f"Но строка в {SHEET_ISSUES} не найдена."
     )
 
 def extract_pixel_name_from_data(data_text):
@@ -20382,14 +20529,16 @@ def handle_message(msg):
                 tg_send_message(chat_id, "Впиши ID пикселя или данные Пикселя.")
                 return
 
-            result = build_pixel_search_text(pixel_query)
+            found = find_pixel_in_base_by_data(pixel_query)
             clear_state(user_id)
 
-            if not result:
+            if not found:
                 send_pixels_menu(chat_id, "Пиксель не найден.")
                 return
 
-            tg_send_message(chat_id, result)
+            result = build_pixel_search_text(pixel_query)
+            token = create_pixel_search_edit_session(user_id, found)
+            tg_send_inline_message(chat_id, result, build_pixel_search_entry_inline_buttons(token))
             send_pixels_menu(chat_id, "Выбери следующее действие:")
             return
 
@@ -22299,6 +22448,109 @@ def handle_callback_query(callback_query):
                 chat_id,
                 message_id,
                 inline_buttons=build_king_search_edit_inline_buttons(session_token)
+            )
+            tg_send_message(chat_id, message)
+            return jsonify({"ok": True})
+
+        if data.startswith("edit_pixel_back:"):
+            session_token = data.split(":", 1)[1]
+            session = get_pixel_search_edit_session(session_token)
+
+            if not session:
+                tg_answer_callback_query(callback_id, "Кнопка устарела. Найди пиксель заново")
+                return jsonify({"ok": True})
+
+            if int(session.get("user_id", 0)) != int(user_id):
+                tg_answer_callback_query(callback_id, "Это не ваша кнопка")
+                return jsonify({"ok": True})
+
+            tg_answer_callback_query(callback_id)
+            tg_edit_message_reply_markup(
+                chat_id,
+                message_id,
+                inline_buttons=build_pixel_search_entry_inline_buttons(session_token)
+            )
+            return jsonify({"ok": True})
+
+        if data.startswith("edit_pixel_buyer:"):
+            session_token = data.split(":", 1)[1]
+            session = get_pixel_search_edit_session(session_token)
+
+            if not session:
+                tg_answer_callback_query(callback_id, "Кнопка устарела. Найди пиксель заново")
+                return jsonify({"ok": True})
+
+            if int(session.get("user_id", 0)) != int(user_id):
+                tg_answer_callback_query(callback_id, "Это не ваша кнопка")
+                return jsonify({"ok": True})
+
+            tg_answer_callback_query(callback_id, "Выбери отдел")
+            tg_edit_message_reply_markup(
+                chat_id,
+                message_id,
+                inline_buttons=build_pixel_buyer_department_inline_buttons(session_token)
+            )
+            return jsonify({"ok": True})
+
+        if data.startswith("edit_pixel_buyer_dept:"):
+            _, session_token, department_key = data.split(":", 2)
+            session = get_pixel_search_edit_session(session_token)
+
+            if not session:
+                tg_answer_callback_query(callback_id, "Кнопка устарела. Найди пиксель заново")
+                return jsonify({"ok": True})
+
+            if int(session.get("user_id", 0)) != int(user_id):
+                tg_answer_callback_query(callback_id, "Это не ваша кнопка")
+                return jsonify({"ok": True})
+
+            if department_key not in ["crypto", "gambla", "misc"]:
+                tg_answer_callback_query(callback_id, "Неизвестный отдел")
+                return jsonify({"ok": True})
+
+            tg_answer_callback_query(callback_id, "Выбери байера")
+            tg_edit_message_reply_markup(
+                chat_id,
+                message_id,
+                inline_buttons=build_pixel_buyer_person_inline_buttons(session_token, department_key)
+            )
+            return jsonify({"ok": True})
+
+        if data.startswith("edit_pixel_buyer_person:"):
+            _, session_token, department_key, person_index_raw = data.split(":", 3)
+            session = get_pixel_search_edit_session(session_token)
+
+            if not session:
+                tg_answer_callback_query(callback_id, "Кнопка устарела. Найди пиксель заново")
+                return jsonify({"ok": True})
+
+            if int(session.get("user_id", 0)) != int(user_id):
+                tg_answer_callback_query(callback_id, "Это не ваша кнопка")
+                return jsonify({"ok": True})
+
+            names = get_department_people_by_key(department_key)
+            if not names:
+                tg_answer_callback_query(callback_id, "Неизвестный отдел")
+                return jsonify({"ok": True})
+
+            try:
+                person_index = int(person_index_raw)
+            except Exception:
+                tg_answer_callback_query(callback_id, "Не удалось определить байера")
+                return jsonify({"ok": True})
+
+            if person_index < 0 or person_index >= len(names):
+                tg_answer_callback_query(callback_id, "Не удалось определить байера")
+                return jsonify({"ok": True})
+
+            buyer_name = normalize_person_name(names[person_index])
+            ok, message = change_searched_pixel_buyer(session_token, buyer_name)
+
+            tg_answer_callback_query(callback_id, "Байер изменён" if ok else "Не удалось изменить байера")
+            tg_edit_message_reply_markup(
+                chat_id,
+                message_id,
+                inline_buttons=build_pixel_search_entry_inline_buttons(session_token)
             )
             tg_send_message(chat_id, message)
             return jsonify({"ok": True})
