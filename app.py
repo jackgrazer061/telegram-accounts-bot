@@ -16522,7 +16522,7 @@ def build_crypto_king_octo_payload(profile_name, parsed, proxy_data=None):
         "bookmarks": [
             {"url": "https://www.facebook.com"},
             {"url": "https://adsmanager.facebook.com"},
-            {"url": "https://2fa.cn"}
+            {"url": "https://2fa.fb.tools/"}
         ]
     }
 
@@ -16552,7 +16552,7 @@ def build_farm_king_octo_payload(profile_name, parsed, proxy_data=None):
         "bookmarks": [
             {"url": "https://www.facebook.com"},
             {"url": "https://adsmanager.facebook.com"},
-            {"url": "https://2fa.cn"}
+            {"url": "https://2fa.fb.tools/"}
         ]
     }
 
