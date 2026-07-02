@@ -49,6 +49,7 @@ OCTO_CRYPTO_EXTENSIONS = [
     "naciaagbkifhpnoodlkhbejjldaiffcm@1.6.9",     # Get Token Cookie
     "lopekoolgoijpmaidblgfgelbkfkgmod@0.6.0",     # Pass key
     "ifmhoabcaeehkljcfclfiieohkohdgbb@31.1.0",    # FIXER
+    "akoipecnmccknajeplmlegokpehheimg@2.2.4",    # fbspider
 ]
 
 OCTO_FARM_EXTENSIONS = [
@@ -61,6 +62,7 @@ OCTO_FARM_EXTENSIONS = [
     "naciaagbkifhpnoodlkhbejjldaiffcm@1.6.9",     # Get Token Cookie
     "lopekoolgoijpmaidblgfgelbkfkgmod@0.6.0",     # Pass key
     "ifmhoabcaeehkljcfclfiieohkohdgbb@31.1.0",    # FIXER
+    "akoipecnmccknajeplmlegokpehheimg@2.2.4",    # fbspider
 ]
 
 if not BOT_TOKEN:
@@ -129,6 +131,7 @@ FARMERS_USERS = {
     8589105033: "owenwilson_farmer",
     8503147017: "zendaya_farmer",
     8797795819: "markzuckerberg_farm",
+    8276201410: "AmandaSeyfried_Farmer",
 }
 
 MISC_HIDDEN_USERS = {
