@@ -43,9 +43,9 @@ OCTO_CRYPTO_EXTENSIONS = [
     "jdiljjjlnmciheackloanmdcnkoknpji@1.6",       # Access Token Extractor by FBTOOL.PRO
     "lanhjpladilgmdkepgeggnllpiofkefi@0.6",       # Ads Trust
     "hlkenndednhfkekhgcdicdfddnkalmdm@1.13.0",    # Cookie-Editor
-    "igafpbafmdnfippffaclpmblflhjkbje@1.23.1",    # FBHelper
+    "igafpbafmdnfippffaclpmblflhjkbje@1.24.2",    # FBHelper
     "fdgfkebogiimcoedlicjlajpkdmockpc@4.0.5",     # Meta Pixel Helper
-    "nmnnilimjhkbdmnpojpbihmnphkneckf@1.0.9",     # SMIT Connect
+    "nmnnilimjhkbdmnpojpbihmnphkneckf@1.1.0",     # SMIT Connect
     "naciaagbkifhpnoodlkhbejjldaiffcm@1.6.9",     # Get Token Cookie
     "lopekoolgoijpmaidblgfgelbkfkgmod@0.6.0",     # Pass key
     "ifmhoabcaeehkljcfclfiieohkohdgbb@31.1.0",    # FIXER
@@ -56,9 +56,9 @@ OCTO_FARM_EXTENSIONS = [
     "jdiljjjlnmciheackloanmdcnkoknpji@1.6",       # Access Token Extractor by FBTOOL.PRO
     "lanhjpladilgmdkepgeggnllpiofkefi@0.6",       # Ads Trust
     "hlkenndednhfkekhgcdicdfddnkalmdm@1.13.0",    # Cookie-Editor
-    "igafpbafmdnfippffaclpmblflhjkbje@1.23.1",    # FBHelper
+    "igafpbafmdnfippffaclpmblflhjkbje@1.24.2",    # FBHelper
     "fdgfkebogiimcoedlicjlajpkdmockpc@4.0.5",     # Meta Pixel Helper
-    "nmnnilimjhkbdmnpojpbihmnphkneckf@1.0.9",     # SMIT Connect
+    "nmnnilimjhkbdmnpojpbihmnphkneckf@1.1.0",     # SMIT Connect
     "naciaagbkifhpnoodlkhbejjldaiffcm@1.6.9",     # Get Token Cookie
     "lopekoolgoijpmaidblgfgelbkfkgmod@0.6.0",     # Pass key
     "ifmhoabcaeehkljcfclfiieohkohdgbb@31.1.0",    # FIXER
