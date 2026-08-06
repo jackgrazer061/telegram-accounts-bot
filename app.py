@@ -87,7 +87,6 @@ if not BASEBOT_SPREADSHEET_ID:
 
 ADMINS = {
     7573650707: "JackGrazer_Deputy_Head_Account",
-    7681133609: "Cillian_Murphy_Head_of_Account",
 }
 
 ADMIN_FARM_USERS = {
@@ -123,6 +122,7 @@ ACCOUNTS_USERS = {
     7045494795: "TessaYang_Accmanager",
     8309499971: "petedavidson_accountmanager",
     7299873991: "Head_of_financeR",
+    8005881362: "madelinewesker_account",
 }
 
 FARMERS_USERS = {
