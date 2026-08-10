@@ -16914,7 +16914,8 @@ def send_all_users_stats(chat_id):
 # =========================
 ASSEMBLY_HEADERS = [
     "Название", "Статус", "Дата создания", "Создал ID", "Создал",
-    "Кинги", "Лички", "БМ", "Кому выдано", "Цена выдачи", "Дата выдачи"
+    "Кинги", "Лички", "БМ", "Кому выдано", "Цена выдачи", "Дата выдачи",
+    "Активные кинги", "Активные лички", "Активные БМ"
 ]
 assembly_sheet_lock = threading.RLock()
 
@@ -16927,13 +16928,13 @@ def get_or_create_assemblies_sheet():
             try:
                 sheet = spreadsheet.worksheet(SHEET_ASSEMBLIES)
             except gspread.exceptions.WorksheetNotFound:
-                sheet = spreadsheet.add_worksheet(title=SHEET_ASSEMBLIES, rows=3000, cols=16)
-                sheet.update("A1:K1", [ASSEMBLY_HEADERS])
+                sheet = spreadsheet.add_worksheet(title=SHEET_ASSEMBLIES, rows=3000, cols=18)
+                sheet.update("A1:N1", [ASSEMBLY_HEADERS])
                 return sheet
 
-            header = sheet.get("A1:K1")
+            header = sheet.get("A1:N1")
             if not header or not header[0] or header[0][:len(ASSEMBLY_HEADERS)] != ASSEMBLY_HEADERS:
-                sheet.update("A1:K1", [ASSEMBLY_HEADERS])
+                sheet.update("A1:N1", [ASSEMBLY_HEADERS])
             return sheet
     return google_write_with_retry(_do)
 
@@ -17016,12 +17017,24 @@ def decode_assembly_accounts(value):
 
 def assembly_row_to_record(row_index, raw_row):
     row = ensure_row_len(list(raw_row or []), len(ASSEMBLY_HEADERS))
+
+    # F/G/H — визуальная история замен (старое красным, актуальное зелёным).
+    # L/M/N — только актуальные значения, которыми пользуется логика бота.
+    # Для старых строк, созданных до добавления L/M/N, используем F/G/H как fallback.
+    active_kings_raw = str(row[11]).strip() if str(row[11]).strip() else str(row[5])
+    active_accounts_raw = str(row[12]).strip() if str(row[12]).strip() else str(row[6])
+    active_bms_raw = str(row[13]).strip() if str(row[13]).strip() else str(row[7])
+
     return {
         "row_index": int(row_index), "name": str(row[0]).strip(), "status": str(row[1]).strip(),
         "created_at": str(row[2]).strip(), "creator_id": str(row[3]).strip(), "creator": str(row[4]).strip(),
-        "kings": parse_assembly_lines(row[5]), "accounts": decode_assembly_accounts(row[6]),
-        "bms": parse_assembly_lines(row[7]), "buyer": str(row[8]).strip(),
-        "issue_price": str(row[9]).strip(), "issued_at": str(row[10]).strip(),
+        "kings": parse_assembly_lines(active_kings_raw),
+        "accounts": decode_assembly_accounts(active_accounts_raw),
+        "bms": parse_assembly_lines(active_bms_raw),
+        "buyer": str(row[8]).strip(), "issue_price": str(row[9]).strip(), "issued_at": str(row[10]).strip(),
+        "history_kings_raw": str(row[5] or ""),
+        "history_accounts_raw": str(row[6] or ""),
+        "history_bms_raw": str(row[7] or ""),
     }
 
 
@@ -17054,7 +17067,7 @@ def get_assembly_record(row_index):
 
     with assembly_sheet_lock:
         sheet = get_or_create_assemblies_sheet()
-        values = google_read_with_retry(lambda: sheet.get(f"A{row_index}:K{row_index}"))
+        values = google_read_with_retry(lambda: sheet.get(f"A{row_index}:N{row_index}"))
 
     if not values or not values[0]:
         return None
@@ -17068,6 +17081,242 @@ def update_assembly_cells(row_index, cell_range_suffix, values):
         sheet = get_or_create_assemblies_sheet()
         google_write_with_retry(lambda: sheet.update(f"{cell_range_suffix}{row_index}", [values]))
 
+
+
+ASSEMBLY_HISTORY_RED = {"red": 0.85, "green": 0.12, "blue": 0.12}
+ASSEMBLY_HISTORY_GREEN = {"red": 0.05, "green": 0.62, "blue": 0.20}
+
+
+def build_assembly_rich_text_request(sheet_id, row_index, column_index_zero_based, old_text, new_text):
+    """Создаёт updateCells для истории замен в одной ячейке.
+
+    Всё, что уже было в ячейке, становится красным. Новый актуальный блок
+    добавляется снизу и становится зелёным.
+    """
+    old_text = str(old_text or "").rstrip()
+    new_text = str(new_text or "").strip()
+
+    if old_text and new_text:
+        full_text = old_text + "\\n" + new_text
+        green_start = len(old_text) + 1
+    elif new_text:
+        full_text = new_text
+        green_start = 0
+    else:
+        full_text = old_text
+        green_start = len(full_text)
+
+    runs = []
+    if old_text:
+        runs.append({
+            "startIndex": 0,
+            "format": {"foregroundColor": ASSEMBLY_HISTORY_RED}
+        })
+    if new_text:
+        runs.append({
+            "startIndex": green_start,
+            "format": {"foregroundColor": ASSEMBLY_HISTORY_GREEN}
+        })
+
+    return {
+        "updateCells": {
+            "range": {
+                "sheetId": int(sheet_id),
+                "startRowIndex": int(row_index) - 1,
+                "endRowIndex": int(row_index),
+                "startColumnIndex": int(column_index_zero_based),
+                "endColumnIndex": int(column_index_zero_based) + 1,
+            },
+            "rows": [{
+                "values": [{
+                    "userEnteredValue": {"stringValue": full_text},
+                    "textFormatRuns": runs,
+                }]
+            }],
+            "fields": "userEnteredValue,textFormatRuns",
+        }
+    }
+
+
+def find_assembly_issue_row(assembly_name):
+    """Находит последнюю строку выдачи конкретной сборки в Простые лички 26."""
+    target = str(assembly_name or "").strip().lower()
+    if not target:
+        return None
+
+    rows = get_sheet_rows_cached(SHEET_ISSUES, force=True)
+    found = None
+    for idx, raw_row in enumerate(rows[1:], start=2):
+        row = ensure_row_len(list(raw_row or []), 10)
+        if str(row[0]).strip().lower() != target:
+            continue
+        issue_type = str(row[1]).strip().lower()
+        if issue_type not in {"сборка", "assembly"}:
+            continue
+        found = idx
+    return found
+
+
+def apply_assembly_replacement(row_index, field, new_active_text, expense_party="", buyer_surcharge=None):
+    """Сохраняет замену без удаления старых данных.
+
+    F/G/H: история — старое красным, новый блок зелёным.
+    L/M/N: только актуальные значения для логики бота.
+
+    Если расход относится на байера, цена сборки и её строка в Простые лички 26
+    меняются одним batchUpdate вместе с заменой.
+    """
+    rec = get_assembly_record(row_index)
+    if not rec:
+        return False, "Сборка не найдена."
+
+    field_map = {
+        "kings": (5, 11, rec.get("history_kings_raw", "")),
+        "accounts": (6, 12, rec.get("history_accounts_raw", "")),
+        "bms": (7, 13, rec.get("history_bms_raw", "")),
+    }
+    if field not in field_map:
+        return False, "Неизвестное поле сборки."
+
+    history_col, active_col, old_history = field_map[field]
+    new_active_text = str(new_active_text or "").strip()
+    if not new_active_text:
+        return False, "Новые данные пустые."
+
+    is_issued = rec["status"].strip().lower() == "taken"
+    expense_party = str(expense_party or "").strip().lower()
+
+    new_price = None
+    issue_row_index = None
+
+    if is_issued and expense_party == "buyer":
+        surcharge_num = parse_price(buyer_surcharge)
+        if surcharge_num is None:
+            return False, "Доплата указана неверно."
+        if float(surcharge_num) < 0:
+            return False, "Доплата не может быть отрицательной."
+
+        current_price = parse_price(rec.get("issue_price", ""))
+        if current_price is None:
+            current_price = 0
+        new_price = float(current_price) + float(surcharge_num)
+        issue_row_index = find_assembly_issue_row(rec["name"])
+        if not issue_row_index:
+            return False, (
+                f"Не нашёл выдачу сборки {rec['name']} в листе {SHEET_ISSUES}. "
+                "Замена и изменение цены не выполнены."
+            )
+
+    with issue_lock:
+        with assembly_sheet_lock:
+            assembly_sheet = get_or_create_assemblies_sheet()
+            client = get_gspread_client()
+            spreadsheet = client.open_by_key(SPREADSHEET_ID)
+
+            requests_list = [
+                build_assembly_rich_text_request(
+                    assembly_sheet.id, row_index, history_col, old_history, new_active_text
+                ),
+                {
+                    "updateCells": {
+                        "range": {
+                            "sheetId": assembly_sheet.id,
+                            "startRowIndex": int(row_index) - 1,
+                            "endRowIndex": int(row_index),
+                            "startColumnIndex": active_col,
+                            "endColumnIndex": active_col + 1,
+                        },
+                        "rows": [_assembly_google_row([new_active_text])],
+                        "fields": "userEnteredValue",
+                    }
+                },
+            ]
+
+            if new_price is not None:
+                normalized_new_price = normalize_numeric_for_sheet(new_price)
+                requests_list.append({
+                    "updateCells": {
+                        "range": {
+                            "sheetId": assembly_sheet.id,
+                            "startRowIndex": int(row_index) - 1,
+                            "endRowIndex": int(row_index),
+                            "startColumnIndex": 9,
+                            "endColumnIndex": 10,
+                        },
+                        "rows": [_assembly_google_row([normalized_new_price])],
+                        "fields": "userEnteredValue",
+                    }
+                })
+
+                issues_sheet = get_sheet(SHEET_ISSUES)
+                requests_list.append({
+                    "updateCells": {
+                        "range": {
+                            "sheetId": issues_sheet.id,
+                            "startRowIndex": int(issue_row_index) - 1,
+                            "endRowIndex": int(issue_row_index),
+                            "startColumnIndex": 3,
+                            "endColumnIndex": 4,
+                        },
+                        "rows": [_assembly_google_row([normalized_new_price])],
+                        "fields": "userEnteredValue",
+                    }
+                })
+
+            google_write_with_retry(
+                lambda: spreadsheet.batch_update({"requests": requests_list})
+            )
+
+    if new_price is not None:
+        mark_sheet_cache_stale(SHEET_ISSUES)
+        invalidate_stats_cache()
+        return True, (
+            f"✅ Данные сборки обновлены.\\n"
+            f"Расход: на байера\\n"
+            f"Новая цена сборки: {format_issue_price(new_price)}"
+        )
+
+    party_labels = {
+        "company": "на компанию",
+        "seller": "на селлера",
+        "buyer": "на байера",
+    }
+    suffix = f"\\nРасход: {party_labels.get(expense_party, expense_party)}" if is_issued and expense_party else ""
+    return True, "✅ Данные сборки обновлены." + suffix
+
+
+def build_assembly_expense_buttons(row_index, field):
+    return [[
+        {"text": "На байера", "callback_data": f"asm_expense:{row_index}:{field}:buyer"},
+        {"text": "На компанию", "callback_data": f"asm_expense:{row_index}:{field}:company"},
+    ], [
+        {"text": "На селлера", "callback_data": f"asm_expense:{row_index}:{field}:seller"},
+    ]]
+
+
+def assembly_edit_prompt_for_field(field):
+    if field == "kings":
+        return "Отправь новый список кингов, каждый с новой строки. Старые останутся в истории красным, новые будут зелёным."
+    if field == "accounts":
+        return "Отправь новый список личек, каждая с новой строки. Карты и таймзоны сохранятся по порядку для существующих позиций. Старые лички останутся красным, новые будут зелёным."
+    if field == "bms":
+        return "Отправь новые BM ID, каждый с новой строки. Старые останутся в истории красным, новые будут зелёным."
+    return "Отправь новые данные."
+
+
+def set_assembly_replacement_input_state(user_id, row_index, field, expense_party=""):
+    mode_map = {
+        "kings": "assembly_edit_kings",
+        "accounts": "assembly_edit_accounts",
+        "bms": "assembly_edit_bms",
+    }
+    set_state(user_id, {
+        "mode": mode_map[field],
+        "assembly_row_index": int(row_index),
+        "assembly_edit_field": field,
+        "assembly_expense_party": str(expense_party or ""),
+        "last_farmers_section": "assemblies",
+    })
 
 def create_assembly(user_id, telegram_username, kings, accounts, bms):
     creator = assembly_creator_name(user_id, telegram_username)
@@ -17085,11 +17334,28 @@ def create_assembly(user_id, telegram_username, kings, accounts, bms):
                 max_n = max(max_n, int(m.group(1)))
         name = f"{creator}-{max_n + 1}"
         next_row = len(rows) + 1
+        kings_text = "\n".join(kings)
+        accounts_text = encode_assembly_accounts(accounts)
+        bms_text = "\n".join(bms)
         values = [
             name, "free", today, str(user_id), creator,
-            "\n".join(kings), encode_assembly_accounts(accounts), "\n".join(bms), "", "", ""
+            kings_text, accounts_text, bms_text, "", "", "",
+            kings_text, accounts_text, bms_text
         ]
-        google_write_with_retry(lambda: sheet.update(f"A{next_row}:K{next_row}", [values]))
+        google_write_with_retry(lambda: sheet.update(f"A{next_row}:N{next_row}", [values]))
+
+        # Текущие данные новой сборки сразу подсвечиваем зелёным.
+        try:
+            requests_body = {
+                "requests": [
+                    build_assembly_rich_text_request(sheet.id, next_row, 5, "", kings_text),
+                    build_assembly_rich_text_request(sheet.id, next_row, 6, "", accounts_text),
+                    build_assembly_rich_text_request(sheet.id, next_row, 7, "", bms_text),
+                ]
+            }
+            spreadsheet.batch_update(requests_body)
+        except Exception:
+            logging.exception("assembly initial green formatting failed")
     return name
 
 
@@ -17099,7 +17365,7 @@ def format_assembly_full(rec):
     lines += ["", "👤 Лички:"]
     if rec["accounts"]:
         for x in rec["accounts"]:
-            lines.append(f"• {x['login']} — карта {x['card']} — TZ {x['timezone']}")
+            lines.append(f"• {x['login']} — карта {x.get('card') or 'не указана'} — TZ {x.get('timezone') or 'не указана'}")
     else:
         lines.append("—")
     lines += ["", "📁 БМ:"]
@@ -17222,7 +17488,7 @@ def issue_assembly(row_index, buyer, price):
             # Проверяем статус непосредственно перед записью, чтобы два человека
             # не смогли одновременно выдать одну и ту же сборку.
             live_values = google_read_with_retry(
-                lambda: assembly_sheet.get(f"A{row_index}:K{row_index}")
+                lambda: assembly_sheet.get(f"A{row_index}:N{row_index}")
             )
             if not live_values or not live_values[0]:
                 return False, "Сборка не найдена."
@@ -17406,24 +17672,89 @@ def handle_message(msg):
                 clear_state(user_id)
                 tg_send_message(chat_id, "Сборка не найдена.")
                 return
+
             values = parse_assembly_lines(text)
             if not values:
                 tg_send_message(chat_id, "Список пустой. Отправь новые данные.")
                 return
+
             if assembly_mode == "assembly_edit_kings":
-                update_assembly_cells(row_index, "F", ["\n".join(values)])
+                field = "kings"
+                new_active_text = "\n".join(values)
             elif assembly_mode == "assembly_edit_bms":
-                update_assembly_cells(row_index, "H", ["\n".join(values)])
+                field = "bms"
+                new_active_text = "\n".join(values)
             else:
-                old = rec["accounts"]
+                field = "accounts"
+                old_accounts = rec["accounts"]
                 new_accounts = []
                 for i, login in enumerate(values):
-                    old_item = old[i] if i < len(old) else {"card": "", "timezone": ""}
-                    new_accounts.append({"login": login, "card": old_item.get("card", ""), "timezone": old_item.get("timezone", "")})
-                update_assembly_cells(row_index, "G", [encode_assembly_accounts(new_accounts)])
+                    old_item = old_accounts[i] if i < len(old_accounts) else {"card": "", "timezone": ""}
+                    new_accounts.append({
+                        "login": login,
+                        "card": old_item.get("card", ""),
+                        "timezone": old_item.get("timezone", "")
+                    })
+                new_active_text = encode_assembly_accounts(new_accounts)
+
+            expense_party = str(state.get("assembly_expense_party", "") or "").strip().lower()
+
+            # На уже выданной сборке расход на байера требует доплаты.
+            # До ввода доплаты ничего в таблице не меняем.
+            if rec["status"].strip().lower() == "taken" and expense_party == "buyer":
+                new_state = dict(state)
+                new_state["mode"] = "assembly_edit_buyer_surcharge"
+                new_state["assembly_edit_field"] = field
+                new_state["assembly_pending_active_text"] = new_active_text
+                set_state(user_id, new_state)
+                tg_send_message(
+                    chat_id,
+                    f"Сборка: {rec['name']}\nРасход идёт на байера.\n\nСколько должен доплатить байер?"
+                )
+                return
+
+            ok, message = apply_assembly_replacement(
+                row_index=row_index,
+                field=field,
+                new_active_text=new_active_text,
+                expense_party=expense_party,
+            )
+            if not ok:
+                tg_send_message(chat_id, message)
+                return
+
             clear_state(user_id)
+            tg_send_message(chat_id, message)
             rec = get_assembly_record(row_index)
             tg_send_inline_message(chat_id, format_assembly_full(rec), build_assembly_edit_buttons(row_index))
+            return
+
+        if assembly_mode == "assembly_edit_buyer_surcharge":
+            row_index = int(state.get("assembly_row_index", 0) or 0)
+            field = str(state.get("assembly_edit_field", "") or "").strip()
+            new_active_text = str(state.get("assembly_pending_active_text", "") or "")
+
+            surcharge = parse_price(text)
+            if surcharge is None or float(surcharge) < 0:
+                tg_send_message(chat_id, "Укажи доплату числом, например 30.")
+                return
+
+            ok, message = apply_assembly_replacement(
+                row_index=row_index,
+                field=field,
+                new_active_text=new_active_text,
+                expense_party="buyer",
+                buyer_surcharge=surcharge,
+            )
+            if not ok:
+                tg_send_message(chat_id, message)
+                return
+
+            clear_state(user_id)
+            tg_send_message(chat_id, message)
+            rec = get_assembly_record(row_index)
+            if rec:
+                tg_send_inline_message(chat_id, format_assembly_full(rec), build_assembly_edit_buttons(row_index))
             return
 
         if assembly_mode in {"assembly_edit_card_value", "assembly_edit_timezone_value"}:
@@ -22503,15 +22834,21 @@ def handle_callback_query(callback_query):
             if not rec:
                 tg_answer_callback_query(callback_id, "Сборка не найдена")
                 return jsonify({"ok": True})
-            if field == "kings":
-                set_state(user_id, {"mode": "assembly_edit_kings", "assembly_row_index": row_index})
-                prompt = "Отправь новый список кингов, каждый с новой строки. Старый список будет заменён полностью."
-            elif field == "accounts":
-                set_state(user_id, {"mode": "assembly_edit_accounts", "assembly_row_index": row_index})
-                prompt = "Отправь новый список личек, каждая с новой строки. Карты и таймзоны сохранятся по порядку для существующих позиций."
-            elif field == "bms":
-                set_state(user_id, {"mode": "assembly_edit_bms", "assembly_row_index": row_index})
-                prompt = "Отправь новые BM ID, каждый с новой строки. Старый список будет заменён полностью."
+            if field in {"kings", "accounts", "bms"}:
+                # Для выданной сборки сначала определяем, на кого относится расход.
+                if rec["status"].strip().lower() == "taken":
+                    tg_answer_callback_query(callback_id, "Выбери, на кого пойдёт расход")
+                    tg_edit_message_text(
+                        chat_id,
+                        message_id,
+                        f"🧩 {rec['name']}\n\nНа кого пойдёт расход за замену?",
+                        build_assembly_expense_buttons(row_index, field)
+                    )
+                    return jsonify({"ok": True})
+
+                # На свободной сборке никаких вопросов о расходе нет.
+                set_assembly_replacement_input_state(user_id, row_index, field)
+                prompt = assembly_edit_prompt_for_field(field)
             elif field in {"cards", "timezone"}:
                 buttons = build_assembly_account_pick_buttons(row_index, "card" if field == "cards" else "timezone")
                 if not buttons:
@@ -22526,6 +22863,44 @@ def handle_callback_query(callback_query):
             tg_answer_callback_query(callback_id)
             tg_edit_message_reply_markup(chat_id, message_id, inline_buttons=[])
             tg_send_message(chat_id, prompt)
+            return jsonify({"ok": True})
+
+        if data.startswith("asm_expense:"):
+            _, row_raw, field, expense_party = data.split(":", 3)
+            row_index = int(row_raw)
+            rec = get_assembly_record(row_index)
+
+            if not rec:
+                tg_answer_callback_query(callback_id, "Сборка не найдена")
+                return jsonify({"ok": True})
+            if rec["status"].strip().lower() != "taken":
+                tg_answer_callback_query(callback_id, "Сборка уже не выдана")
+                return jsonify({"ok": True})
+            if field not in {"kings", "accounts", "bms"}:
+                tg_answer_callback_query(callback_id, "Неизвестное поле")
+                return jsonify({"ok": True})
+            if expense_party not in {"buyer", "company", "seller"}:
+                tg_answer_callback_query(callback_id, "Неизвестный тип расхода")
+                return jsonify({"ok": True})
+
+            set_assembly_replacement_input_state(
+                user_id=user_id,
+                row_index=row_index,
+                field=field,
+                expense_party=expense_party,
+            )
+
+            labels = {
+                "buyer": "на байера",
+                "company": "на компанию",
+                "seller": "на селлера",
+            }
+            tg_answer_callback_query(callback_id, f"Расход {labels[expense_party]}")
+            tg_edit_message_reply_markup(chat_id, message_id, inline_buttons=[])
+            tg_send_message(
+                chat_id,
+                f"Расход: {labels[expense_party]}\n\n" + assembly_edit_prompt_for_field(field)
+            )
             return jsonify({"ok": True})
 
         if data.startswith("asm_edit_account:"):
