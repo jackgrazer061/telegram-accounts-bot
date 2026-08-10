@@ -194,6 +194,7 @@ SHEET_CRYPTO_KINGS = "База_крипта_кинги"
 SHEET_PIXELS = "База_пикселей"
 SHEET_STICKERS = "Стикеры"
 SHEET_KING_DOWNLOADS = "Кэш_скачиваний_king"
+SHEET_ASSEMBLIES = "Сборки"
 
 ADMIN_POLL = "Опрос"
 
@@ -265,6 +266,12 @@ MENU_FARMERS = 'Farmers'
 FARM_MENU_KING = 'King'
 FARM_MENU_BM = 'BM'
 FARM_MENU_FP = 'FP'
+FARM_MENU_ASSEMBLIES = '🧩 Сборки'
+FARM_ASSEMBLY_CREATE = '➕ Создать сборку'
+FARM_ASSEMBLY_ISSUE = '➡️ Выдать сборку'
+FARM_ASSEMBLY_EDIT = '✏️ Редактировать сборки'
+FARM_ASSEMBLY_VIEW = '👀 Посмотреть сборки'
+BTN_BACK_FROM_ASSEMBLIES = 'Назад в Farmers'
 
 FARM_SUBMENU_GET_KINGS = '➡️Взять кинги'
 FARM_SUBMENU_FREE_KINGS = '🆓Cвободныe кинги'
@@ -2201,9 +2208,20 @@ def send_pixels_menu(chat_id, text="Меню Пикселей:"):
 def send_farmers_menu(chat_id, text="Меню Farmers:"):
     keyboard = [
         [{"text": FARM_MENU_KING}, {"text": FARM_MENU_BM}],
-        [{"text": FARM_MENU_FP}],
+        [{"text": FARM_MENU_FP}, {"text": FARM_MENU_ASSEMBLIES}],
         [{"text": MENU_FARMER_STATS}],
         [{"text": BTN_BACK_TO_MENU}]
+    ]
+    tg_send_message(chat_id, text, keyboard)
+
+
+def send_farm_assemblies_menu(chat_id, text="Меню Сборки:"):
+    keyboard = [
+        [{"text": FARM_ASSEMBLY_CREATE}],
+        [{"text": FARM_ASSEMBLY_ISSUE}],
+        [{"text": FARM_ASSEMBLY_EDIT}],
+        [{"text": FARM_ASSEMBLY_VIEW}],
+        [{"text": BTN_BACK_FROM_ASSEMBLIES}]
     ]
     tg_send_message(chat_id, text, keyboard)
 
@@ -17155,6 +17173,257 @@ def send_all_users_stats(chat_id):
                 }]]
             )
             
+
+# =========================
+# FARM ASSEMBLIES / СБОРКИ
+# =========================
+ASSEMBLY_HEADERS = [
+    "Название", "Статус", "Дата создания", "Создал ID", "Создал",
+    "Кинги", "Лички", "БМ", "Кому выдано", "Цена выдачи", "Дата выдачи"
+]
+assembly_sheet_lock = threading.RLock()
+
+
+def get_or_create_assemblies_sheet():
+    def _do():
+        with google_lock:
+            client = get_gspread_client()
+            spreadsheet = client.open_by_key(SPREADSHEET_ID)
+            try:
+                sheet = spreadsheet.worksheet(SHEET_ASSEMBLIES)
+            except gspread.exceptions.WorksheetNotFound:
+                sheet = spreadsheet.add_worksheet(title=SHEET_ASSEMBLIES, rows=3000, cols=16)
+                sheet.update("A1:K1", [ASSEMBLY_HEADERS])
+                return sheet
+
+            header = sheet.get("A1:K1")
+            if not header or not header[0] or header[0][:len(ASSEMBLY_HEADERS)] != ASSEMBLY_HEADERS:
+                sheet.update("A1:K1", [ASSEMBLY_HEADERS])
+            return sheet
+    return google_write_with_retry(_do)
+
+
+def get_assemblies_rows():
+    with assembly_sheet_lock:
+        sheet = get_or_create_assemblies_sheet()
+        return google_read_with_retry(lambda: sheet.get_all_values())
+
+
+def assembly_creator_name(user_id, telegram_username=""):
+    raw = str(FARMERS_USERS.get(int(user_id), "") or telegram_username or f"farmer{user_id}").strip()
+    raw = raw.lstrip("@").strip()
+    raw = re.sub(r'(?i)(?:[_\-\s]*farmer)$', '', raw).strip('_- ')
+    raw = re.sub(r'[^A-Za-zА-Яа-я0-9_-]+', '', raw)
+    return raw or f"farmer{user_id}"
+
+
+def parse_assembly_lines(text):
+    return [x.strip() for x in str(text or "").splitlines() if x.strip()]
+
+
+def parse_assembly_accounts(text):
+    result = []
+    errors = []
+    for n, line in enumerate(parse_assembly_lines(text), start=1):
+        parts = [x.strip() for x in line.split(",")]
+        if len(parts) != 3 or not all(parts):
+            errors.append(f"Строка {n}: нужен формат личка,карта,таймзона")
+            continue
+        login, card, timezone = parts
+        if not re.fullmatch(r'[+-]?\d{1,2}', timezone):
+            errors.append(f"Строка {n}: неверная таймзона '{timezone}'")
+            continue
+        if not timezone.startswith(("+", "-")) and timezone != "0":
+            timezone = "+" + timezone
+        result.append({"login": login, "card": card, "timezone": timezone})
+    return result, errors
+
+
+def encode_assembly_accounts(accounts):
+    return "\n".join(
+        f"{str(x.get('login','')).strip()},{str(x.get('card','')).strip()},{str(x.get('timezone','')).strip()}"
+        for x in (accounts or [])
+    )
+
+
+def decode_assembly_accounts(value):
+    accounts, _ = parse_assembly_accounts(value)
+    return accounts
+
+
+def assembly_row_to_record(row_index, raw_row):
+    row = ensure_row_len(list(raw_row or []), len(ASSEMBLY_HEADERS))
+    return {
+        "row_index": int(row_index), "name": str(row[0]).strip(), "status": str(row[1]).strip(),
+        "created_at": str(row[2]).strip(), "creator_id": str(row[3]).strip(), "creator": str(row[4]).strip(),
+        "kings": parse_assembly_lines(row[5]), "accounts": decode_assembly_accounts(row[6]),
+        "bms": parse_assembly_lines(row[7]), "buyer": str(row[8]).strip(),
+        "issue_price": str(row[9]).strip(), "issued_at": str(row[10]).strip(),
+    }
+
+
+def get_assemblies_records(free_only=False):
+    rows = get_assemblies_rows()
+    records = []
+    for idx, row in enumerate(rows[1:], start=2):
+        rec = assembly_row_to_record(idx, row)
+        if not rec["name"]:
+            continue
+        if free_only and rec["status"].lower() != "free":
+            continue
+        records.append(rec)
+    return records
+
+
+def get_assembly_record(row_index):
+    try:
+        row_index = int(row_index)
+    except Exception:
+        return None
+    rows = get_assemblies_rows()
+    if row_index < 2 or row_index - 1 >= len(rows):
+        return None
+    rec = assembly_row_to_record(row_index, rows[row_index - 1])
+    return rec if rec["name"] else None
+
+
+def update_assembly_cells(row_index, cell_range_suffix, values):
+    with assembly_sheet_lock:
+        sheet = get_or_create_assemblies_sheet()
+        google_write_with_retry(lambda: sheet.update(f"{cell_range_suffix}{row_index}", [values]))
+
+
+def create_assembly(user_id, telegram_username, kings, accounts, bms):
+    creator = assembly_creator_name(user_id, telegram_username)
+    today = datetime.now(MOSCOW_TZ).strftime("%d/%m/%Y")
+    with assembly_sheet_lock:
+        sheet = get_or_create_assemblies_sheet()
+        rows = google_read_with_retry(lambda: sheet.get_all_values())
+        pattern = re.compile(rf'^{re.escape(creator)}-(\d+)$', re.IGNORECASE)
+        max_n = 0
+        for row in rows[1:]:
+            if not row:
+                continue
+            m = pattern.match(str(row[0]).strip())
+            if m:
+                max_n = max(max_n, int(m.group(1)))
+        name = f"{creator}-{max_n + 1}"
+        next_row = len(rows) + 1
+        values = [
+            name, "free", today, str(user_id), creator,
+            "\n".join(kings), encode_assembly_accounts(accounts), "\n".join(bms), "", "", ""
+        ]
+        google_write_with_retry(lambda: sheet.update(f"A{next_row}:K{next_row}", [values]))
+    return name
+
+
+def format_assembly_full(rec):
+    lines = [f"🧩 Сборка: {rec['name']}", f"Статус: {rec['status'] or '-'}", "", "👑 Кинги:"]
+    lines.extend([f"• {x}" for x in rec["kings"]] or ["—"])
+    lines += ["", "👤 Лички:"]
+    if rec["accounts"]:
+        for x in rec["accounts"]:
+            lines.append(f"• {x['login']} — карта {x['card']} — TZ {x['timezone']}")
+    else:
+        lines.append("—")
+    lines += ["", "📁 БМ:"]
+    lines.extend([f"• {x}" for x in rec["bms"]] or ["—"])
+    lines += ["", f"👨‍🌾 Создал: {rec['creator'] or rec['creator_id'] or '-'}"]
+    if rec.get("buyer"):
+        lines.append(f"👨‍💻 Выдано: {rec['buyer']}")
+    if rec.get("issue_price"):
+        lines.append(f"💵 Цена выдачи: {rec['issue_price']}")
+    if rec.get("issued_at"):
+        lines.append(f"📅 Дата выдачи: {rec['issued_at']}")
+    return "\n".join(lines)
+
+
+def send_assembly_list_for_action(chat_id, action, free_only=False):
+    records = get_assemblies_records(free_only=free_only)
+    if not records:
+        tg_send_message(chat_id, "Свободных сборок нет." if free_only else "Сборок пока нет.")
+        return
+    buttons = []
+    for rec in records:
+        label = rec["name"]
+        buttons.append([{"text": label, "callback_data": f"asm_{action}:{rec['row_index']}"}])
+    tg_send_inline_message(chat_id, "Выбери сборку:", buttons)
+
+
+def build_assembly_department_buttons(row_index):
+    return [[
+        {"text": DEPT_CRYPTO, "callback_data": f"asm_issue_dept:{row_index}:crypto"},
+        {"text": DEPT_GAMBLA, "callback_data": f"asm_issue_dept:{row_index}:gambla"},
+    ], [{"text": DEPT_OTHER, "callback_data": f"asm_issue_dept:{row_index}:misc"}]]
+
+
+def build_assembly_person_buttons(row_index, department_key):
+    names = get_department_people_by_key(department_key)
+    buttons, row = [], []
+    for idx, name in enumerate(names):
+        row.append({"text": str(name), "callback_data": f"asm_issue_person:{row_index}:{department_key}:{idx}"})
+        if len(row) == 2:
+            buttons.append(row)
+            row = []
+    if row:
+        buttons.append(row)
+    return buttons
+
+
+def issue_assembly(row_index, buyer, price):
+    rec = get_assembly_record(row_index)
+    if not rec:
+        return False, "Сборка не найдена."
+    if rec["status"].lower() != "free":
+        return False, f"Сборка {rec['name']} уже не свободна."
+    price_num = parse_price(price)
+    if price_num is None:
+        return False, "Цена указана неверно."
+    today = datetime.now(MOSCOW_TZ).strftime("%d/%m/%Y")
+    with assembly_sheet_lock:
+        sheet = get_or_create_assemblies_sheet()
+        google_write_with_retry(lambda: sheet.update(
+            f"B{row_index}:K{row_index}",
+            [["taken", rec["created_at"], rec["creator_id"], rec["creator"], "\n".join(rec["kings"]),
+              encode_assembly_accounts(rec["accounts"]), "\n".join(rec["bms"]), buyer,
+              normalize_numeric_for_sheet(price_num), today]]
+        ))
+    append_issue_row_fixed([
+        rec["name"], "Сборка", rec["created_at"], normalize_numeric_for_sheet(price_num),
+        today, "farm", buyer, "", "", ""
+    ])
+    invalidate_stats_cache()
+    return True, f"✅ Сборка {rec['name']} выдана\n👨‍💻 Для кого: {buyer}\n💵 Цена: {format_issue_price(price_num)}"
+
+
+def send_assemblies_overview(chat_id):
+    records = get_assemblies_records()
+    if not records:
+        tg_send_message(chat_id, "Сборок пока нет.")
+        return
+    for rec in records:
+        text = f"🧩 {rec['name']}\n👑 Кингов: {len(rec['kings'])}\n👤 Личек: {len(rec['accounts'])}"
+        tg_send_inline_message(chat_id, text, [[{"text": "Посмотреть данные", "callback_data": f"asm_view:{rec['row_index']}"}]])
+
+
+def build_assembly_edit_buttons(row_index):
+    return [
+        [{"text": "Кинги", "callback_data": f"asm_edit_field:{row_index}:kings"},
+         {"text": "Лички", "callback_data": f"asm_edit_field:{row_index}:accounts"}],
+        [{"text": "Карты", "callback_data": f"asm_edit_field:{row_index}:cards"},
+         {"text": "Таймзону", "callback_data": f"asm_edit_field:{row_index}:timezone"}],
+        [{"text": "БМ", "callback_data": f"asm_edit_field:{row_index}:bms"}],
+    ]
+
+
+def build_assembly_account_pick_buttons(row_index, field):
+    rec = get_assembly_record(row_index)
+    buttons = []
+    if rec:
+        for idx, acc in enumerate(rec["accounts"]):
+            buttons.append([{"text": acc["login"], "callback_data": f"asm_edit_account:{row_index}:{field}:{idx}"}])
+    return buttons
+
 # =========================
 # MESSAGE HANDLER
 # =========================            
@@ -17172,7 +17441,8 @@ def handle_message(msg):
             MENU_ACCOUNTS, MENU_FARMERS, MENU_STATS, MENU_ADMIN,
             SUBMENU_ACCOUNTS_MAIN, SUBMENU_BACK_MAIN, BTN_BACK_TO_MENU,
             MENU_KINGS, MENU_BMS, MENU_FPS, MENU_PIXELS,
-            FARM_MENU_KING, FARM_MENU_BM, FARM_MENU_FP,
+            FARM_MENU_KING, FARM_MENU_BM, FARM_MENU_FP, FARM_MENU_ASSEMBLIES,
+            FARM_ASSEMBLY_CREATE, FARM_ASSEMBLY_ISSUE, FARM_ASSEMBLY_EDIT, FARM_ASSEMBLY_VIEW, BTN_BACK_FROM_ASSEMBLIES,
             BTN_BACK_TO_FARMERS, BTN_BACK_FROM_ADMIN, BTN_BACK_FROM_ACCOUNTANTS,
             BTN_BACK_FROM_ADMIN_FARMERS, MENU_CANCEL,
             MENU_MISC, BTN_BACK_FROM_MISC, ADMIN_ADD_STICKERS, ADMIN_CHECK_BANS,
@@ -17204,6 +17474,110 @@ def handle_message(msg):
         if text in ["/start", "/menu"]:
             clear_state(user_id)
             send_main_menu(chat_id, user_id=user_id)
+            return
+
+
+        # ========= СБОРКИ: ТЕКСТОВЫЕ ШАГИ =========
+        assembly_mode = str(state.get("mode", "") or "")
+
+        if assembly_mode == "assembly_create_kings":
+            kings = parse_assembly_lines(text)
+            if not kings:
+                tg_send_message(chat_id, "Укажи хотя бы один кинг, каждый с новой строки.")
+                return
+            set_state(user_id, {"mode": "assembly_create_accounts", "assembly_kings": kings, "last_farmers_section": "assemblies"})
+            tg_send_message(chat_id, "Теперь укажи лички. Каждая с новой строки в формате:\n7834925347,3746856347,+3")
+            return
+
+        if assembly_mode == "assembly_create_accounts":
+            accounts, errors = parse_assembly_accounts(text)
+            if errors or not accounts:
+                tg_send_message(chat_id, "Не удалось разобрать лички:\n" + "\n".join(errors[:10]))
+                return
+            new_state = dict(state)
+            new_state["mode"] = "assembly_create_bms"
+            new_state["assembly_accounts"] = accounts
+            set_state(user_id, new_state)
+            tg_send_message(chat_id, "Теперь укажи BM ID, каждый BM с новой строки.")
+            return
+
+        if assembly_mode == "assembly_create_bms":
+            bms = parse_assembly_lines(text)
+            if not bms:
+                tg_send_message(chat_id, "Укажи хотя бы один BM ID.")
+                return
+            try:
+                name = create_assembly(user_id, username, state.get("assembly_kings", []), state.get("assembly_accounts", []), bms)
+                clear_state(user_id)
+                tg_send_message(chat_id, f"✅ Сборка создана.\nНазвание: {name}\nСтатус: free")
+                send_farm_assemblies_menu(chat_id)
+            except Exception as e:
+                logging.exception("create assembly failed")
+                tg_send_message(chat_id, f"Не удалось создать сборку: {e}")
+            return
+
+        if assembly_mode == "assembly_issue_price":
+            row_index = state.get("assembly_row_index")
+            buyer = str(state.get("assembly_buyer", "")).strip()
+            ok, message = issue_assembly(row_index, buyer, text)
+            if not ok and "Цена" in message:
+                tg_send_message(chat_id, message + " Введи цену ещё раз.")
+                return
+            clear_state(user_id)
+            tg_send_message(chat_id, message)
+            send_farm_assemblies_menu(chat_id)
+            return
+
+        if assembly_mode in {"assembly_edit_kings", "assembly_edit_accounts", "assembly_edit_bms"}:
+            row_index = int(state.get("assembly_row_index", 0) or 0)
+            rec = get_assembly_record(row_index)
+            if not rec:
+                clear_state(user_id)
+                tg_send_message(chat_id, "Сборка не найдена.")
+                return
+            values = parse_assembly_lines(text)
+            if not values:
+                tg_send_message(chat_id, "Список пустой. Отправь новые данные.")
+                return
+            if assembly_mode == "assembly_edit_kings":
+                update_assembly_cells(row_index, "F", ["\n".join(values)])
+            elif assembly_mode == "assembly_edit_bms":
+                update_assembly_cells(row_index, "H", ["\n".join(values)])
+            else:
+                old = rec["accounts"]
+                new_accounts = []
+                for i, login in enumerate(values):
+                    old_item = old[i] if i < len(old) else {"card": "", "timezone": ""}
+                    new_accounts.append({"login": login, "card": old_item.get("card", ""), "timezone": old_item.get("timezone", "")})
+                update_assembly_cells(row_index, "G", [encode_assembly_accounts(new_accounts)])
+            clear_state(user_id)
+            rec = get_assembly_record(row_index)
+            tg_send_inline_message(chat_id, format_assembly_full(rec), build_assembly_edit_buttons(row_index))
+            return
+
+        if assembly_mode in {"assembly_edit_card_value", "assembly_edit_timezone_value"}:
+            row_index = int(state.get("assembly_row_index", 0) or 0)
+            account_index = int(state.get("assembly_account_index", -1))
+            rec = get_assembly_record(row_index)
+            if not rec or account_index < 0 or account_index >= len(rec["accounts"]):
+                clear_state(user_id)
+                tg_send_message(chat_id, "Личка в сборке не найдена.")
+                return
+            accounts = list(rec["accounts"])
+            if assembly_mode == "assembly_edit_card_value":
+                accounts[account_index]["card"] = text.strip()
+            else:
+                tz = text.strip()
+                if not re.fullmatch(r'[+-]?\d{1,2}', tz):
+                    tg_send_message(chat_id, "Таймзона должна быть например +3, -8 или 0.")
+                    return
+                if not tz.startswith(("+", "-")) and tz != "0":
+                    tz = "+" + tz
+                accounts[account_index]["timezone"] = tz
+            update_assembly_cells(row_index, "G", [encode_assembly_accounts(accounts)])
+            clear_state(user_id)
+            rec = get_assembly_record(row_index)
+            tg_send_inline_message(chat_id, format_assembly_full(rec), build_assembly_edit_buttons(row_index))
             return
 
         if state.get("mode") == MSG_MODE_REPLY:
@@ -17913,6 +18287,11 @@ def handle_message(msg):
                 send_farm_fps_menu(chat_id, "Меню Farm FP:")
                 return
 
+            if last_farmers_section == "assemblies":
+                set_state(user_id, {"last_farmers_section": "assemblies"})
+                send_farm_assemblies_menu(chat_id, "Меню Сборки:")
+                return
+
             if last_accounts_section == "kings":
                 set_state(user_id, {"last_accounts_section": "kings"})
                 send_kings_menu(chat_id, "Меню кингов:")
@@ -17943,6 +18322,54 @@ def handle_message(msg):
 
             clear_state(user_id)
             send_farmers_menu(chat_id)
+            return
+
+
+        if text == FARM_MENU_ASSEMBLIES:
+            if not (is_admin(user_id) or is_farmers_user(user_id)):
+                tg_send_message(chat_id, "У вас нет доступа к разделу Farmers.")
+                return
+            clear_state(user_id)
+            set_state(user_id, {"last_farmers_section": "assemblies"})
+            send_farm_assemblies_menu(chat_id)
+            return
+
+        if text == BTN_BACK_FROM_ASSEMBLIES:
+            clear_state(user_id)
+            send_farmers_menu(chat_id)
+            return
+
+        if text == FARM_ASSEMBLY_CREATE:
+            if not (is_admin(user_id) or is_farmers_user(user_id)):
+                tg_send_message(chat_id, "У вас нет доступа к разделу Сборки.")
+                return
+            clear_state(user_id)
+            set_state(user_id, {"mode": "assembly_create_kings", "last_farmers_section": "assemblies"})
+            tg_send_message(chat_id, "Укажи названия кингов сборки, каждый с новой строки.")
+            return
+
+        if text == FARM_ASSEMBLY_ISSUE:
+            if not (is_admin(user_id) or is_farmers_user(user_id)):
+                tg_send_message(chat_id, "У вас нет доступа к разделу Сборки.")
+                return
+            clear_state(user_id)
+            send_assembly_list_for_action(chat_id, "issue", free_only=True)
+            return
+
+        if text == FARM_ASSEMBLY_EDIT:
+            if not (is_admin(user_id) or is_farmers_user(user_id)):
+                tg_send_message(chat_id, "У вас нет доступа к разделу Сборки.")
+                return
+            clear_state(user_id)
+            send_assembly_list_for_action(chat_id, "edit", free_only=False)
+            return
+
+        if text == FARM_ASSEMBLY_VIEW:
+            if not (is_admin(user_id) or is_farmers_user(user_id)):
+                tg_send_message(chat_id, "У вас нет доступа к разделу Сборки.")
+                return
+            clear_state(user_id)
+            send_assemblies_overview(chat_id)
             return
 
         if text == FARM_MENU_KING:
@@ -22153,6 +22580,127 @@ def handle_callback_query(callback_query):
         if not has_access(user_id):
             tg_answer_callback_query(callback_id, "Нет доступа")
             return
+
+
+        # ========= СБОРКИ: INLINE =========
+        if data.startswith("asm_issue:"):
+            row_index = int(data.split(":", 1)[1])
+            rec = get_assembly_record(row_index)
+            if not rec or rec["status"].lower() != "free":
+                tg_answer_callback_query(callback_id, "Сборка уже недоступна")
+                return jsonify({"ok": True})
+            tg_answer_callback_query(callback_id, "Выбери отдел")
+            tg_edit_message_text(chat_id, message_id, f"🧩 {rec['name']}\n\nВыбери отдел:", build_assembly_department_buttons(row_index))
+            return jsonify({"ok": True})
+
+        if data.startswith("asm_issue_dept:"):
+            _, row_raw, department_key = data.split(":", 2)
+            row_index = int(row_raw)
+            rec = get_assembly_record(row_index)
+            if not rec or rec["status"].lower() != "free":
+                tg_answer_callback_query(callback_id, "Сборка уже недоступна")
+                return jsonify({"ok": True})
+            buttons = build_assembly_person_buttons(row_index, department_key)
+            if not buttons:
+                tg_answer_callback_query(callback_id, "Нет байеров в отделе")
+                return jsonify({"ok": True})
+            tg_answer_callback_query(callback_id, "Выбери байера")
+            tg_edit_message_text(chat_id, message_id, f"🧩 {rec['name']}\n\nВыбери байера:", buttons)
+            return jsonify({"ok": True})
+
+        if data.startswith("asm_issue_person:"):
+            _, row_raw, department_key, idx_raw = data.split(":", 3)
+            row_index = int(row_raw)
+            idx = int(idx_raw)
+            names = get_department_people_by_key(department_key)
+            rec = get_assembly_record(row_index)
+            if not rec or rec["status"].lower() != "free" or idx < 0 or idx >= len(names):
+                tg_answer_callback_query(callback_id, "Сборка или байер недоступны")
+                return jsonify({"ok": True})
+            buyer = normalize_person_name(names[idx])
+            set_state(user_id, {"mode": "assembly_issue_price", "assembly_row_index": row_index, "assembly_buyer": buyer, "last_farmers_section": "assemblies"})
+            tg_answer_callback_query(callback_id, "Теперь укажи цену")
+            tg_edit_message_reply_markup(chat_id, message_id, inline_buttons=[])
+            tg_send_message(chat_id, f"Сборка: {rec['name']}\nДля кого: {buyer}\n\nУкажи цену сборки:")
+            return jsonify({"ok": True})
+
+        if data.startswith("asm_edit:"):
+            row_index = int(data.split(":", 1)[1])
+            rec = get_assembly_record(row_index)
+            if not rec:
+                tg_answer_callback_query(callback_id, "Сборка не найдена")
+                return jsonify({"ok": True})
+            tg_answer_callback_query(callback_id, "Выбери, что изменить")
+            tg_edit_message_text(chat_id, message_id, format_assembly_full(rec) + "\n\nЧто отредактировать?", build_assembly_edit_buttons(row_index))
+            return jsonify({"ok": True})
+
+        if data.startswith("asm_edit_field:"):
+            _, row_raw, field = data.split(":", 2)
+            row_index = int(row_raw)
+            rec = get_assembly_record(row_index)
+            if not rec:
+                tg_answer_callback_query(callback_id, "Сборка не найдена")
+                return jsonify({"ok": True})
+            if field == "kings":
+                set_state(user_id, {"mode": "assembly_edit_kings", "assembly_row_index": row_index})
+                prompt = "Отправь новый список кингов, каждый с новой строки. Старый список будет заменён полностью."
+            elif field == "accounts":
+                set_state(user_id, {"mode": "assembly_edit_accounts", "assembly_row_index": row_index})
+                prompt = "Отправь новый список личек, каждая с новой строки. Карты и таймзоны сохранятся по порядку для существующих позиций."
+            elif field == "bms":
+                set_state(user_id, {"mode": "assembly_edit_bms", "assembly_row_index": row_index})
+                prompt = "Отправь новые BM ID, каждый с новой строки. Старый список будет заменён полностью."
+            elif field in {"cards", "timezone"}:
+                buttons = build_assembly_account_pick_buttons(row_index, "card" if field == "cards" else "timezone")
+                if not buttons:
+                    tg_answer_callback_query(callback_id, "В сборке нет личек")
+                    return jsonify({"ok": True})
+                tg_answer_callback_query(callback_id, "Выбери личку")
+                tg_edit_message_text(chat_id, message_id, "На какой личке поменять " + ("карту?" if field == "cards" else "таймзону?"), buttons)
+                return jsonify({"ok": True})
+            else:
+                tg_answer_callback_query(callback_id, "Неизвестное поле")
+                return jsonify({"ok": True})
+            tg_answer_callback_query(callback_id)
+            tg_edit_message_reply_markup(chat_id, message_id, inline_buttons=[])
+            tg_send_message(chat_id, prompt)
+            return jsonify({"ok": True})
+
+        if data.startswith("asm_edit_account:"):
+            _, row_raw, field, idx_raw = data.split(":", 3)
+            row_index = int(row_raw)
+            idx = int(idx_raw)
+            rec = get_assembly_record(row_index)
+            if not rec or idx < 0 or idx >= len(rec["accounts"]):
+                tg_answer_callback_query(callback_id, "Личка не найдена")
+                return jsonify({"ok": True})
+            mode = "assembly_edit_card_value" if field == "card" else "assembly_edit_timezone_value"
+            set_state(user_id, {"mode": mode, "assembly_row_index": row_index, "assembly_account_index": idx})
+            tg_answer_callback_query(callback_id)
+            tg_edit_message_reply_markup(chat_id, message_id, inline_buttons=[])
+            tg_send_message(chat_id, f"Личка: {rec['accounts'][idx]['login']}\n" + ("Укажи новый номер карты:" if field == "card" else "Укажи новую таймзону, например -8 или +3:"))
+            return jsonify({"ok": True})
+
+        if data.startswith("asm_view:"):
+            row_index = int(data.split(":", 1)[1])
+            rec = get_assembly_record(row_index)
+            if not rec:
+                tg_answer_callback_query(callback_id, "Сборка не найдена")
+                return jsonify({"ok": True})
+            tg_answer_callback_query(callback_id)
+            tg_edit_message_text(chat_id, message_id, format_assembly_full(rec), [[{"text": "Свернуть", "callback_data": f"asm_hide:{row_index}"}]])
+            return jsonify({"ok": True})
+
+        if data.startswith("asm_hide:"):
+            row_index = int(data.split(":", 1)[1])
+            rec = get_assembly_record(row_index)
+            if not rec:
+                tg_answer_callback_query(callback_id, "Сборка не найдена")
+                return jsonify({"ok": True})
+            text = f"🧩 {rec['name']}\n👑 Кингов: {len(rec['kings'])}\n👤 Личек: {len(rec['accounts'])}"
+            tg_answer_callback_query(callback_id)
+            tg_edit_message_text(chat_id, message_id, text, [[{"text": "Посмотреть данные", "callback_data": f"asm_view:{row_index}"}]])
+            return jsonify({"ok": True})
 
         if data == "frh_today":
             tg_answer_callback_query(callback_id)
