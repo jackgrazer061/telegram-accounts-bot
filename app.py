@@ -691,7 +691,7 @@ GOOGLE_ERROR_COOLDOWN = 5
 google_error_count = 0
 
 # Фоновые задачи не должны валить Telegram-бота, если Google Sheets дал лимит 429.
-GOOGLE_QUOTA_BACKGROUND_SLEEP = int(os.environ.get("GOOGLE_QUOTA_BACKGROUND_SLEEP", "600"))  # 10 минут
+GOOGLE_QUOTA_BACKGROUND_SLEEP = int(os.environ.get("GOOGLE_QUOTA_BACKGROUND_SLEEP", "75"))  # обычно минутная квота восстанавливается быстро
 FREE_RESOURCES_HISTORY_CHECK_INTERVAL = int(os.environ.get("FREE_RESOURCES_HISTORY_CHECK_INTERVAL", "900"))  # 15 минут
 BAN_STORM_MONITOR_INTERVAL = int(os.environ.get("BAN_STORM_MONITOR_INTERVAL", "900"))  # 15 минут
 AUTO_HEALTHCHECK_INITIAL_DELAY = int(os.environ.get("AUTO_HEALTHCHECK_INITIAL_DELAY", "900"))  # 15 минут после старта
@@ -752,7 +752,7 @@ def invalidate_stats_cache():
 # =========================
 # AUTO CACHE FOR SHEETS
 # =========================
-TABLE_CACHE_TTL = 90
+TABLE_CACHE_TTL = 180
 
 table_cache = {
     SHEET_ACCOUNTS: {"rows": None, "updated_at": 0},
@@ -17304,14 +17304,27 @@ def get_assemblies_records(free_only=False):
 
 
 def get_assembly_record(row_index):
+    """Читает только одну строку сборки вместо всего листа.
+
+    Это особенно важно при частых действиях: раньше каждый выбор/выдача сборки
+    делал get_all_values() по целому листу и зря расходовал read quota Google.
+    """
     try:
         row_index = int(row_index)
     except Exception:
         return None
-    rows = get_assemblies_rows()
-    if row_index < 2 or row_index - 1 >= len(rows):
+
+    if row_index < 2:
         return None
-    rec = assembly_row_to_record(row_index, rows[row_index - 1])
+
+    with assembly_sheet_lock:
+        sheet = get_or_create_assemblies_sheet()
+        values = google_read_with_retry(lambda: sheet.get(f"A{row_index}:K{row_index}"))
+
+    if not values or not values[0]:
+        return None
+
+    rec = assembly_row_to_record(row_index, values[0])
     return rec if rec["name"] else None
 
 
@@ -17398,30 +17411,125 @@ def build_assembly_person_buttons(row_index, department_key):
     return buttons
 
 
+def _assembly_google_extended_value(value):
+    if isinstance(value, bool):
+        return {"boolValue": value}
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return {"numberValue": float(value)}
+    return {"stringValue": str(value if value is not None else "")}
+
+
+def _assembly_google_row(values):
+    return {
+        "values": [
+            {"userEnteredValue": _assembly_google_extended_value(value)}
+            for value in values
+        ]
+    }
+
+
 def issue_assembly(row_index, buyer, price):
+    """Выдаёт сборку атомарно одним Google Sheets batchUpdate.
+
+    В одном запросе одновременно:
+      1) сборка переводится free -> taken;
+      2) строка добавляется в `Простые лички 26`.
+
+    Если Google возвращает 429/ошибку, весь batch отклоняется и ни один из
+    двух листов не должен остаться в промежуточном состоянии.
+    """
     rec = get_assembly_record(row_index)
     if not rec:
         return False, "Сборка не найдена."
     if rec["status"].lower() != "free":
         return False, f"Сборка {rec['name']} уже не свободна."
+
     price_num = parse_price(price)
     if price_num is None:
         return False, "Цена указана неверно."
+
     today = datetime.now(MOSCOW_TZ).strftime("%d/%m/%Y")
-    with assembly_sheet_lock:
-        sheet = get_or_create_assemblies_sheet()
-        google_write_with_retry(lambda: sheet.update(
-            f"B{row_index}:K{row_index}",
-            [["taken", rec["created_at"], rec["creator_id"], rec["creator"], "\n".join(rec["kings"]),
-              encode_assembly_accounts(rec["accounts"]), "\n".join(rec["bms"]), buyer,
-              normalize_numeric_for_sheet(price_num), today]]
-        ))
-    append_issue_row_fixed([
-        rec["name"], "Сборка", rec["created_at"], normalize_numeric_for_sheet(price_num),
-        today, "farm", buyer, "", "", ""
-    ])
+    normalized_price = normalize_numeric_for_sheet(price_num)
+
+    assembly_values = [
+        "taken",
+        rec["created_at"],
+        rec["creator_id"],
+        rec["creator"],
+        "\n".join(rec["kings"]),
+        encode_assembly_accounts(rec["accounts"]),
+        "\n".join(rec["bms"]),
+        buyer,
+        normalized_price,
+        today,
+    ]
+
+    issue_values = [
+        rec["name"],
+        "Сборка",
+        rec["created_at"],
+        normalized_price,
+        today,
+        "farm",
+        buyer,
+        "",
+        "",
+        "",
+    ]
+
+    with issue_lock:
+        with assembly_sheet_lock:
+            assembly_sheet = get_or_create_assemblies_sheet()
+            issues_sheet = get_sheet(SHEET_ISSUES)
+            client = get_gspread_client()
+            spreadsheet = client.open_by_key(SPREADSHEET_ID)
+
+            # Проверяем статус непосредственно перед записью, чтобы два человека
+            # не смогли одновременно выдать одну и ту же сборку.
+            live_values = google_read_with_retry(
+                lambda: assembly_sheet.get(f"A{row_index}:K{row_index}")
+            )
+            if not live_values or not live_values[0]:
+                return False, "Сборка не найдена."
+
+            live_rec = assembly_row_to_record(row_index, live_values[0])
+            if live_rec["status"].lower() != "free":
+                return False, f"Сборка {live_rec['name']} уже не свободна."
+
+            requests_body = {
+                "requests": [
+                    {
+                        "updateCells": {
+                            "range": {
+                                "sheetId": assembly_sheet.id,
+                                "startRowIndex": int(row_index) - 1,
+                                "endRowIndex": int(row_index),
+                                "startColumnIndex": 1,
+                                "endColumnIndex": 11,
+                            },
+                            "rows": [_assembly_google_row(assembly_values)],
+                            "fields": "userEnteredValue",
+                        }
+                    },
+                    {
+                        "appendCells": {
+                            "sheetId": issues_sheet.id,
+                            "rows": [_assembly_google_row(issue_values)],
+                            "fields": "userEnteredValue",
+                        }
+                    },
+                ]
+            }
+
+            google_write_with_retry(lambda: spreadsheet.batch_update(requests_body))
+
+    mark_sheet_cache_stale(SHEET_ISSUES)
     invalidate_stats_cache()
-    return True, f"✅ Сборка {rec['name']} выдана\n👨‍💻 Для кого: {buyer}\n💵 Цена: {format_issue_price(price_num)}"
+    return True, (
+        f"✅ Сборка {rec['name']} выдана\n"
+        f"👨‍💻 Для кого: {buyer}\n"
+        f"💵 Цена: {format_issue_price(price_num)}"
+    )
 
 
 def send_assemblies_overview(chat_id):
