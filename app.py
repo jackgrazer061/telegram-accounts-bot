@@ -17217,7 +17217,16 @@ def build_assembly_active_accounts_edit_request(
 
 def update_assembly_account_card_or_timezone(row_index, account_index, field, new_value):
     """Атомарно обновляет карту/TZ и в истории G, и в активных личках M."""
-    rec = get_assembly_record(row_index)
+    try:
+        rec = get_assembly_record(row_index)
+    except Exception as e:
+        if is_google_quota_error(e) or "Google Sheets временно перегружен" in str(e):
+            return False, (
+                "⚠️ Google Sheets временно перегружен. "
+                "Изменение не применено — подожди немного и отправь значение ещё раз."
+            )
+        raise
+
     if not rec:
         return False, "Сборка не найдена."
 
@@ -17245,7 +17254,7 @@ def update_assembly_account_card_or_timezone(row_index, account_index, field, ne
         accounts[account_index]["card"] = new_value
     else:
         tz = new_value
-        if not re.fullmatch(r'[+-]?\\d{1,2}', tz):
+        if not re.fullmatch(r'[+-]?\d{1,2}', tz):
             return False, "Таймзона должна быть например +3, -8 или 0."
         if not tz.startswith(("+", "-")) and tz != "0":
             tz = "+" + tz
@@ -17283,9 +17292,17 @@ def update_assembly_account_card_or_timezone(row_index, account_index, field, ne
             },
         ]
 
-        google_write_with_retry(
-            lambda: spreadsheet.batch_update({"requests": requests_list})
-        )
+        try:
+            google_write_with_retry(
+                lambda: spreadsheet.batch_update({"requests": requests_list})
+            )
+        except Exception as e:
+            if is_google_quota_error(e) or "Google Sheets временно перегружен" in str(e):
+                return False, (
+                    "⚠️ Google Sheets временно перегружен. "
+                    "Изменение не применено — подожди немного и отправь значение ещё раз."
+                )
+            raise
 
     return True, "✅ Данные лички обновлены."
 
@@ -17765,6 +17782,36 @@ def handle_message(msg):
             send_main_menu(chat_id, user_id=user_id)
             return
 
+
+        # ========= СБОРКИ: ЗАЩИТА ОТ ЗАЛИПАНИЯ ТЕКСТОВОГО РЕЖИМА =========
+        assembly_mode = str(state.get("mode", "") or "")
+        assembly_text_modes = {
+            "assembly_create_kings",
+            "assembly_create_accounts",
+            "assembly_create_bms",
+            "assembly_issue_price",
+            "assembly_edit_kings",
+            "assembly_edit_accounts",
+            "assembly_edit_bms",
+            "assembly_edit_buyer_surcharge",
+            "assembly_edit_card_value",
+            "assembly_edit_timezone_value",
+        }
+
+        assembly_navigation_texts = {
+            MENU_CANCEL,
+            MENU_FARMERS,
+            FARM_MENU_ASSEMBLIES,
+            BTN_BACK_FROM_ASSEMBLIES,
+            BTN_BACK_TO_FARMERS,
+            BTN_BACK_TO_MENU,
+            "/start",
+            "/menu",
+        }
+
+        if assembly_mode in assembly_text_modes and text in assembly_navigation_texts:
+            clear_state(user_id)
+            state = {}
 
         # ========= СБОРКИ: ТЕКСТОВЫЕ ШАГИ =========
         assembly_mode = str(state.get("mode", "") or "")
