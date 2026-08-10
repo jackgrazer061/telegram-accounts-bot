@@ -17138,6 +17138,158 @@ def build_assembly_rich_text_request(sheet_id, row_index, column_index_zero_base
     }
 
 
+
+def build_assembly_active_accounts_edit_request(
+    sheet_id,
+    row_index,
+    old_history_text,
+    old_active_text,
+    new_active_text,
+):
+    """Обновляет текущий зелёный блок личек, не удаляя красную историю.
+
+    G = история замен.
+    M = актуальные лички.
+
+    При смене только карты/таймзоны это НЕ новая замена всей группы личек,
+    поэтому предыдущие красные блоки должны остаться как есть, а последний
+    зелёный актуальный блок просто заменяется на обновлённый.
+    """
+    old_history_text = str(old_history_text or "").rstrip()
+    old_active_text = str(old_active_text or "").strip()
+    new_active_text = str(new_active_text or "").strip()
+
+    history_prefix = ""
+
+    if old_history_text and old_active_text:
+        # Нормальный случай: последний блок истории = текущие активные лички.
+        if old_history_text.endswith(old_active_text):
+            history_prefix = old_history_text[:-len(old_active_text)].rstrip("\\n")
+        else:
+            # Если старые данные были записаны нестандартно, ничего не теряем:
+            # вся существующая история остаётся красной, новый актуальный блок
+            # добавляется зелёным в конец.
+            history_prefix = old_history_text
+    elif old_history_text:
+        history_prefix = old_history_text
+
+    if history_prefix and new_active_text:
+        full_text = history_prefix + "\\n" + new_active_text
+        green_start = len(history_prefix) + 1
+    elif new_active_text:
+        full_text = new_active_text
+        green_start = 0
+    else:
+        full_text = history_prefix
+        green_start = len(full_text)
+
+    runs = []
+    if history_prefix:
+        runs.append({
+            "startIndex": 0,
+            "format": {"foregroundColor": ASSEMBLY_HISTORY_RED}
+        })
+    if new_active_text:
+        runs.append({
+            "startIndex": green_start,
+            "format": {"foregroundColor": ASSEMBLY_HISTORY_GREEN}
+        })
+
+    return {
+        "updateCells": {
+            "range": {
+                "sheetId": int(sheet_id),
+                "startRowIndex": int(row_index) - 1,
+                "endRowIndex": int(row_index),
+                "startColumnIndex": 6,   # G = Лички (история)
+                "endColumnIndex": 7,
+            },
+            "rows": [{
+                "values": [{
+                    "userEnteredValue": {"stringValue": full_text},
+                    "textFormatRuns": runs,
+                }]
+            }],
+            "fields": "userEnteredValue,textFormatRuns",
+        }
+    }
+
+
+def update_assembly_account_card_or_timezone(row_index, account_index, field, new_value):
+    """Атомарно обновляет карту/TZ и в истории G, и в активных личках M."""
+    rec = get_assembly_record(row_index)
+    if not rec:
+        return False, "Сборка не найдена."
+
+    accounts = [dict(x) for x in (rec.get("accounts") or [])]
+
+    try:
+        account_index = int(account_index)
+    except Exception:
+        return False, "Личка в сборке не найдена."
+
+    if account_index < 0 or account_index >= len(accounts):
+        return False, "Личка в сборке не найдена."
+
+    field = str(field or "").strip().lower()
+    if field not in {"card", "timezone"}:
+        return False, "Неизвестное поле лички."
+
+    new_value = str(new_value or "").strip()
+    if not new_value:
+        return False, "Новое значение пустое."
+
+    old_active_text = encode_assembly_accounts(accounts)
+
+    if field == "card":
+        accounts[account_index]["card"] = new_value
+    else:
+        tz = new_value
+        if not re.fullmatch(r'[+-]?\\d{1,2}', tz):
+            return False, "Таймзона должна быть например +3, -8 или 0."
+        if not tz.startswith(("+", "-")) and tz != "0":
+            tz = "+" + tz
+        accounts[account_index]["timezone"] = tz
+
+    new_active_text = encode_assembly_accounts(accounts)
+
+    with assembly_sheet_lock:
+        assembly_sheet = get_or_create_assemblies_sheet()
+        client = get_gspread_client()
+        spreadsheet = client.open_by_key(SPREADSHEET_ID)
+
+        requests_list = [
+            # G — сохраняем всю красную историю и заменяем только текущий зелёный блок.
+            build_assembly_active_accounts_edit_request(
+                assembly_sheet.id,
+                row_index,
+                rec.get("history_accounts_raw", ""),
+                old_active_text,
+                new_active_text,
+            ),
+            # M — источник истины для логики бота.
+            {
+                "updateCells": {
+                    "range": {
+                        "sheetId": assembly_sheet.id,
+                        "startRowIndex": int(row_index) - 1,
+                        "endRowIndex": int(row_index),
+                        "startColumnIndex": 12,  # M = Активные лички
+                        "endColumnIndex": 13,
+                    },
+                    "rows": [_assembly_google_row([new_active_text])],
+                    "fields": "userEnteredValue",
+                }
+            },
+        ]
+
+        google_write_with_retry(
+            lambda: spreadsheet.batch_update({"requests": requests_list})
+        )
+
+    return True, "✅ Данные лички обновлены."
+
+
 def find_assembly_issue_row(assembly_name):
     """Находит последнюю строку выдачи конкретной сборки в Простые лички 26."""
     target = str(assembly_name or "").strip().lower()
@@ -17760,26 +17912,30 @@ def handle_message(msg):
         if assembly_mode in {"assembly_edit_card_value", "assembly_edit_timezone_value"}:
             row_index = int(state.get("assembly_row_index", 0) or 0)
             account_index = int(state.get("assembly_account_index", -1))
-            rec = get_assembly_record(row_index)
-            if not rec or account_index < 0 or account_index >= len(rec["accounts"]):
-                clear_state(user_id)
-                tg_send_message(chat_id, "Личка в сборке не найдена.")
+
+            field = "card" if assembly_mode == "assembly_edit_card_value" else "timezone"
+
+            ok, message = update_assembly_account_card_or_timezone(
+                row_index=row_index,
+                account_index=account_index,
+                field=field,
+                new_value=text,
+            )
+
+            if not ok:
+                tg_send_message(chat_id, message)
                 return
-            accounts = list(rec["accounts"])
-            if assembly_mode == "assembly_edit_card_value":
-                accounts[account_index]["card"] = text.strip()
-            else:
-                tz = text.strip()
-                if not re.fullmatch(r'[+-]?\d{1,2}', tz):
-                    tg_send_message(chat_id, "Таймзона должна быть например +3, -8 или 0.")
-                    return
-                if not tz.startswith(("+", "-")) and tz != "0":
-                    tz = "+" + tz
-                accounts[account_index]["timezone"] = tz
-            update_assembly_cells(row_index, "G", [encode_assembly_accounts(accounts)])
+
             clear_state(user_id)
             rec = get_assembly_record(row_index)
-            tg_send_inline_message(chat_id, format_assembly_full(rec), build_assembly_edit_buttons(row_index))
+            if rec:
+                tg_send_inline_message(
+                    chat_id,
+                    format_assembly_full(rec),
+                    build_assembly_edit_buttons(row_index)
+                )
+            else:
+                tg_send_message(chat_id, message)
             return
 
         if state.get("mode") == MSG_MODE_REPLY:
