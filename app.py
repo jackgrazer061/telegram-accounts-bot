@@ -239,7 +239,38 @@ GMT_OPTIONS = ['-10', '-9', '-8', '-7', '-6', '-5', '-4', '-3', '-2', '-1', '0',
 ACCOUNT_CURRENCY_COL = 12  # M колонка в База_личек
 PAYMENT_HASH_COL_NAME = "Хэш оплаты"
 REQUEST_COL_NAME = PAYMENT_HASH_COL_NAME
-ISSUES_REQUEST_COL_NUM = 10
+ISSUES_REQUEST_COL_NUM = 12
+
+ISSUE_HEADERS = [
+    "Месяц",
+    "Имя",
+    "Тип",
+    "Дата покупки",
+    "Цена",
+    "Дата передачи",
+    "Поставщик",
+    "Кому передали",
+    "Статус",
+    "Момент бана",
+    "Комментарий",
+    "Хэш",
+]
+
+ISSUE_COL_MONTH = 0
+ISSUE_COL_NAME = 1
+ISSUE_COL_TYPE = 2
+ISSUE_COL_PURCHASE_DATE = 3
+ISSUE_COL_PRICE = 4
+ISSUE_COL_TRANSFER_DATE = 5
+ISSUE_COL_SUPPLIER = 6
+ISSUE_COL_BUYER = 7
+ISSUE_COL_STATUS = 8
+ISSUE_COL_BAN_MOMENT = 9
+ISSUE_COL_COMMENT = 10
+ISSUE_COL_HASH = 11
+
+issues_schema_lock = threading.Lock()
+issues_schema_ready = False
 KINGS_REQUEST_COL_NUM = 14
 BMS_REQUEST_COL_NUM = 11
 FPS_REQUEST_COL_NUM = 10
@@ -886,7 +917,8 @@ def ensure_sheet_payment_hash_column(sheet_name, target_col_num, header_hints=No
     return col_num
 
 def ensure_payment_hash_columns_ready():
-    ensure_sheet_payment_hash_column(SHEET_ISSUES, ISSUES_REQUEST_COL_NUM, header_hints=["тип", "комментарии"])
+    ensure_issues_sheet_schema()
+    ensure_sheet_payment_hash_column(SHEET_ISSUES, ISSUES_REQUEST_COL_NUM, header_hints=["Тип", "Комментарий"])
     ensure_sheet_payment_hash_column(SHEET_ACCOUNTS, ACCOUNTS_REQUEST_COL_NUM)
     ensure_sheet_payment_hash_column(SHEET_KINGS, KINGS_REQUEST_COL_NUM)
     ensure_sheet_payment_hash_column(SHEET_CRYPTO_KINGS, KINGS_REQUEST_COL_NUM)
@@ -897,15 +929,181 @@ def ensure_payment_hash_columns_ready():
     ensure_sheet_payment_hash_column(SHEET_FARM_FPS, FPS_REQUEST_COL_NUM)
     ensure_sheet_payment_hash_column(SHEET_PIXELS, PIXELS_REQUEST_COL_NUM)
 
+def current_issue_month(dt=None):
+    dt = dt or datetime.now(MOSCOW_TZ)
+    return dt.strftime("%m.%Y")
+
+
+def _issue_month_from_date(value):
+    parsed = parse_sheet_date(str(value or "").strip())
+    if parsed:
+        return parsed.strftime("%m.%Y")
+    return current_issue_month()
+
+
+def _extract_buyer_from_old_ban_comment(comment_text):
+    text_value = str(comment_text or "").strip()
+    match = re.search(r"\(([^()]+)\)", text_value)
+    if match:
+        return match.group(1).strip()
+    return ""
+
+
+def _ban_moment_from_old_comment(comment_text):
+    raw = str(comment_text or "").strip().lower()
+    if "до передачи" in raw:
+        return "до передачи"
+    if "байер использовал" in raw or "после передачи" in raw:
+        return "после передачи"
+    return ""
+
+
+def _clean_old_ban_comment(comment_text):
+    """Убирает старый служебный префикс бана из комментария при миграции."""
+    value = str(comment_text or "").strip()
+    value = re.sub(
+        r"^(?:до передачи|байер использовал|после передачи)\s*(?:\([^)]*\))?\s*,?\s*",
+        "",
+        value,
+        flags=re.IGNORECASE,
+    )
+    return value.strip()
+
+
+def make_issue_row(
+    name="",
+    issue_type="",
+    purchase_date="",
+    price="",
+    transfer_date="",
+    supplier="",
+    buyer="",
+    status="ok",
+    ban_moment="",
+    comment="",
+    payment_hash="",
+    month=None,
+):
+    return [
+        str(month or current_issue_month()).strip(),
+        str(name or "").strip(),
+        str(issue_type or "").strip(),
+        str(purchase_date or "").strip(),
+        price,
+        str(transfer_date or "").strip(),
+        str(supplier or "").strip(),
+        str(buyer or "").strip(),
+        str(status or "ok").strip() or "ok",
+        str(ban_moment or "").strip(),
+        str(comment or "").strip(),
+        str(payment_hash or "").strip(),
+    ]
+
+
 def normalize_issue_row_for_append(row):
+    """Приводит запись к новой схеме Простые лички 26 (12 колонок).
+
+    Старый формат:
+    имя, тип, дата покупки, цена, дата передачи, поставщик,
+    кому передали/ban, кто выдал, комментарий, хэш
+
+    Новый формат:
+    месяц, имя, тип, дата покупки, цена, дата передачи, поставщик,
+    кому передали, статус, момент бана, комментарий, хэш
+    """
     values = list(row or [])
-    if len(values) < 7:
-        values += [""] * (7 - len(values))
-    if len(values) < 10:
-        values += [""] * (10 - len(values))
-    else:
-        values = values[:10]
-    return values
+
+    # Уже новый формат.
+    if len(values) >= 12:
+        values = values[:12]
+        if not str(values[ISSUE_COL_MONTH] or "").strip():
+            values[ISSUE_COL_MONTH] = current_issue_month()
+        if not str(values[ISSUE_COL_STATUS] or "").strip():
+            values[ISSUE_COL_STATUS] = "ok"
+        return values
+
+    # Старый формат.
+    values += [""] * max(0, 10 - len(values))
+    values = values[:10]
+
+    old_name = values[0]
+    old_type = values[1]
+    old_purchase = values[2]
+    old_price = values[3]
+    old_transfer = values[4]
+    old_supplier = values[5]
+    old_target = str(values[6] or "").strip()
+    old_comment = values[8]
+    old_hash = values[9]
+
+    is_ban = old_target.lower() in {"ban", "бан"}
+    buyer = _extract_buyer_from_old_ban_comment(old_comment) if is_ban else old_target
+
+    return make_issue_row(
+        month=_issue_month_from_date(old_transfer),
+        name=old_name,
+        issue_type=old_type,
+        purchase_date=old_purchase,
+        price=old_price,
+        transfer_date=old_transfer,
+        supplier=old_supplier,
+        buyer=buyer,
+        status="ban" if is_ban else "ok",
+        ban_moment=_ban_moment_from_old_comment(old_comment) if is_ban else "",
+        comment=_clean_old_ban_comment(old_comment) if is_ban else old_comment,
+        payment_hash=old_hash,
+    )
+
+
+def ensure_issues_sheet_schema():
+    """Одноразово переводит лист Простые лички 26 со старых 10 колонок на новые 12."""
+    global issues_schema_ready
+
+    if issues_schema_ready:
+        return True
+
+    with issues_schema_lock:
+        if issues_schema_ready:
+            return True
+
+        with google_lock:
+            sheet = get_sheet(SHEET_ISSUES)
+            rows = google_read_with_retry(lambda: sheet.get_all_values())
+
+            if rows and list(rows[0][:12]) == ISSUE_HEADERS:
+                issues_schema_ready = True
+                return True
+
+            migrated = [ISSUE_HEADERS]
+            for raw_row in (rows[1:] if rows else []):
+                if not any(str(x or "").strip() for x in raw_row):
+                    continue
+                migrated.append(normalize_issue_row_for_append(raw_row))
+
+            end_row = max(1, len(migrated))
+            google_write_with_retry(
+                lambda: sheet.update(
+                    f"A1:L{end_row}",
+                    migrated,
+                    value_input_option="USER_ENTERED"
+                )
+            )
+
+            # Если раньше лист был длиннее, очищаем хвост старых строк только в A:L.
+            old_count = len(rows)
+            if old_count > end_row:
+                try:
+                    google_write_with_retry(
+                        lambda: sheet.batch_clear([f"A{end_row + 1}:L{old_count}"])
+                    )
+                except Exception:
+                    logging.exception("Не удалось очистить хвост после миграции Простые лички 26")
+
+        mark_sheet_cache_stale(SHEET_ISSUES)
+        issues_schema_ready = True
+        logging.info("Простые лички 26 переведён на новую схему из 12 колонок")
+        return True
+
 
 def get_payment_hash_value_by_index(row, index_0_based):
     row = list(row or [])
@@ -929,21 +1127,21 @@ def get_payment_hash_from_pixel_row(row):
     return get_payment_hash_value_by_index(row, PIXELS_REQUEST_COL_NUM - 1)
 
 def append_issue_row_fixed(row):
-    ensure_sheet_payment_hash_column(SHEET_ISSUES, ISSUES_REQUEST_COL_NUM, header_hints=["тип", "комментарии"])
+    ensure_issues_sheet_schema()
     rows = get_sheet_rows_cached(SHEET_ISSUES, force=True)
     next_row = len(rows) + 1
     values = normalize_issue_row_for_append(row)
-    sheet_update_and_refresh(SHEET_ISSUES, f"A{next_row}:J{next_row}", [values])
+    sheet_update_and_refresh(SHEET_ISSUES, f"A{next_row}:L{next_row}", [values])
 
 def append_issue_rows_fixed(rows_to_add):
     rows = [normalize_issue_row_for_append(x) for x in (rows_to_add or []) if x]
     if not rows:
         return
-    ensure_sheet_payment_hash_column(SHEET_ISSUES, ISSUES_REQUEST_COL_NUM, header_hints=["тип", "комментарии"])
+    ensure_issues_sheet_schema()
     current_rows = get_sheet_rows_cached(SHEET_ISSUES, force=True)
     start_row = len(current_rows) + 1
     end_row = start_row + len(rows) - 1
-    sheet_update_and_refresh(SHEET_ISSUES, f"A{start_row}:J{end_row}", rows)
+    sheet_update_and_refresh(SHEET_ISSUES, f"A{start_row}:L{end_row}", rows)
 
 def sheet_update_raw(sheet_name, cell_range, values):
     def _do():
@@ -968,6 +1166,9 @@ def sheet_batch_update_raw(sheet_name, updates):
 
 def sheet_append_row_and_refresh(sheet_name, row, value_input_option="USER_ENTERED"):
     values = list(row or [])
+    if sheet_name == SHEET_ISSUES:
+        ensure_issues_sheet_schema()
+        values = normalize_issue_row_for_append(values)
 
     current_rows = get_sheet_rows_cached(sheet_name, force=True)
     next_row = len(current_rows) + 1
@@ -1002,6 +1203,9 @@ def sheet_delete_row_and_refresh(sheet_name, row_index):
 
 def sheet_append_rows_and_refresh(sheet_name, rows, value_input_option="USER_ENTERED"):
     rows = [list(r or []) for r in (rows or []) if r]
+    if sheet_name == SHEET_ISSUES:
+        ensure_issues_sheet_schema()
+        rows = [normalize_issue_row_for_append(r) for r in rows]
     if not rows:
         return
 
@@ -4250,7 +4454,7 @@ def rename_searched_king(session_token, new_name):
     if issue_info:
         sheet_update_and_refresh(
             SHEET_ISSUES,
-            f"A{issue_info['row_index']}:A{issue_info['row_index']}",
+            f"B{issue_info['row_index']}:B{issue_info['row_index']}",
             [[new_name]]
         )
         issue_updated = True
@@ -4313,7 +4517,7 @@ def change_searched_king_buyer(session_token, new_for_whom):
     if issue_info:
         sheet_update_and_refresh(
             SHEET_ISSUES,
-            f"G{issue_info['row_index']}:G{issue_info['row_index']}",
+            f"H{issue_info['row_index']}:H{issue_info['row_index']}",
             [[new_for_whom]]
         )
         issue_updated = True
@@ -5573,16 +5777,16 @@ def mark_fp_warehouse_linked_king_issue_rows_as_ban(warehouse_name, comment_text
 
     for idx, raw_row in enumerate(rows[1:], start=2):
         row = list(raw_row)
-        if len(row) < 9:
-            row += [''] * (9 - len(row))
+        if len(row) < 12:
+            row += [''] * (12 - len(row))
 
-        if normalize_ban_storm_issue_type(row[1]) != "KING":
+        if normalize_ban_storm_issue_type(row[ISSUE_COL_TYPE]) != "KING":
             continue
 
-        if str(row[0] or "").strip().lower() != target_name:
+        if str(row[ISSUE_COL_NAME] or "").strip().lower() != target_name:
             continue
 
-        issue_for_whom = str(row[6] or "").strip().lower()
+        issue_for_whom = str(row[ISSUE_COL_BUYER] or "").strip().lower()
         if issue_for_whom and issue_for_whom not in recipients:
             continue
 
@@ -6894,7 +7098,7 @@ def change_searched_pixel_buyer(session_token, new_for_whom):
     if issue_info:
         sheet_update_and_refresh(
             SHEET_ISSUES,
-            f"G{issue_info['row_index']}:G{issue_info['row_index']}",
+            f"H{issue_info['row_index']}:H{issue_info['row_index']}",
             [[new_for_whom]]
         )
         issue_updated = True
@@ -7022,11 +7226,11 @@ def find_last_pixel_issue_row(pixel_name=None, pixel_id=None):
     target_id = str(pixel_id or "").strip()
 
     for idx, row in enumerate(rows[1:], start=2):
-        if len(row) < 7:
-            row = row + [''] * (7 - len(row))
+        if len(row) < 12:
+            row = row + [''] * (12 - len(row))
 
-        issue_name = str(row[0]).strip().lower()
-        issue_type = str(row[1]).strip().lower()
+        issue_name = str(row[ISSUE_COL_NAME]).strip().lower()
+        issue_type = str(row[ISSUE_COL_TYPE]).strip().lower()
 
         if issue_type != "pixel":
             continue
@@ -10671,30 +10875,30 @@ def compute_ban_storm_stats(period_type="week", force=False, now=None):
     total_buyer_used_sum = 0.0
 
     for raw_row in rows[1:]:
-        row = ensure_row_len(raw_row, 9)
-        issue_type = normalize_ban_storm_issue_type(row[1])
+        row = ensure_row_len(raw_row, 12)
+        issue_type = normalize_ban_storm_issue_type(row[ISSUE_COL_TYPE])
         if not issue_type:
             continue
 
-        target = str(row[6]).strip().lower()
+        target = str(row[ISSUE_COL_BUYER]).strip().lower()
         if is_ban_storm_excluded_target(target):
             continue
 
-        transfer_date = parse_sheet_date(str(row[4]).strip())
+        transfer_date = parse_sheet_date(str(row[ISSUE_COL_TRANSFER_DATE]).strip())
         if not transfer_date or not (period_start <= transfer_date < period_end):
             continue
 
         stats[issue_type]["period_total_rows"] += 1
 
-        if target == "ban":
+        if str(row[ISSUE_COL_STATUS]).strip().lower() in {"ban", "бан"}:
             stats[issue_type]["period_ban_rows"] += 1
-            price_value = parse_price(row[3])
+            price_value = parse_price(row[ISSUE_COL_PRICE])
             price_float = float(price_value or 0.0) if price_value is not None else 0.0
             if price_value is not None:
                 stats[issue_type]["period_ban_sum"] += price_value
                 total_period_ban_sum += price_float
 
-            timing_kind = classify_ban_timing_from_comment(row[8])
+            timing_kind = "before" if str(row[ISSUE_COL_BAN_MOMENT]).strip().lower() == "до передачи" else ("used" if str(row[ISSUE_COL_BAN_MOMENT]).strip().lower() == "после передачи" else "")
             if timing_kind == "before":
                 total_before_transfer += 1
                 total_before_transfer_sum += price_float
@@ -11204,20 +11408,20 @@ def build_issued_to_buyer_report_text(buyer_name):
 
     for raw_row in rows[1:]:
         row = list(raw_row)
-        if len(row) < 7:
-            row += [''] * (7 - len(row))
+        if len(row) < 12:
+            row += [''] * (12 - len(row))
 
-        issue_type = normalize_ban_storm_issue_type(row[1])
+        issue_type = normalize_ban_storm_issue_type(row[ISSUE_COL_TYPE])
         if issue_type not in grouped:
             continue
 
-        row_for_whom = normalize_person_name(row[6]).strip().lower()
+        row_for_whom = normalize_person_name(row[ISSUE_COL_BUYER]).strip().lower()
         if row_for_whom != target:
             continue
 
-        transfer_text = str(row[4] or '').strip()
+        transfer_text = str(row[ISSUE_COL_TRANSFER_DATE] or '').strip()
         transfer_dt = parse_sheet_date(transfer_text) or datetime.min
-        item_name = str(row[0] or "").strip() or "без названия"
+        item_name = str(row[ISSUE_COL_NAME] or "").strip() or "без названия"
         manager_name = get_issue_transfer_manager_from_indexes(
             manager_indexes,
             issue_type,
@@ -11228,7 +11432,7 @@ def build_issued_to_buyer_report_text(buyer_name):
 
         grouped[issue_type].append({
             "name": item_name,
-            "price": row[3] if len(row) > 3 else "",
+            "price": row[ISSUE_COL_PRICE] if len(row) > 3 else "",
             "transfer_text": transfer_text or "не указана",
             "transfer_dt": transfer_dt,
             "manager": manager_name,
@@ -11592,9 +11796,9 @@ def find_last_issue_row(account_number):
 
     last_match = None
     for idx, row in enumerate(rows[1:], start=2):
-        if len(row) < 7:
+        if len(row) < 12:
             continue
-        if str(row[0]).strip() == str(account_number).strip():
+        if str(row[ISSUE_COL_NAME]).strip() == str(account_number).strip():
             last_match = {
                 "row_index": idx,
                 "row": row
@@ -11646,28 +11850,36 @@ def mark_issue_row_as_ban(issue_row_index, comment_text="", ban_timing="", buyer
     if not issue_row_index:
         return
 
-    ban_date = datetime.now(MOSCOW_TZ).strftime("%d/%m/%Y")
-    current_row = get_sheet_row_live(SHEET_ISSUES, int(issue_row_index), 9)
-    current_row = ensure_row_len(current_row, 9)
+    ensure_issues_sheet_schema()
 
-    supplier = str(current_row[5] or "").strip()
-    issue_buyer_before = str(current_row[6] or "").strip()
-    who_issued = str(current_row[7] or "").strip()
-    final_comment = build_ban_comment_text(comment_text, ban_timing, buyer_before or issue_buyer_before)
+    timing = normalize_ban_timing(ban_timing)
+    if timing == "before":
+        ban_moment = "до передачи"
+    elif timing == "used":
+        ban_moment = "после передачи"
+    else:
+        ban_moment = ""
 
+    # Комментарий теперь хранит только сам комментарий.
+    final_comment = str(comment_text or "").strip()
+
+    # I = статус, J = момент бана, K = комментарий.
+    # H = кому передали НЕ трогаем.
     sheet_update_and_refresh(
         SHEET_ISSUES,
-        f"E{issue_row_index}:I{issue_row_index}",
-        [[ban_date, supplier, "ban", who_issued, final_comment]]
+        f"I{issue_row_index}:K{issue_row_index}",
+        [["ban", ban_moment, final_comment]]
     )
+
 
 def set_issue_comment(issue_row_index, comment_text):
     if not issue_row_index:
         return
 
+    ensure_issues_sheet_schema()
     sheet_update_and_refresh(
         SHEET_ISSUES,
-        f"I{issue_row_index}",
+        f"K{issue_row_index}",
         [[str(comment_text or "").strip()]]
     )
 
@@ -11676,11 +11888,11 @@ def is_banned_account(base_row, issue_row=None):
     if base_row and len(base_row) >= 10:
         base_target = str(base_row[9]).strip().lower()
 
-    issue_target = ""
-    if issue_row and len(issue_row) >= 7:
-        issue_target = str(issue_row[6]).strip().lower()
+    issue_status = ""
+    if issue_row and len(issue_row) >= 9:
+        issue_status = str(issue_row[ISSUE_COL_STATUS]).strip().lower()
 
-    return base_target == "ban" or issue_target == "ban"
+    return base_target == "ban" or issue_status in {"ban", "бан"}
 
 def return_account_to_ban(account_number, comment_text="", ban_timing=""):
     base_info = find_account_in_base(account_number)
@@ -14690,11 +14902,11 @@ def find_last_king_issue_row(king_name):
     target = str(king_name).strip().lower()
 
     for idx, row in enumerate(rows[1:], start=2):
-        if len(row) < 7:
-            row = row + [''] * (7 - len(row))
+        if len(row) < 12:
+            row = row + [''] * (12 - len(row))
 
-        issue_name = str(row[0]).strip().lower()
-        issue_type = str(row[1]).strip().lower()
+        issue_name = str(row[ISSUE_COL_NAME]).strip().lower()
+        issue_type = str(row[ISSUE_COL_TYPE]).strip().lower()
 
         if issue_name == target and issue_type == "king":
             last_match = {
@@ -14719,11 +14931,11 @@ def find_last_bm_issue_row(bm_id):
     target = str(bm_id).strip().lower()
 
     for idx, row in enumerate(rows[1:], start=2):
-        if len(row) < 7:
-            row = row + [''] * (7 - len(row))
+        if len(row) < 12:
+            row = row + [''] * (12 - len(row))
 
-        issue_name = str(row[0]).strip().lower()
-        issue_type = str(row[1]).strip().lower()
+        issue_name = str(row[ISSUE_COL_NAME]).strip().lower()
+        issue_type = str(row[ISSUE_COL_TYPE]).strip().lower()
 
         if issue_name == target and issue_type in ["бм", "bm"]:
             last_match = {
@@ -14740,11 +14952,11 @@ def find_last_fp_issue_row(fp_link):
     target = str(fp_link).strip().lower()
 
     for idx, row in enumerate(rows[1:], start=2):
-        if len(row) < 7:
-            row = row + [''] * (7 - len(row))
+        if len(row) < 12:
+            row = row + [''] * (12 - len(row))
 
-        issue_name = str(row[0]).strip().lower()
-        issue_type = str(row[1]).strip().lower()
+        issue_name = str(row[ISSUE_COL_NAME]).strip().lower()
+        issue_type = str(row[ISSUE_COL_TYPE]).strip().lower()
 
         if issue_name == target and issue_type == "fp":
             last_match = {
@@ -17316,10 +17528,10 @@ def find_assembly_issue_row(assembly_name):
     rows = get_sheet_rows_cached(SHEET_ISSUES, force=True)
     found = None
     for idx, raw_row in enumerate(rows[1:], start=2):
-        row = ensure_row_len(list(raw_row or []), 10)
-        if str(row[0]).strip().lower() != target:
+        row = ensure_row_len(list(raw_row or []), 12)
+        if str(row[ISSUE_COL_NAME]).strip().lower() != target:
             continue
-        issue_type = str(row[1]).strip().lower()
+        issue_type = str(row[ISSUE_COL_TYPE]).strip().lower()
         if issue_type not in {"сборка", "assembly"}:
             continue
         found = idx
@@ -17424,8 +17636,8 @@ def apply_assembly_replacement(row_index, field, new_active_text, expense_party=
                             "sheetId": issues_sheet.id,
                             "startRowIndex": int(issue_row_index) - 1,
                             "endRowIndex": int(issue_row_index),
-                            "startColumnIndex": 3,
-                            "endColumnIndex": 4,
+                            "startColumnIndex": 4,
+                            "endColumnIndex": 5,
                         },
                         "rows": [_assembly_google_row([normalized_new_price])],
                         "fields": "userEnteredValue",
@@ -17608,6 +17820,7 @@ def issue_assembly(row_index, buyer, price):
     Если Google возвращает 429/ошибку, весь batch отклоняется и ни один из
     двух листов не должен остаться в промежуточном состоянии.
     """
+    ensure_issues_sheet_schema()
     rec = get_assembly_record(row_index)
     if not rec:
         return False, "Сборка не найдена."
@@ -17625,18 +17838,16 @@ def issue_assembly(row_index, buyer, price):
     # Исторические F/G/H могут содержать красные старые блоки + зелёный актуальный,
     # а L/M/N содержат актуальные значения для логики бота.
     # Выдача должна менять только статус, байера, цену и дату выдачи.
-    issue_values = [
-        rec["name"],
-        "Сборка",
-        rec["created_at"],
-        normalized_price,
-        today,
-        "farm",
-        buyer,
-        "",
-        "",
-        "",
-    ]
+    issue_values = make_issue_row(
+        name=rec["name"],
+        issue_type="Сборка",
+        purchase_date=rec["created_at"],
+        price=normalized_price,
+        transfer_date=today,
+        supplier="farm",
+        buyer=buyer,
+        status="ok",
+    )
 
     with issue_lock:
         with assembly_sheet_lock:
