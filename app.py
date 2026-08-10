@@ -17621,19 +17621,10 @@ def issue_assembly(row_index, buyer, price):
     today = datetime.now(MOSCOW_TZ).strftime("%d/%m/%Y")
     normalized_price = normalize_numeric_for_sheet(price_num)
 
-    assembly_values = [
-        "taken",
-        rec["created_at"],
-        rec["creator_id"],
-        rec["creator"],
-        "\n".join(rec["kings"]),
-        encode_assembly_accounts(rec["accounts"]),
-        "\n".join(rec["bms"]),
-        buyer,
-        normalized_price,
-        today,
-    ]
-
+    # При выдаче НЕ перезаписываем всю строку сборки.
+    # Исторические F/G/H могут содержать красные старые блоки + зелёный актуальный,
+    # а L/M/N содержат актуальные значения для логики бота.
+    # Выдача должна менять только статус, байера, цену и дату выдачи.
     issue_values = [
         rec["name"],
         "Сборка",
@@ -17669,15 +17660,35 @@ def issue_assembly(row_index, buyer, price):
             requests_body = {
                 "requests": [
                     {
+                        # B = Статус
                         "updateCells": {
                             "range": {
                                 "sheetId": assembly_sheet.id,
                                 "startRowIndex": int(row_index) - 1,
                                 "endRowIndex": int(row_index),
                                 "startColumnIndex": 1,
+                                "endColumnIndex": 2,
+                            },
+                            "rows": [_assembly_google_row(["taken"])],
+                            "fields": "userEnteredValue",
+                        }
+                    },
+                    {
+                        # I:K = Кому выдано / Цена выдачи / Дата выдачи
+                        # F:G:H (история) и L:M:N (активные данные) НЕ трогаем.
+                        "updateCells": {
+                            "range": {
+                                "sheetId": assembly_sheet.id,
+                                "startRowIndex": int(row_index) - 1,
+                                "endRowIndex": int(row_index),
+                                "startColumnIndex": 8,
                                 "endColumnIndex": 11,
                             },
-                            "rows": [_assembly_google_row(assembly_values)],
+                            "rows": [_assembly_google_row([
+                                buyer,
+                                normalized_price,
+                                today,
+                            ])],
                             "fields": "userEnteredValue",
                         }
                     },
