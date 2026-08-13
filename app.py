@@ -1657,21 +1657,61 @@ def get_payment_hash_from_pixel_row(row):
     return get_payment_hash_value_by_index(row, PIXELS_REQUEST_COL_NUM - 1)
 
 def append_issue_row_fixed(row):
+    """Добавляет одну выдачу в Простые лички 26.
+
+    В Google раньше использовался update в вычисленный next_row.
+    В Grist новая строка обязана создаваться через AddRecord/append.
+    """
     ensure_issues_sheet_schema()
+    values = normalize_issue_row_for_append(row)
+
+    if storage_is_grist():
+        grist_append_all(SHEET_ISSUES, [values])
+        grist_all_mark_stale(SHEET_ISSUES)
+        invalidate_stats_cache()
+        return
+
     rows = get_sheet_rows_cached(SHEET_ISSUES, force=True)
     next_row = len(rows) + 1
-    values = normalize_issue_row_for_append(row)
-    sheet_update_and_refresh(SHEET_ISSUES, f"A{next_row}:L{next_row}", [values])
+    sheet_update_and_refresh(
+        SHEET_ISSUES,
+        f"A{next_row}:L{next_row}",
+        [values]
+    )
+    invalidate_stats_cache()
 
 def append_issue_rows_fixed(rows_to_add):
-    rows = [normalize_issue_row_for_append(x) for x in (rows_to_add or []) if x]
+    """Добавляет несколько выдач в Простые лички 26 одним batch/AddRecord."""
+    rows = [
+        normalize_issue_row_for_append(x)
+        for x in (rows_to_add or [])
+        if x
+    ]
     if not rows:
         return
+
     ensure_issues_sheet_schema()
+
+    if storage_is_grist():
+        # Один /apply с несколькими AddRecord вместо N отдельных запросов.
+        actions = [
+            grist_add_action(SHEET_ISSUES, row)
+            for row in rows
+        ]
+        grist_apply(actions)
+        grist_all_mark_stale(SHEET_ISSUES)
+        invalidate_stats_cache()
+        return
+
     current_rows = get_sheet_rows_cached(SHEET_ISSUES, force=True)
     start_row = len(current_rows) + 1
     end_row = start_row + len(rows) - 1
-    sheet_update_and_refresh(SHEET_ISSUES, f"A{start_row}:L{end_row}", rows)
+    sheet_update_and_refresh(
+        SHEET_ISSUES,
+        f"A{start_row}:L{end_row}",
+        rows
+    )
+    invalidate_stats_cache()
 
 def sheet_update_raw(sheet_name, cell_range, values):
     return sheet_update_and_refresh(sheet_name, cell_range, values)
