@@ -46,7 +46,7 @@ OCTO_TAG_CORBY = "corby"
 OCTO_TAG_ACCOUNT_MANAGERS = "AccountManagers"
 OCTO_TAG_FARMERS = "Farmers"
 
-ENABLE_SCHEDULED_STICKER_BROADCAST = os.environ.get("ENABLE_SCHEDULED_STICKER_BROADCAST", "0").strip().lower() in {"1", "true", "yes", "on"}
+ENABLE_SCHEDULED_STICKER_BROADCAST = False
 
 OCTO_CRYPTO_EXTENSIONS = [
     "jdiljjjlnmciheackloanmdcnkoknpji@1.6",       # Access Token Extractor by FBTOOL.PRO
@@ -744,6 +744,90 @@ def grist_crypto_self_test():
         return False
 
 
+
+# ============================================================
+# GRIST OPTIMIZATION / SAFETY
+# ============================================================
+def grist_query_records(sheet_name, filters=None, limit=None, sort=None):
+    table_id=grist_table_id_for_sheet(sheet_name)
+    params={}
+    if filters:
+        cols=grist_columns_for_sheet(sheet_name)
+        lookup={}
+        for col in cols:
+            lookup[_grist_normalize_name(col["label"])]=col["id"]
+            lookup[_grist_normalize_name(col["id"])]=col["id"]
+        filt={}
+        for key,value in filters.items():
+            cid=lookup.get(_grist_normalize_name(key),key)
+            filt[cid]=value if isinstance(value,list) else [value]
+        params["filter"]=json.dumps(filt,ensure_ascii=False)
+    if limit is not None:params["limit"]=int(limit)
+    if sort:params["sort"]=sort
+    data=_grist_request("GET",f"/api/docs/{GRIST_DOC_ID}/tables/{table_id}/records",params=params)
+    return data.get("records",[]) if isinstance(data,dict) else []
+
+
+def grist_record_to_sheet_row(sheet_name,record):
+    if not record:return []
+    cols=grist_columns_for_sheet(sheet_name)
+    fields=record.get("fields") or {}
+    return [_grist_value_to_sheet(fields.get(c["id"],""),c["type"]) for c in cols]
+
+
+def grist_find_record(sheet_name,filters,last=False):
+    records=grist_query_records(sheet_name,filters=filters)
+    if not records:return None
+    return records[-1] if last else records[0]
+
+
+def grist_update_record_id(sheet_name,record_id,fields_by_pos):
+    cols=grist_columns_for_sheet(sheet_name)
+    fields={}
+    for pos,value in fields_by_pos.items():
+        pos=int(pos)
+        if pos<0 or pos>=len(cols):
+            raise RuntimeError(f"Колонка {pos+1} вне {sheet_name}.")
+        fields[cols[pos]["id"]]=value
+    return ["UpdateRecord",grist_table_id_for_sheet(sheet_name),int(record_id),fields]
+
+
+def grist_atomic_take_with_issue(source_sheet,record_id,source_fields_by_pos,issue_row=None,status_pos=4):
+    # Читаем только конкретную запись, а не всю таблицу.
+    table_id=grist_table_id_for_sheet(source_sheet)
+    data=_grist_request("GET",f"/api/docs/{GRIST_DOC_ID}/tables/{table_id}/records/{int(record_id)}")
+    row=grist_record_to_sheet_row(source_sheet,data)
+    if len(row)<=status_pos:
+        raise RuntimeError("У расходника нет колонки статуса.")
+    status=str(row[status_pos] or "").strip().lower()
+    if status!="free":
+        raise RuntimeError(f"Расходник уже недоступен: статус {status or 'пусто'}.")
+
+    actions=[grist_update_record_id(source_sheet,record_id,source_fields_by_pos)]
+    if issue_row is not None:
+        actions.append(grist_add_action(SHEET_ISSUES,normalize_issue_row_for_append(issue_row)))
+    grist_apply(actions)
+    grist_all_mark_stale(source_sheet)
+    if issue_row is not None:
+        grist_all_mark_stale(SHEET_ISSUES)
+        invalidate_stats_cache()
+    return True
+
+
+def humanize_storage_error(error):
+    raw=str(error or "").strip()
+    low=raw.lower()
+    if "401" in low or "403" in low:
+        return "Нет доступа к Grist. Проверь API-ключ и права."
+    if "404" in low:
+        return "Запись Grist уже удалена или не найдена."
+    if "429" in low:
+        return "Grist временно ограничил запросы. Попробуй ещё раз через несколько секунд."
+    if "timeout" in low or "timed out" in low or "grist недоступен" in low:
+        return "Grist временно недоступен. Изменения не подтверждены."
+    if "уже недоступен" in low:
+        return raw
+    return raw or "Неизвестная ошибка."
 
 ADMIN_POLL = "Опрос"
 
@@ -2102,15 +2186,11 @@ def tg_send_sticker_inline(chat_id, sticker_file_id, inline_buttons):
 
 
 def ensure_stickers_sheet_exists():
-    if storage_is_grist():
-        return GristSheetProxy(SHEET_STICKERS)
-    return get_google_sheet(SHEET_STICKERS)
-
-
+    return None
 
 def get_stickers_list():
     ensure_stickers_sheet_exists()
-    rows = get_sheet_rows_cached(SHEET_STICKERS, force=True)
+    rows = get_sheet_rows_cached( force=True)
 
     result = []
     for row in rows[1:]:
@@ -2133,7 +2213,7 @@ def get_stickers_list():
 
 def get_sticker_broadcast_state():
     ensure_stickers_sheet_exists()
-    rows = get_sheet_rows_cached(SHEET_STICKERS, force=True)
+    rows = get_sheet_rows_cached( force=True)
 
     if len(rows) < 2:
         return 0, ""
@@ -2152,7 +2232,7 @@ def get_sticker_broadcast_state():
 def set_sticker_broadcast_state(next_index, last_slot_key):
     ensure_stickers_sheet_exists()
     sheet_update_and_refresh(
-        SHEET_STICKERS,
+        
         "G2:H2",
         [[str(next_index), str(last_slot_key)]]
     )
@@ -2166,7 +2246,7 @@ def add_sticker_to_sheet(file_id, sticker_type="", emoji="", set_name=""):
         if str(item.get("file_id", "")).strip() == str(file_id).strip():
             return False
 
-    rows = get_sheet_rows_cached(SHEET_STICKERS, force=True)
+    rows = get_sheet_rows_cached( force=True)
     next_row = len(rows) + 1
     if next_row < 3:
         next_row = 3
@@ -2174,7 +2254,7 @@ def add_sticker_to_sheet(file_id, sticker_type="", emoji="", set_name=""):
     added_at = datetime.now(MOSCOW_TZ).strftime("%d/%m/%Y %H:%M:%S")
 
     sheet_update_and_refresh(
-        SHEET_STICKERS,
+        
         f"A{next_row}:E{next_row}",
         [[
             str(file_id).strip(),
@@ -11145,7 +11225,7 @@ GRIST_ALL_SHEETS_ORDER = [
     SHEET_KING_DOWNLOADS,
     SHEET_FREE_RESOURCES_HISTORY,
     SHEET_BAN_MONITOR,
-    SHEET_STICKERS,
+    
 ]
 
 grist_all_meta_lock = threading.RLock()
@@ -23800,7 +23880,7 @@ def handle_message(msg):
             if "Google Sheets временно перегружен" in error_text:
                 tg_send_message(chat_id, error_text)
             else:
-                tg_send_message(chat_id, "Произошла ошибка. Попробуй ещё раз.")
+                tg_send_message(chat_id, "❌ " + humanize_storage_error(e))
 
             send_main_menu(chat_id, "Главное меню:", user_id=user_id)
         except Exception:
@@ -25559,7 +25639,7 @@ def run_auto_healthcheck_once():
             ("База фарм кинги", rows_farm_kings, 12),
             ("База фарм бм", rows_farm_bms, 9),
             ("База фарм фп", rows_farm_fps, 9),
-            ("Стикеры", get_sheet_rows_cached(SHEET_STICKERS, force=True), 8),
+            ("Стикеры", get_sheet_rows_cached( force=True), 8),
         ]
 
         for title, rows, min_cols in all_checks:
