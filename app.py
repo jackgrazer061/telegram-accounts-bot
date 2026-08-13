@@ -27,6 +27,15 @@ BOT_TOKEN = os.environ.get("BOT_TOKEN", "")
 SPREADSHEET_ID = os.environ.get("SPREADSHEET_ID", "")
 SERVICE_ACCOUNT_JSON = os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON", "")
 BACKUP_SPREADSHEET_ID = os.environ.get("BACKUP_SPREADSHEET_ID", "")
+
+# =========================
+# GRIST — пока только Crypto King
+# =========================
+GRIST_API_KEY = os.environ.get("GRIST_API_KEY", "").strip()
+GRIST_DOC_ID = os.environ.get("GRIST_DOC_ID", "").strip()
+GRIST_API_BASE = os.environ.get("GRIST_API_BASE", "https://docs.getgrist.com").strip().rstrip("/")
+GRIST_CRYPTO_TABLE_ID = os.environ.get("GRIST_CRYPTO_TABLE_ID", "").strip()
+
 EXCHANGE_API_BASE = os.environ.get("EXCHANGE_API_BASE", "https://api.exchangerate.host")
 OCTO_API_TOKEN = os.environ.get("OCTO_API_TOKEN", "").strip()
 OCTO_API_BASE = "https://app.octobrowser.net/api/v2/automation"
@@ -76,6 +85,14 @@ if not SERVICE_ACCOUNT_JSON:
 if not BACKUP_SPREADSHEET_ID:
     raise RuntimeError("BACKUP_SPREADSHEET_ID не задан")
     
+
+
+
+if not GRIST_API_KEY:
+    raise RuntimeError("GRIST_API_KEY не задан")
+
+if not GRIST_DOC_ID:
+    raise RuntimeError("GRIST_DOC_ID не задан")
 
 # =========================
 # ACCESS CONTROL
@@ -191,6 +208,350 @@ SHEET_PIXELS = "База_пикселей"
 SHEET_STICKERS = "Стикеры"
 SHEET_KING_DOWNLOADS = "Кэш_скачиваний_king"
 SHEET_ASSEMBLIES = "Сборки"
+
+# ============================================================
+# GRIST ADAPTER — ТОЛЬКО БАЗА CRYPTO KING
+# ============================================================
+grist_crypto_lock = threading.RLock()
+grist_crypto_meta_lock = threading.Lock()
+grist_crypto_meta_cache = {"table_id": "", "columns": None, "updated_at": 0.0}
+grist_crypto_row_ids = []
+grist_crypto_records_at = 0.0
+GRIST_CRYPTO_META_TTL = 300
+GRIST_CRYPTO_ROWS_TTL = 20
+
+
+def _grist_headers():
+    return {
+        "Authorization": f"Bearer {GRIST_API_KEY}",
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+    }
+
+
+def _grist_request(method, path, *, params=None, payload=None, timeout=45):
+    url = f"{GRIST_API_BASE}{path}"
+    try:
+        resp = requests.request(
+            method,
+            url,
+            headers=_grist_headers(),
+            params=params,
+            json=payload,
+            timeout=timeout,
+        )
+    except requests.RequestException as e:
+        raise RuntimeError(f"Grist недоступен: {e}") from e
+
+    if resp.status_code >= 400:
+        try:
+            body = json.dumps(resp.json(), ensure_ascii=False)
+        except Exception:
+            body = (resp.text or "").strip()
+        if len(body) > 1200:
+            body = body[:1200] + "..."
+        raise RuntimeError(f"Grist API error {resp.status_code}: {body or 'без описания'}")
+
+    if not resp.content:
+        return {}
+    try:
+        return resp.json()
+    except Exception:
+        return {}
+
+
+def _grist_normalize_name(value):
+    value = str(value or "").strip().lower()
+    value = re.sub(r"[\s\-]+", "_", value)
+    value = re.sub(r"_+", "_", value)
+    return value.strip("_")
+
+
+def grist_crypto_table_id(force=False):
+    now = time.time()
+    with grist_crypto_meta_lock:
+        cached = grist_crypto_meta_cache.get("table_id", "")
+        updated = float(grist_crypto_meta_cache.get("updated_at", 0) or 0)
+        if cached and not force and now - updated < GRIST_CRYPTO_META_TTL:
+            return cached
+
+    if GRIST_CRYPTO_TABLE_ID:
+        table_id = GRIST_CRYPTO_TABLE_ID
+    else:
+        data = _grist_request("GET", f"/api/docs/{GRIST_DOC_ID}/tables")
+        tables = data.get("tables", []) if isinstance(data, dict) else []
+        target = _grist_normalize_name(SHEET_CRYPTO_KINGS)
+        table_id = ""
+
+        for item in tables:
+            candidate = str((item or {}).get("id", "")).strip()
+            if candidate == SHEET_CRYPTO_KINGS:
+                table_id = candidate
+                break
+
+        if not table_id:
+            for item in tables:
+                candidate = str((item or {}).get("id", "")).strip()
+                if _grist_normalize_name(candidate) == target:
+                    table_id = candidate
+                    break
+
+        if not table_id:
+            available = ", ".join(
+                str((x or {}).get("id", "")).strip()
+                for x in tables[:50]
+                if str((x or {}).get("id", "")).strip()
+            )
+            raise RuntimeError(
+                f"Не нашёл '{SHEET_CRYPTO_KINGS}' в Grist. "
+                f"Доступные Table ID: {available or 'нет'}. "
+                "Если нужно, добавь GRIST_CRYPTO_TABLE_ID в Railway."
+            )
+
+    logging.info("GRIST crypto table resolved: %s", table_id)
+    with grist_crypto_meta_lock:
+        grist_crypto_meta_cache["table_id"] = table_id
+        grist_crypto_meta_cache["updated_at"] = now
+    return table_id
+
+
+def grist_crypto_columns(force=False):
+    now = time.time()
+    with grist_crypto_meta_lock:
+        cached = grist_crypto_meta_cache.get("columns")
+        updated = float(grist_crypto_meta_cache.get("updated_at", 0) or 0)
+        if cached and not force and now - updated < GRIST_CRYPTO_META_TTL:
+            return cached
+
+    table_id = grist_crypto_table_id(force=force)
+    data = _grist_request(
+        "GET",
+        f"/api/docs/{GRIST_DOC_ID}/tables/{table_id}/columns",
+    )
+    raw_columns = data.get("columns", []) if isinstance(data, dict) else []
+
+    columns = []
+    for item in raw_columns:
+        item = item or {}
+        col_id = str(item.get("id", "")).strip()
+        fields = item.get("fields") or {}
+        if not col_id or col_id == "manualSort":
+            continue
+        columns.append({
+            "id": col_id,
+            "label": str(fields.get("label") or col_id),
+            "type": str(fields.get("type") or "Any"),
+        })
+
+    if not columns:
+        raise RuntimeError("Grist: в База_крипта_кинги не найдены колонки.")
+
+    with grist_crypto_meta_lock:
+        grist_crypto_meta_cache["columns"] = columns
+        grist_crypto_meta_cache["updated_at"] = now
+    return columns
+
+
+def _grist_value_to_sheet(value, col_type="Any"):
+    if value is None:
+        return ""
+
+    col_type = str(col_type or "")
+    if col_type.startswith("Date") and isinstance(value, (int, float)):
+        try:
+            dt = datetime.fromtimestamp(float(value), tz=MOSCOW_TZ)
+            if col_type.startswith("DateTime"):
+                return dt.strftime("%d/%m/%Y %H:%M:%S")
+            return dt.strftime("%d/%m/%Y")
+        except Exception:
+            return str(value)
+
+    if isinstance(value, bool):
+        return "TRUE" if value else "FALSE"
+    if isinstance(value, float) and value.is_integer():
+        return str(int(value))
+    if isinstance(value, (dict, list)):
+        return json.dumps(value, ensure_ascii=False)
+    return str(value)
+
+
+def grist_crypto_fetch_rows(force=False):
+    global grist_crypto_row_ids, grist_crypto_records_at
+
+    now = time.time()
+    with grist_crypto_lock:
+        if (
+            not force
+            and grist_crypto_row_ids
+            and grist_crypto_records_at
+            and now - grist_crypto_records_at < GRIST_CRYPTO_ROWS_TTL
+        ):
+            with table_cache_lock:
+                cache = table_cache.get(SHEET_CRYPTO_KINGS)
+                if cache and cache.get("rows") is not None:
+                    return cache["rows"]
+
+        table_id = grist_crypto_table_id()
+        columns = grist_crypto_columns()
+
+        data = _grist_request(
+            "GET",
+            f"/api/docs/{GRIST_DOC_ID}/tables/{table_id}/records",
+            params={"sort": "manualSort", "limit": 0},
+        )
+        records = data.get("records", []) if isinstance(data, dict) else []
+
+        rows = [[c["label"] for c in columns]]
+        ids = []
+
+        for rec in records:
+            rec = rec or {}
+            fields = rec.get("fields") or {}
+            row = [
+                _grist_value_to_sheet(fields.get(c["id"], ""), c["type"])
+                for c in columns
+            ]
+            rows.append(row)
+            ids.append(int(rec["id"]))
+
+        grist_crypto_row_ids = ids
+        grist_crypto_records_at = now
+
+        with table_cache_lock:
+            if SHEET_CRYPTO_KINGS in table_cache:
+                table_cache[SHEET_CRYPTO_KINGS]["rows"] = rows
+                table_cache[SHEET_CRYPTO_KINGS]["updated_at"] = now
+
+        return rows
+
+
+def grist_crypto_mark_stale():
+    global grist_crypto_records_at
+    grist_crypto_records_at = 0.0
+    with table_cache_lock:
+        if SHEET_CRYPTO_KINGS in table_cache:
+            table_cache[SHEET_CRYPTO_KINGS]["updated_at"] = 0
+
+
+def _a1_col_to_num(letters):
+    result = 0
+    for ch in str(letters or "").upper():
+        if "A" <= ch <= "Z":
+            result = result * 26 + ord(ch) - 64
+    return result
+
+
+def _parse_simple_a1_range(value):
+    m = re.fullmatch(r"\s*([A-Za-z]+)(\d+)\s*:\s*([A-Za-z]+)(\d+)\s*", str(value or ""))
+    if not m:
+        raise RuntimeError(f"Grist adapter не поддерживает диапазон '{value}'.")
+    c1, r1, c2, r2 = m.groups()
+    return _a1_col_to_num(c1), int(r1), _a1_col_to_num(c2), int(r2)
+
+
+def grist_crypto_update_range(cell_range, values):
+    values = [list(x or []) for x in (values or [])]
+    if not values:
+        return
+
+    c1, r1, c2, r2 = _parse_simple_a1_range(cell_range)
+    expected = r2 - r1 + 1
+    if expected != len(values):
+        raise RuntimeError(
+            f"Grist: диапазон {cell_range} ожидает {expected} строк, получено {len(values)}."
+        )
+
+    columns = grist_crypto_columns()
+    if c1 < 1 or c2 > len(columns):
+        raise RuntimeError(
+            f"Grist: диапазон {cell_range} выходит за {len(columns)} колонок."
+        )
+
+    grist_crypto_fetch_rows(force=True)
+    payload_records = []
+
+    for offset, row_values in enumerate(values):
+        sheet_row = r1 + offset
+        pos = sheet_row - 2
+        if pos < 0 or pos >= len(grist_crypto_row_ids):
+            raise RuntimeError(f"Grist: строка {sheet_row} crypto king не найдена.")
+
+        width = c2 - c1 + 1
+        row_values = list(row_values)
+        if len(row_values) < width:
+            row_values += [""] * (width - len(row_values))
+
+        fields = {}
+        for i in range(width):
+            fields[columns[c1 - 1 + i]["id"]] = row_values[i]
+
+        payload_records.append({
+            "id": grist_crypto_row_ids[pos],
+            "fields": fields,
+        })
+
+    table_id = grist_crypto_table_id()
+    _grist_request(
+        "PATCH",
+        f"/api/docs/{GRIST_DOC_ID}/tables/{table_id}/records",
+        payload={"records": payload_records},
+    )
+    grist_crypto_mark_stale()
+
+
+def grist_crypto_append_rows(rows):
+    rows = [list(r or []) for r in (rows or []) if r]
+    if not rows:
+        return
+
+    columns = grist_crypto_columns()
+    records = []
+    for row in rows:
+        fields = {
+            columns[i]["id"]: value
+            for i, value in enumerate(row[:len(columns)])
+        }
+        records.append({"fields": fields})
+
+    table_id = grist_crypto_table_id()
+    _grist_request(
+        "POST",
+        f"/api/docs/{GRIST_DOC_ID}/tables/{table_id}/records",
+        payload={"records": records},
+    )
+    grist_crypto_mark_stale()
+
+
+def grist_crypto_delete_sheet_row(row_index):
+    grist_crypto_fetch_rows(force=True)
+    pos = int(row_index) - 2
+    if pos < 0 or pos >= len(grist_crypto_row_ids):
+        raise RuntimeError(f"Grist: строка {row_index} crypto king не найдена.")
+
+    record_id = grist_crypto_row_ids[pos]
+    table_id = grist_crypto_table_id()
+    _grist_request(
+        "POST",
+        f"/api/docs/{GRIST_DOC_ID}/tables/{table_id}/records/delete",
+        payload=[record_id],
+    )
+    grist_crypto_mark_stale()
+
+
+def grist_crypto_self_test():
+    try:
+        table_id = grist_crypto_table_id(force=True)
+        cols = grist_crypto_columns(force=True)
+        rows = grist_crypto_fetch_rows(force=True)
+        logging.info(
+            "GRIST_CRYPTO_READY table_id=%s columns=%s rows=%s",
+            table_id, len(cols), max(0, len(rows) - 1)
+        )
+        return True
+    except Exception:
+        logging.exception("GRIST_CRYPTO_SELF_TEST failed")
+        return False
+
 
 ADMIN_POLL = "Опрос"
 
@@ -789,6 +1150,9 @@ table_cache_lock = threading.Lock()
 
 
 def refresh_sheet_cache(sheet_name):
+    if sheet_name == SHEET_CRYPTO_KINGS:
+        return grist_crypto_fetch_rows(force=True)
+
     def _do():
         with google_lock:
             sheet = get_sheet(sheet_name)
@@ -804,6 +1168,9 @@ def refresh_sheet_cache(sheet_name):
 
 
 def get_sheet_rows_cached(sheet_name, force=False):
+    if sheet_name == SHEET_CRYPTO_KINGS:
+        return grist_crypto_fetch_rows(force=force)
+
     now = time.time()
 
     with table_cache_lock:
@@ -819,6 +1186,16 @@ def get_sheet_rows_cached(sheet_name, force=False):
     return refresh_sheet_cache(sheet_name)
 
 def get_sheet_row_live(sheet_name, row_index, min_len=0):
+    if sheet_name == SHEET_CRYPTO_KINGS:
+        rows = grist_crypto_fetch_rows(force=True)
+        try:
+            row = list(rows[int(row_index) - 1])
+        except Exception:
+            row = []
+        if min_len > 0:
+            row = ensure_row_len(row, min_len)
+        return row
+
     def _do():
         with google_lock:
             sheet = get_sheet(sheet_name)
@@ -850,12 +1227,20 @@ def get_sheet_row_live(sheet_name, row_index, min_len=0):
 
 
 def mark_sheet_cache_stale(sheet_name):
+    if sheet_name == SHEET_CRYPTO_KINGS:
+        grist_crypto_mark_stale()
+        return
+
     with table_cache_lock:
         if sheet_name in table_cache:
             table_cache[sheet_name]["updated_at"] = 0
 
 
 def sheet_update_and_refresh(sheet_name, cell_range, values):
+    if sheet_name == SHEET_CRYPTO_KINGS:
+        grist_crypto_update_range(cell_range, values)
+        return
+
     def _do():
         with google_lock:
             sheet = get_sheet(sheet_name)
@@ -921,7 +1306,7 @@ def ensure_payment_hash_columns_ready():
     ensure_sheet_payment_hash_column(SHEET_ISSUES, ISSUES_REQUEST_COL_NUM, header_hints=["Тип", "Комментарий"])
     ensure_sheet_payment_hash_column(SHEET_ACCOUNTS, ACCOUNTS_REQUEST_COL_NUM)
     ensure_sheet_payment_hash_column(SHEET_KINGS, KINGS_REQUEST_COL_NUM)
-    ensure_sheet_payment_hash_column(SHEET_CRYPTO_KINGS, KINGS_REQUEST_COL_NUM)
+    # Crypto king теперь в Grist, Google-лист не трогаем.
     ensure_sheet_payment_hash_column(SHEET_FARM_KINGS, KINGS_REQUEST_COL_NUM)
     ensure_sheet_payment_hash_column(SHEET_BMS, BMS_REQUEST_COL_NUM)
     ensure_sheet_payment_hash_column(SHEET_FARM_BMS, BMS_REQUEST_COL_NUM)
@@ -1144,6 +1529,10 @@ def append_issue_rows_fixed(rows_to_add):
     sheet_update_and_refresh(SHEET_ISSUES, f"A{start_row}:L{end_row}", rows)
 
 def sheet_update_raw(sheet_name, cell_range, values):
+    if sheet_name == SHEET_CRYPTO_KINGS:
+        grist_crypto_update_range(cell_range, values)
+        return
+
     def _do():
         with google_lock:
             sheet = get_sheet(sheet_name)
@@ -1166,6 +1555,9 @@ def sheet_batch_update_raw(sheet_name, updates):
 
 def sheet_append_row_and_refresh(sheet_name, row, value_input_option="USER_ENTERED"):
     values = list(row or [])
+    if sheet_name == SHEET_CRYPTO_KINGS:
+        grist_crypto_append_rows([values])
+        return
     if sheet_name == SHEET_ISSUES:
         ensure_issues_sheet_schema()
         values = normalize_issue_row_for_append(values)
@@ -1193,6 +1585,10 @@ def sheet_append_row_and_refresh(sheet_name, row, value_input_option="USER_ENTER
     )
 
 def sheet_delete_row_and_refresh(sheet_name, row_index):
+    if sheet_name == SHEET_CRYPTO_KINGS:
+        grist_crypto_delete_sheet_row(row_index)
+        return
+
     def _do():
         with google_lock:
             sheet = get_sheet(sheet_name)
@@ -1203,6 +1599,9 @@ def sheet_delete_row_and_refresh(sheet_name, row_index):
 
 def sheet_append_rows_and_refresh(sheet_name, rows, value_input_option="USER_ENTERED"):
     rows = [list(r or []) for r in (rows or []) if r]
+    if sheet_name == SHEET_CRYPTO_KINGS:
+        grist_crypto_append_rows(rows)
+        return
     if sheet_name == SHEET_ISSUES:
         ensure_issues_sheet_schema()
         rows = [normalize_issue_row_for_append(r) for r in rows]
