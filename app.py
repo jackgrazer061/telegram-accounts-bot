@@ -267,51 +267,241 @@ def _grist_normalize_name(value):
     return value.strip("_")
 
 
+# Порядок страниц после импорта исходного Excel.
+# Нужен как fallback, потому что Grist отображает красивые названия страниц,
+# а REST API после импорта может вернуть технические Table ID: Table1, Table2...
+GRIST_IMPORTED_PAGE_ORDER = [
+    "Простые лички 26",
+    "База_личек",
+    "База_кингов",
+    "База_ФП",
+    "База_БМ",
+    "База_крипта_кинги",
+    "База_пикселей",
+    "База фарм кинги",
+    "База фарм бм",
+    "База фарм фп",
+    "Сборки",
+    "Кэш_скачиваний_king",
+    "История_остатков",
+    "Мониторинг_банов",
+    "Стикеры",
+]
+
+
+def _grist_table_columns_preview(table_id):
+    """Получает колонки произвольной Grist-таблицы для безопасной проверки."""
+    try:
+        data = _grist_request(
+            "GET",
+            f"/api/docs/{GRIST_DOC_ID}/tables/{table_id}/columns",
+        )
+    except Exception:
+        return []
+
+    result = []
+    for item in (data.get("columns", []) if isinstance(data, dict) else []):
+        item = item or {}
+        col_id = str(item.get("id", "")).strip()
+        fields = item.get("fields") or {}
+
+        if not col_id or col_id == "manualSort":
+            continue
+
+        result.append({
+            "id": col_id,
+            "label": str(fields.get("label") or col_id).strip(),
+            "type": str(fields.get("type") or "Any").strip(),
+        })
+
+    return result
+
+
+def _grist_crypto_structure_score(columns):
+    """Проверяет, что таблица похожа на База_крипта_кинги.
+
+    У king-базы в старом коде используется минимум 12 колонок:
+    название, дата покупки, цена, поставщик, статус, для кого,
+    дата взятия, GEO, кто взял и 3 части данных.
+    """
+    if not columns:
+        return -100
+
+    labels = [
+        _grist_normalize_name((c or {}).get("label", ""))
+        for c in columns
+    ]
+
+    score = 0
+
+    # База king должна быть достаточно широкой.
+    if len(columns) >= 12:
+        score += 5
+    elif len(columns) >= 9:
+        score += 1
+    else:
+        score -= 10
+
+    alias_groups = [
+        {"название", "имя", "name", "king", "кинг"},
+        {"дата_покупки", "purchase_date"},
+        {"цена", "price"},
+        {"поставщик", "supplier"},
+        {"статус", "status"},
+        {"для_кого", "for_whom"},
+        {"дата_взятия", "дата_передачи", "taken_date"},
+        {"geo", "гео"},
+        {"кто_взял", "who_took"},
+    ]
+
+    for aliases in alias_groups:
+        if any(label in aliases for label in labels):
+            score += 2
+
+    # Хэш оплаты обычно 14-я колонка в king-базе.
+    if any(
+        label in {"хэш_оплаты", "хеш_оплаты", "payment_hash", "хэш", "hash"}
+        for label in labels
+    ):
+        score += 1
+
+    return score
+
+
 def grist_crypto_table_id(force=False):
     now = time.time()
+
     with grist_crypto_meta_lock:
         cached = grist_crypto_meta_cache.get("table_id", "")
         updated = float(grist_crypto_meta_cache.get("updated_at", 0) or 0)
+
         if cached and not force and now - updated < GRIST_CRYPTO_META_TTL:
             return cached
 
+    # 0. Явный ENV всегда имеет приоритет.
     if GRIST_CRYPTO_TABLE_ID:
         table_id = GRIST_CRYPTO_TABLE_ID
+        columns = _grist_table_columns_preview(table_id)
+
+        if not columns:
+            raise RuntimeError(
+                f"GRIST_CRYPTO_TABLE_ID={table_id} задан, "
+                "но такую таблицу не удалось прочитать в Grist."
+            )
+
+        logging.info(
+            "GRIST crypto table taken from ENV: %s (columns=%s)",
+            table_id,
+            len(columns),
+        )
+
     else:
-        data = _grist_request("GET", f"/api/docs/{GRIST_DOC_ID}/tables")
+        data = _grist_request(
+            "GET",
+            f"/api/docs/{GRIST_DOC_ID}/tables",
+            params={"expand": "column"},
+        )
         tables = data.get("tables", []) if isinstance(data, dict) else []
-        target = _grist_normalize_name(SHEET_CRYPTO_KINGS)
+
+        if not tables:
+            raise RuntimeError("Grist не вернул ни одной таблицы документа.")
+
+        table_ids = [
+            str((item or {}).get("id", "")).strip()
+            for item in tables
+            if str((item or {}).get("id", "")).strip()
+        ]
+
+        target_norm = _grist_normalize_name(SHEET_CRYPTO_KINGS)
         table_id = ""
 
-        for item in tables:
-            candidate = str((item or {}).get("id", "")).strip()
+        # 1. Точное совпадение API Table ID.
+        for candidate in table_ids:
             if candidate == SHEET_CRYPTO_KINGS:
                 table_id = candidate
                 break
 
+        # 2. Нормализованное совпадение API Table ID.
         if not table_id:
-            for item in tables:
-                candidate = str((item or {}).get("id", "")).strip()
-                if _grist_normalize_name(candidate) == target:
+            for candidate in table_ids:
+                if _grist_normalize_name(candidate) == target_norm:
                     table_id = candidate
                     break
 
+        # 3. После импорта Excel Grist часто даёт Table1/Table2/...
+        # Сопоставляем с исходным порядком листов.
         if not table_id:
-            available = ", ".join(
-                str((x or {}).get("id", "")).strip()
-                for x in tables[:50]
-                if str((x or {}).get("id", "")).strip()
-            )
+            try:
+                expected_index = GRIST_IMPORTED_PAGE_ORDER.index(SHEET_CRYPTO_KINGS)
+            except ValueError:
+                expected_index = -1
+
+            if 0 <= expected_index < len(table_ids):
+                ordered_candidate = table_ids[expected_index]
+                ordered_columns = _grist_table_columns_preview(ordered_candidate)
+                ordered_score = _grist_crypto_structure_score(ordered_columns)
+
+                # Не берём шестую таблицу вслепую:
+                # она должна хотя бы выглядеть как king-база.
+                if ordered_score >= 5:
+                    table_id = ordered_candidate
+                    logging.info(
+                        "GRIST crypto table autodetected by import order: "
+                        "page='%s' -> table_id='%s', score=%s, columns=%s",
+                        SHEET_CRYPTO_KINGS,
+                        table_id,
+                        ordered_score,
+                        len(ordered_columns),
+                    )
+
+        # 4. Последний fallback — ищем таблицы, похожие на king-базу.
+        # Если такой кандидат только один — можем выбрать безопасно.
+        if not table_id:
+            scored = []
+
+            for candidate in table_ids:
+                cols = _grist_table_columns_preview(candidate)
+                score = _grist_crypto_structure_score(cols)
+
+                if score >= 5:
+                    scored.append((score, candidate, cols))
+
+            scored.sort(key=lambda x: (-x[0], x[1]))
+
+            if len(scored) == 1:
+                score, table_id, cols = scored[0]
+                logging.info(
+                    "GRIST crypto table uniquely detected by structure: "
+                    "%s score=%s columns=%s",
+                    table_id,
+                    score,
+                    len(cols),
+                )
+
+        if not table_id:
+            details = []
+            for candidate in table_ids:
+                cols = _grist_table_columns_preview(candidate)
+                score = _grist_crypto_structure_score(cols)
+                details.append(
+                    f"{candidate}[cols={len(cols)},score={score}]"
+                )
+
             raise RuntimeError(
-                f"Не нашёл '{SHEET_CRYPTO_KINGS}' в Grist. "
-                f"Доступные Table ID: {available or 'нет'}. "
-                "Если нужно, добавь GRIST_CRYPTO_TABLE_ID в Railway."
+                "Не удалось безопасно определить База_крипта_кинги в Grist. "
+                "Проверенные таблицы: "
+                + ", ".join(details[:50])
+                + ". Можно явно задать GRIST_CRYPTO_TABLE_ID в Railway."
             )
 
-    logging.info("GRIST crypto table resolved: %s", table_id)
+    logging.info("GRIST crypto table resolved FINAL: %s", table_id)
+
     with grist_crypto_meta_lock:
         grist_crypto_meta_cache["table_id"] = table_id
+        # При смене найденной таблицы сбрасываем кэш колонок.
+        grist_crypto_meta_cache["columns"] = None
         grist_crypto_meta_cache["updated_at"] = now
+
     return table_id
 
 
