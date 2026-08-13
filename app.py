@@ -744,351 +744,6 @@ def grist_crypto_self_test():
         return False
 
 
-# ============================================================
-# UNIVERSAL GRIST STORAGE
-# ============================================================
-GRIST_ALL_SHEETS_ORDER = [
-    SHEET_ISSUES,
-    SHEET_ACCOUNTS,
-    SHEET_KINGS,
-    SHEET_FPS,
-    SHEET_BMS,
-    SHEET_CRYPTO_KINGS,
-    SHEET_PIXELS,
-    SHEET_FARM_KINGS,
-    SHEET_FARM_BMS,
-    SHEET_FARM_FPS,
-    SHEET_ASSEMBLIES,
-    SHEET_KING_DOWNLOADS,
-    SHEET_FREE_RESOURCES_HISTORY,
-    SHEET_BAN_MONITOR,
-    SHEET_STICKERS,
-]
-
-grist_all_meta_lock = threading.RLock()
-grist_all_meta = {}
-grist_all_row_ids = {}
-grist_all_rows_at = {}
-GRIST_ALL_ROWS_TTL = 15
-GRIST_ALL_META_TTL = 300
-
-
-def storage_is_grist():
-    return STORAGE_BACKEND == "grist"
-
-
-def grist_all_table_ids(force=False):
-    key = "__ids__"
-    now = time.time()
-    with grist_all_meta_lock:
-        cached = grist_all_meta.get(key)
-        if cached and not force and now - cached["at"] < GRIST_ALL_META_TTL:
-            return list(cached["value"])
-
-    data = _grist_request("GET", f"/api/docs/{GRIST_DOC_ID}/tables")
-    ids = [
-        str((x or {}).get("id", "")).strip()
-        for x in (data.get("tables", []) if isinstance(data, dict) else [])
-        if str((x or {}).get("id", "")).strip()
-    ]
-    if not ids:
-        raise RuntimeError("Grist не вернул список таблиц.")
-
-    with grist_all_meta_lock:
-        grist_all_meta[key] = {"value": ids, "at": now}
-    return ids
-
-
-def grist_table_id_for_sheet(sheet_name, force=False):
-    key = f"table:{sheet_name}"
-    now = time.time()
-    with grist_all_meta_lock:
-        cached = grist_all_meta.get(key)
-        if cached and not force and now - cached["at"] < GRIST_ALL_META_TTL:
-            return cached["value"]
-
-    if sheet_name == SHEET_CRYPTO_KINGS:
-        table_id = grist_crypto_table_id(force=force)
-    else:
-        ids = grist_all_table_ids(force=force)
-        target = _grist_normalize_name(sheet_name)
-        table_id = ""
-
-        for candidate in ids:
-            if candidate == sheet_name or _grist_normalize_name(candidate) == target:
-                table_id = candidate
-                break
-
-        if not table_id:
-            try:
-                idx = GRIST_ALL_SHEETS_ORDER.index(sheet_name)
-            except ValueError:
-                idx = -1
-            if 0 <= idx < len(ids):
-                table_id = ids[idx]
-
-        if not table_id:
-            raise RuntimeError(
-                f"Не смог сопоставить '{sheet_name}' с Grist. "
-                f"Table ID: {', '.join(ids)}"
-            )
-
-    with grist_all_meta_lock:
-        grist_all_meta[key] = {"value": table_id, "at": now}
-
-    logging.info("GRIST MAP: %s -> %s", sheet_name, table_id)
-    return table_id
-
-
-def grist_columns_for_sheet(sheet_name, force=False):
-    key = f"cols:{sheet_name}"
-    now = time.time()
-    with grist_all_meta_lock:
-        cached = grist_all_meta.get(key)
-        if cached and not force and now - cached["at"] < GRIST_ALL_META_TTL:
-            return list(cached["value"])
-
-    table_id = grist_table_id_for_sheet(sheet_name, force=force)
-    data = _grist_request(
-        "GET",
-        f"/api/docs/{GRIST_DOC_ID}/tables/{table_id}/columns"
-    )
-
-    cols = []
-    for item in (data.get("columns", []) if isinstance(data, dict) else []):
-        item = item or {}
-        cid = str(item.get("id", "")).strip()
-        fields = item.get("fields") or {}
-        if not cid or cid == "manualSort":
-            continue
-        cols.append({
-            "id": cid,
-            "label": str(fields.get("label") or cid).strip(),
-            "type": str(fields.get("type") or "Any").strip()
-        })
-
-    if not cols:
-        raise RuntimeError(f"Grist: у '{sheet_name}' нет колонок.")
-
-    with grist_all_meta_lock:
-        grist_all_meta[key] = {"value": cols, "at": now}
-    return cols
-
-
-def grist_all_mark_stale(sheet_name):
-    grist_all_rows_at[sheet_name] = 0
-    with table_cache_lock:
-        if sheet_name in table_cache:
-            table_cache[sheet_name]["updated_at"] = 0
-
-
-def grist_all_fetch_rows(sheet_name, force=False):
-    now = time.time()
-    updated = float(grist_all_rows_at.get(sheet_name, 0) or 0)
-
-    if not force and updated and now - updated < GRIST_ALL_ROWS_TTL:
-        with table_cache_lock:
-            cached = table_cache.get(sheet_name)
-            if cached and cached.get("rows") is not None:
-                return cached["rows"]
-
-    table_id = grist_table_id_for_sheet(sheet_name)
-    cols = grist_columns_for_sheet(sheet_name)
-    data = _grist_request(
-        "GET",
-        f"/api/docs/{GRIST_DOC_ID}/tables/{table_id}/records",
-        params={"sort": "manualSort", "limit": 0}
-    )
-    records = data.get("records", []) if isinstance(data, dict) else []
-
-    rows = [[c["label"] for c in cols]]
-    ids = []
-    for rec in records:
-        fields = (rec or {}).get("fields") or {}
-        rows.append([
-            _grist_value_to_sheet(fields.get(c["id"], ""), c["type"])
-            for c in cols
-        ])
-        ids.append(int((rec or {}).get("id")))
-
-    grist_all_row_ids[sheet_name] = ids
-    grist_all_rows_at[sheet_name] = now
-
-    with table_cache_lock:
-        table_cache.setdefault(sheet_name, {"rows": None, "updated_at": 0})
-        table_cache[sheet_name]["rows"] = rows
-        table_cache[sheet_name]["updated_at"] = now
-
-    return rows
-
-
-def grist_record_id(sheet_name, row_index, force=True):
-    row_index = int(row_index)
-    if row_index < 2:
-        raise RuntimeError("Заголовок не является записью Grist.")
-    grist_all_fetch_rows(sheet_name, force=force)
-    pos = row_index - 2
-    ids = grist_all_row_ids.get(sheet_name, [])
-    if pos < 0 or pos >= len(ids):
-        raise RuntimeError(f"Grist: строка {row_index} не найдена в {sheet_name}.")
-    return ids[pos]
-
-
-def grist_apply(actions):
-    actions = [x for x in (actions or []) if x]
-    if not actions:
-        return {}
-    return _grist_request(
-        "POST",
-        f"/api/docs/{GRIST_DOC_ID}/apply",
-        params={"noparse": "false"},
-        payload=actions,
-        timeout=90
-    )
-
-
-def grist_update_action(sheet_name, row_index, fields_by_pos, force_row_lookup=True):
-    cols = grist_columns_for_sheet(sheet_name)
-    rid = grist_record_id(sheet_name, row_index, force=force_row_lookup)
-    fields = {}
-    for pos, value in fields_by_pos.items():
-        pos = int(pos)
-        if pos < 0 or pos >= len(cols):
-            raise RuntimeError(f"Колонка {pos + 1} вне {sheet_name}.")
-        fields[cols[pos]["id"]] = value
-    return ["UpdateRecord", grist_table_id_for_sheet(sheet_name), rid, fields]
-
-
-def grist_add_action(sheet_name, row):
-    cols = grist_columns_for_sheet(sheet_name)
-    fields = {}
-    for i, value in enumerate(list(row or [])[:len(cols)]):
-        fields[cols[i]["id"]] = value
-    return ["AddRecord", grist_table_id_for_sheet(sheet_name), None, fields]
-
-
-def grist_parse_range(value):
-    value = str(value or "").strip()
-    m = re.fullmatch(r"([A-Za-z]+)(\d+):([A-Za-z]+)(\d+)", value)
-    if m:
-        c1, r1, c2, r2 = m.groups()
-    else:
-        m = re.fullmatch(r"([A-Za-z]+)(\d+)", value)
-        if not m:
-            raise RuntimeError(f"Не поддерживается диапазон {value}")
-        c1, r1 = m.groups()
-        c2, r2 = c1, r1
-    return _a1_col_to_num(c1), int(r1), _a1_col_to_num(c2), int(r2)
-
-
-def grist_get_range_all(sheet_name, cell_range):
-    c1, r1, c2, r2 = grist_parse_range(cell_range)
-    rows = grist_all_fetch_rows(sheet_name, force=True)
-    out = []
-    for r in range(r1, r2 + 1):
-        row = list(rows[r - 1]) if 0 <= r - 1 < len(rows) else []
-        if len(row) < c2:
-            row += [""] * (c2 - len(row))
-        out.append(row[c1 - 1:c2])
-    return out
-
-
-def grist_update_range_all(sheet_name, cell_range, values):
-    values = [list(x or []) for x in (values or [])]
-    if not values:
-        return
-
-    c1, r1, c2, r2 = grist_parse_range(cell_range)
-
-    # Header row is metadata in Grist. Imported document already has its columns.
-    if r1 == 1:
-        return
-
-    if len(values) != (r2 - r1 + 1):
-        raise RuntimeError(f"Количество строк не совпадает с {cell_range}.")
-
-    cols = grist_columns_for_sheet(sheet_name)
-    grist_all_fetch_rows(sheet_name, force=True)
-    actions = []
-
-    for off, row_values in enumerate(values):
-        row_index = r1 + off
-        rid = grist_record_id(sheet_name, row_index, force=False)
-        width = c2 - c1 + 1
-        row_values = list(row_values) + [""] * max(0, width - len(row_values))
-        fields = {}
-        for i in range(width):
-            fields[cols[c1 - 1 + i]["id"]] = row_values[i]
-        actions.append([
-            "UpdateRecord",
-            grist_table_id_for_sheet(sheet_name),
-            rid,
-            fields
-        ])
-
-    grist_apply(actions)
-    grist_all_mark_stale(sheet_name)
-
-
-def grist_append_all(sheet_name, rows):
-    actions = [grist_add_action(sheet_name, row) for row in (rows or []) if row]
-    grist_apply(actions)
-    grist_all_mark_stale(sheet_name)
-
-
-def grist_delete_all(sheet_name, row_index, end_index=None):
-    row_index = int(row_index)
-    end_index = int(end_index if end_index is not None else row_index)
-    grist_all_fetch_rows(sheet_name, force=True)
-    actions = []
-    for r in range(row_index, end_index + 1):
-        actions.append([
-            "RemoveRecord",
-            grist_table_id_for_sheet(sheet_name),
-            grist_record_id(sheet_name, r, force=False)
-        ])
-    grist_apply(actions)
-    grist_all_mark_stale(sheet_name)
-
-
-class GristSheetProxy:
-    def __init__(self, sheet_name):
-        self.sheet_name = sheet_name
-        self.title = sheet_name
-        self.id = grist_table_id_for_sheet(sheet_name)
-
-    def get_all_values(self):
-        return grist_all_fetch_rows(self.sheet_name, force=True)
-
-    def get(self, cell_range):
-        return grist_get_range_all(self.sheet_name, cell_range)
-
-    def update(self, cell_range, values, **kwargs):
-        return grist_update_range_all(self.sheet_name, cell_range, values)
-
-    def append_row(self, row, **kwargs):
-        return grist_append_all(self.sheet_name, [row])
-
-    def append_rows(self, rows, **kwargs):
-        return grist_append_all(self.sheet_name, rows)
-
-    def delete_rows(self, start, end=None):
-        return grist_delete_all(self.sheet_name, start, end)
-
-    def col_values(self, col):
-        rows = grist_all_fetch_rows(self.sheet_name, force=True)
-        idx = int(col) - 1
-        return [r[idx] if idx < len(r) else "" for r in rows]
-
-    def batch_update(self, updates):
-        for item in updates or []:
-            if isinstance(item, dict) and item.get("range"):
-                grist_update_range_all(
-                    self.sheet_name,
-                    item["range"],
-                    item.get("values", [])
-                )
-
 
 ADMIN_POLL = "Опрос"
 
@@ -11431,6 +11086,354 @@ BAN_STORM_ALERT_THRESHOLDS = [30, 40, 50, 60, 70]
 BAN_STORM_ADMIN_IDS = [7573650707, 7681133609, 7953116439]
 BAN_STORM_MIN_BASE_TOTAL = 30
 SHEET_BAN_MONITOR = "Мониторинг банов"
+
+# ============================================================
+# UNIVERSAL GRIST STORAGE
+# ============================================================
+GRIST_ALL_SHEETS_ORDER = [
+    SHEET_ISSUES,
+    SHEET_ACCOUNTS,
+    SHEET_KINGS,
+    SHEET_FPS,
+    SHEET_BMS,
+    SHEET_CRYPTO_KINGS,
+    SHEET_PIXELS,
+    SHEET_FARM_KINGS,
+    SHEET_FARM_BMS,
+    SHEET_FARM_FPS,
+    SHEET_ASSEMBLIES,
+    SHEET_KING_DOWNLOADS,
+    SHEET_FREE_RESOURCES_HISTORY,
+    SHEET_BAN_MONITOR,
+    SHEET_STICKERS,
+]
+
+grist_all_meta_lock = threading.RLock()
+grist_all_meta = {}
+grist_all_row_ids = {}
+grist_all_rows_at = {}
+GRIST_ALL_ROWS_TTL = 15
+GRIST_ALL_META_TTL = 300
+
+
+def storage_is_grist():
+    return STORAGE_BACKEND == "grist"
+
+
+def grist_all_table_ids(force=False):
+    key = "__ids__"
+    now = time.time()
+    with grist_all_meta_lock:
+        cached = grist_all_meta.get(key)
+        if cached and not force and now - cached["at"] < GRIST_ALL_META_TTL:
+            return list(cached["value"])
+
+    data = _grist_request("GET", f"/api/docs/{GRIST_DOC_ID}/tables")
+    ids = [
+        str((x or {}).get("id", "")).strip()
+        for x in (data.get("tables", []) if isinstance(data, dict) else [])
+        if str((x or {}).get("id", "")).strip()
+    ]
+    if not ids:
+        raise RuntimeError("Grist не вернул список таблиц.")
+
+    with grist_all_meta_lock:
+        grist_all_meta[key] = {"value": ids, "at": now}
+    return ids
+
+
+def grist_table_id_for_sheet(sheet_name, force=False):
+    key = f"table:{sheet_name}"
+    now = time.time()
+    with grist_all_meta_lock:
+        cached = grist_all_meta.get(key)
+        if cached and not force and now - cached["at"] < GRIST_ALL_META_TTL:
+            return cached["value"]
+
+    if sheet_name == SHEET_CRYPTO_KINGS:
+        table_id = grist_crypto_table_id(force=force)
+    else:
+        ids = grist_all_table_ids(force=force)
+        target = _grist_normalize_name(sheet_name)
+        table_id = ""
+
+        for candidate in ids:
+            if candidate == sheet_name or _grist_normalize_name(candidate) == target:
+                table_id = candidate
+                break
+
+        if not table_id:
+            try:
+                idx = GRIST_ALL_SHEETS_ORDER.index(sheet_name)
+            except ValueError:
+                idx = -1
+            if 0 <= idx < len(ids):
+                table_id = ids[idx]
+
+        if not table_id:
+            raise RuntimeError(
+                f"Не смог сопоставить '{sheet_name}' с Grist. "
+                f"Table ID: {', '.join(ids)}"
+            )
+
+    with grist_all_meta_lock:
+        grist_all_meta[key] = {"value": table_id, "at": now}
+
+    logging.info("GRIST MAP: %s -> %s", sheet_name, table_id)
+    return table_id
+
+
+def grist_columns_for_sheet(sheet_name, force=False):
+    key = f"cols:{sheet_name}"
+    now = time.time()
+    with grist_all_meta_lock:
+        cached = grist_all_meta.get(key)
+        if cached and not force and now - cached["at"] < GRIST_ALL_META_TTL:
+            return list(cached["value"])
+
+    table_id = grist_table_id_for_sheet(sheet_name, force=force)
+    data = _grist_request(
+        "GET",
+        f"/api/docs/{GRIST_DOC_ID}/tables/{table_id}/columns"
+    )
+
+    cols = []
+    for item in (data.get("columns", []) if isinstance(data, dict) else []):
+        item = item or {}
+        cid = str(item.get("id", "")).strip()
+        fields = item.get("fields") or {}
+        if not cid or cid == "manualSort":
+            continue
+        cols.append({
+            "id": cid,
+            "label": str(fields.get("label") or cid).strip(),
+            "type": str(fields.get("type") or "Any").strip()
+        })
+
+    if not cols:
+        raise RuntimeError(f"Grist: у '{sheet_name}' нет колонок.")
+
+    with grist_all_meta_lock:
+        grist_all_meta[key] = {"value": cols, "at": now}
+    return cols
+
+
+def grist_all_mark_stale(sheet_name):
+    grist_all_rows_at[sheet_name] = 0
+    with table_cache_lock:
+        if sheet_name in table_cache:
+            table_cache[sheet_name]["updated_at"] = 0
+
+
+def grist_all_fetch_rows(sheet_name, force=False):
+    now = time.time()
+    updated = float(grist_all_rows_at.get(sheet_name, 0) or 0)
+
+    if not force and updated and now - updated < GRIST_ALL_ROWS_TTL:
+        with table_cache_lock:
+            cached = table_cache.get(sheet_name)
+            if cached and cached.get("rows") is not None:
+                return cached["rows"]
+
+    table_id = grist_table_id_for_sheet(sheet_name)
+    cols = grist_columns_for_sheet(sheet_name)
+    data = _grist_request(
+        "GET",
+        f"/api/docs/{GRIST_DOC_ID}/tables/{table_id}/records",
+        params={"sort": "manualSort", "limit": 0}
+    )
+    records = data.get("records", []) if isinstance(data, dict) else []
+
+    rows = [[c["label"] for c in cols]]
+    ids = []
+    for rec in records:
+        fields = (rec or {}).get("fields") or {}
+        rows.append([
+            _grist_value_to_sheet(fields.get(c["id"], ""), c["type"])
+            for c in cols
+        ])
+        ids.append(int((rec or {}).get("id")))
+
+    grist_all_row_ids[sheet_name] = ids
+    grist_all_rows_at[sheet_name] = now
+
+    with table_cache_lock:
+        table_cache.setdefault(sheet_name, {"rows": None, "updated_at": 0})
+        table_cache[sheet_name]["rows"] = rows
+        table_cache[sheet_name]["updated_at"] = now
+
+    return rows
+
+
+def grist_record_id(sheet_name, row_index, force=True):
+    row_index = int(row_index)
+    if row_index < 2:
+        raise RuntimeError("Заголовок не является записью Grist.")
+    grist_all_fetch_rows(sheet_name, force=force)
+    pos = row_index - 2
+    ids = grist_all_row_ids.get(sheet_name, [])
+    if pos < 0 or pos >= len(ids):
+        raise RuntimeError(f"Grist: строка {row_index} не найдена в {sheet_name}.")
+    return ids[pos]
+
+
+def grist_apply(actions):
+    actions = [x for x in (actions or []) if x]
+    if not actions:
+        return {}
+    return _grist_request(
+        "POST",
+        f"/api/docs/{GRIST_DOC_ID}/apply",
+        params={"noparse": "false"},
+        payload=actions,
+        timeout=90
+    )
+
+
+def grist_update_action(sheet_name, row_index, fields_by_pos, force_row_lookup=True):
+    cols = grist_columns_for_sheet(sheet_name)
+    rid = grist_record_id(sheet_name, row_index, force=force_row_lookup)
+    fields = {}
+    for pos, value in fields_by_pos.items():
+        pos = int(pos)
+        if pos < 0 or pos >= len(cols):
+            raise RuntimeError(f"Колонка {pos + 1} вне {sheet_name}.")
+        fields[cols[pos]["id"]] = value
+    return ["UpdateRecord", grist_table_id_for_sheet(sheet_name), rid, fields]
+
+
+def grist_add_action(sheet_name, row):
+    cols = grist_columns_for_sheet(sheet_name)
+    fields = {}
+    for i, value in enumerate(list(row or [])[:len(cols)]):
+        fields[cols[i]["id"]] = value
+    return ["AddRecord", grist_table_id_for_sheet(sheet_name), None, fields]
+
+
+def grist_parse_range(value):
+    value = str(value or "").strip()
+    m = re.fullmatch(r"([A-Za-z]+)(\d+):([A-Za-z]+)(\d+)", value)
+    if m:
+        c1, r1, c2, r2 = m.groups()
+    else:
+        m = re.fullmatch(r"([A-Za-z]+)(\d+)", value)
+        if not m:
+            raise RuntimeError(f"Не поддерживается диапазон {value}")
+        c1, r1 = m.groups()
+        c2, r2 = c1, r1
+    return _a1_col_to_num(c1), int(r1), _a1_col_to_num(c2), int(r2)
+
+
+def grist_get_range_all(sheet_name, cell_range):
+    c1, r1, c2, r2 = grist_parse_range(cell_range)
+    rows = grist_all_fetch_rows(sheet_name, force=True)
+    out = []
+    for r in range(r1, r2 + 1):
+        row = list(rows[r - 1]) if 0 <= r - 1 < len(rows) else []
+        if len(row) < c2:
+            row += [""] * (c2 - len(row))
+        out.append(row[c1 - 1:c2])
+    return out
+
+
+def grist_update_range_all(sheet_name, cell_range, values):
+    values = [list(x or []) for x in (values or [])]
+    if not values:
+        return
+
+    c1, r1, c2, r2 = grist_parse_range(cell_range)
+
+    # Header row is metadata in Grist. Imported document already has its columns.
+    if r1 == 1:
+        return
+
+    if len(values) != (r2 - r1 + 1):
+        raise RuntimeError(f"Количество строк не совпадает с {cell_range}.")
+
+    cols = grist_columns_for_sheet(sheet_name)
+    grist_all_fetch_rows(sheet_name, force=True)
+    actions = []
+
+    for off, row_values in enumerate(values):
+        row_index = r1 + off
+        rid = grist_record_id(sheet_name, row_index, force=False)
+        width = c2 - c1 + 1
+        row_values = list(row_values) + [""] * max(0, width - len(row_values))
+        fields = {}
+        for i in range(width):
+            fields[cols[c1 - 1 + i]["id"]] = row_values[i]
+        actions.append([
+            "UpdateRecord",
+            grist_table_id_for_sheet(sheet_name),
+            rid,
+            fields
+        ])
+
+    grist_apply(actions)
+    grist_all_mark_stale(sheet_name)
+
+
+def grist_append_all(sheet_name, rows):
+    actions = [grist_add_action(sheet_name, row) for row in (rows or []) if row]
+    grist_apply(actions)
+    grist_all_mark_stale(sheet_name)
+
+
+def grist_delete_all(sheet_name, row_index, end_index=None):
+    row_index = int(row_index)
+    end_index = int(end_index if end_index is not None else row_index)
+    grist_all_fetch_rows(sheet_name, force=True)
+    actions = []
+    for r in range(row_index, end_index + 1):
+        actions.append([
+            "RemoveRecord",
+            grist_table_id_for_sheet(sheet_name),
+            grist_record_id(sheet_name, r, force=False)
+        ])
+    grist_apply(actions)
+    grist_all_mark_stale(sheet_name)
+
+
+class GristSheetProxy:
+    def __init__(self, sheet_name):
+        self.sheet_name = sheet_name
+        self.title = sheet_name
+        self.id = grist_table_id_for_sheet(sheet_name)
+
+    def get_all_values(self):
+        return grist_all_fetch_rows(self.sheet_name, force=True)
+
+    def get(self, cell_range):
+        return grist_get_range_all(self.sheet_name, cell_range)
+
+    def update(self, cell_range, values, **kwargs):
+        return grist_update_range_all(self.sheet_name, cell_range, values)
+
+    def append_row(self, row, **kwargs):
+        return grist_append_all(self.sheet_name, [row])
+
+    def append_rows(self, rows, **kwargs):
+        return grist_append_all(self.sheet_name, rows)
+
+    def delete_rows(self, start, end=None):
+        return grist_delete_all(self.sheet_name, start, end)
+
+    def col_values(self, col):
+        rows = grist_all_fetch_rows(self.sheet_name, force=True)
+        idx = int(col) - 1
+        return [r[idx] if idx < len(r) else "" for r in rows]
+
+    def batch_update(self, updates):
+        for item in updates or []:
+            if isinstance(item, dict) and item.get("range"):
+                grist_update_range_all(
+                    self.sheet_name,
+                    item["range"],
+                    item.get("values", [])
+                )
+
+
+
 BAN_STORM_TYPE_META = {
     "KING": {"icon": "👑", "details": "кингов"},
     "PIXEL": {"icon": "🌀", "details": "пикселей"},
