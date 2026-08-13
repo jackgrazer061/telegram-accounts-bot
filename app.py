@@ -31,6 +31,7 @@ BACKUP_SPREADSHEET_ID = os.environ.get("BACKUP_SPREADSHEET_ID", "")
 # =========================
 # GRIST — пока только Crypto King
 # =========================
+STORAGE_BACKEND = os.environ.get("STORAGE_BACKEND", "grist").strip().lower()
 GRIST_API_KEY = os.environ.get("GRIST_API_KEY", "").strip()
 GRIST_DOC_ID = os.environ.get("GRIST_DOC_ID", "").strip()
 GRIST_API_BASE = os.environ.get("GRIST_API_BASE", "https://docs.getgrist.com").strip().rstrip("/")
@@ -743,6 +744,352 @@ def grist_crypto_self_test():
         return False
 
 
+# ============================================================
+# UNIVERSAL GRIST STORAGE
+# ============================================================
+GRIST_ALL_SHEETS_ORDER = [
+    SHEET_ISSUES,
+    SHEET_ACCOUNTS,
+    SHEET_KINGS,
+    SHEET_FPS,
+    SHEET_BMS,
+    SHEET_CRYPTO_KINGS,
+    SHEET_PIXELS,
+    SHEET_FARM_KINGS,
+    SHEET_FARM_BMS,
+    SHEET_FARM_FPS,
+    SHEET_ASSEMBLIES,
+    SHEET_KING_DOWNLOADS,
+    SHEET_FREE_RESOURCES_HISTORY,
+    SHEET_BAN_MONITOR,
+    SHEET_STICKERS,
+]
+
+grist_all_meta_lock = threading.RLock()
+grist_all_meta = {}
+grist_all_row_ids = {}
+grist_all_rows_at = {}
+GRIST_ALL_ROWS_TTL = 15
+GRIST_ALL_META_TTL = 300
+
+
+def storage_is_grist():
+    return STORAGE_BACKEND == "grist"
+
+
+def grist_all_table_ids(force=False):
+    key = "__ids__"
+    now = time.time()
+    with grist_all_meta_lock:
+        cached = grist_all_meta.get(key)
+        if cached and not force and now - cached["at"] < GRIST_ALL_META_TTL:
+            return list(cached["value"])
+
+    data = _grist_request("GET", f"/api/docs/{GRIST_DOC_ID}/tables")
+    ids = [
+        str((x or {}).get("id", "")).strip()
+        for x in (data.get("tables", []) if isinstance(data, dict) else [])
+        if str((x or {}).get("id", "")).strip()
+    ]
+    if not ids:
+        raise RuntimeError("Grist не вернул список таблиц.")
+
+    with grist_all_meta_lock:
+        grist_all_meta[key] = {"value": ids, "at": now}
+    return ids
+
+
+def grist_table_id_for_sheet(sheet_name, force=False):
+    key = f"table:{sheet_name}"
+    now = time.time()
+    with grist_all_meta_lock:
+        cached = grist_all_meta.get(key)
+        if cached and not force and now - cached["at"] < GRIST_ALL_META_TTL:
+            return cached["value"]
+
+    if sheet_name == SHEET_CRYPTO_KINGS:
+        table_id = grist_crypto_table_id(force=force)
+    else:
+        ids = grist_all_table_ids(force=force)
+        target = _grist_normalize_name(sheet_name)
+        table_id = ""
+
+        for candidate in ids:
+            if candidate == sheet_name or _grist_normalize_name(candidate) == target:
+                table_id = candidate
+                break
+
+        if not table_id:
+            try:
+                idx = GRIST_ALL_SHEETS_ORDER.index(sheet_name)
+            except ValueError:
+                idx = -1
+            if 0 <= idx < len(ids):
+                table_id = ids[idx]
+
+        if not table_id:
+            raise RuntimeError(
+                f"Не смог сопоставить '{sheet_name}' с Grist. "
+                f"Table ID: {', '.join(ids)}"
+            )
+
+    with grist_all_meta_lock:
+        grist_all_meta[key] = {"value": table_id, "at": now}
+
+    logging.info("GRIST MAP: %s -> %s", sheet_name, table_id)
+    return table_id
+
+
+def grist_columns_for_sheet(sheet_name, force=False):
+    key = f"cols:{sheet_name}"
+    now = time.time()
+    with grist_all_meta_lock:
+        cached = grist_all_meta.get(key)
+        if cached and not force and now - cached["at"] < GRIST_ALL_META_TTL:
+            return list(cached["value"])
+
+    table_id = grist_table_id_for_sheet(sheet_name, force=force)
+    data = _grist_request(
+        "GET",
+        f"/api/docs/{GRIST_DOC_ID}/tables/{table_id}/columns"
+    )
+
+    cols = []
+    for item in (data.get("columns", []) if isinstance(data, dict) else []):
+        item = item or {}
+        cid = str(item.get("id", "")).strip()
+        fields = item.get("fields") or {}
+        if not cid or cid == "manualSort":
+            continue
+        cols.append({
+            "id": cid,
+            "label": str(fields.get("label") or cid).strip(),
+            "type": str(fields.get("type") or "Any").strip()
+        })
+
+    if not cols:
+        raise RuntimeError(f"Grist: у '{sheet_name}' нет колонок.")
+
+    with grist_all_meta_lock:
+        grist_all_meta[key] = {"value": cols, "at": now}
+    return cols
+
+
+def grist_all_mark_stale(sheet_name):
+    grist_all_rows_at[sheet_name] = 0
+    with table_cache_lock:
+        if sheet_name in table_cache:
+            table_cache[sheet_name]["updated_at"] = 0
+
+
+def grist_all_fetch_rows(sheet_name, force=False):
+    now = time.time()
+    updated = float(grist_all_rows_at.get(sheet_name, 0) or 0)
+
+    if not force and updated and now - updated < GRIST_ALL_ROWS_TTL:
+        with table_cache_lock:
+            cached = table_cache.get(sheet_name)
+            if cached and cached.get("rows") is not None:
+                return cached["rows"]
+
+    table_id = grist_table_id_for_sheet(sheet_name)
+    cols = grist_columns_for_sheet(sheet_name)
+    data = _grist_request(
+        "GET",
+        f"/api/docs/{GRIST_DOC_ID}/tables/{table_id}/records",
+        params={"sort": "manualSort", "limit": 0}
+    )
+    records = data.get("records", []) if isinstance(data, dict) else []
+
+    rows = [[c["label"] for c in cols]]
+    ids = []
+    for rec in records:
+        fields = (rec or {}).get("fields") or {}
+        rows.append([
+            _grist_value_to_sheet(fields.get(c["id"], ""), c["type"])
+            for c in cols
+        ])
+        ids.append(int((rec or {}).get("id")))
+
+    grist_all_row_ids[sheet_name] = ids
+    grist_all_rows_at[sheet_name] = now
+
+    with table_cache_lock:
+        table_cache.setdefault(sheet_name, {"rows": None, "updated_at": 0})
+        table_cache[sheet_name]["rows"] = rows
+        table_cache[sheet_name]["updated_at"] = now
+
+    return rows
+
+
+def grist_record_id(sheet_name, row_index, force=True):
+    row_index = int(row_index)
+    if row_index < 2:
+        raise RuntimeError("Заголовок не является записью Grist.")
+    grist_all_fetch_rows(sheet_name, force=force)
+    pos = row_index - 2
+    ids = grist_all_row_ids.get(sheet_name, [])
+    if pos < 0 or pos >= len(ids):
+        raise RuntimeError(f"Grist: строка {row_index} не найдена в {sheet_name}.")
+    return ids[pos]
+
+
+def grist_apply(actions):
+    actions = [x for x in (actions or []) if x]
+    if not actions:
+        return {}
+    return _grist_request(
+        "POST",
+        f"/api/docs/{GRIST_DOC_ID}/apply",
+        params={"noparse": "false"},
+        payload=actions,
+        timeout=90
+    )
+
+
+def grist_update_action(sheet_name, row_index, fields_by_pos, force_row_lookup=True):
+    cols = grist_columns_for_sheet(sheet_name)
+    rid = grist_record_id(sheet_name, row_index, force=force_row_lookup)
+    fields = {}
+    for pos, value in fields_by_pos.items():
+        pos = int(pos)
+        if pos < 0 or pos >= len(cols):
+            raise RuntimeError(f"Колонка {pos + 1} вне {sheet_name}.")
+        fields[cols[pos]["id"]] = value
+    return ["UpdateRecord", grist_table_id_for_sheet(sheet_name), rid, fields]
+
+
+def grist_add_action(sheet_name, row):
+    cols = grist_columns_for_sheet(sheet_name)
+    fields = {}
+    for i, value in enumerate(list(row or [])[:len(cols)]):
+        fields[cols[i]["id"]] = value
+    return ["AddRecord", grist_table_id_for_sheet(sheet_name), None, fields]
+
+
+def grist_parse_range(value):
+    value = str(value or "").strip()
+    m = re.fullmatch(r"([A-Za-z]+)(\d+):([A-Za-z]+)(\d+)", value)
+    if m:
+        c1, r1, c2, r2 = m.groups()
+    else:
+        m = re.fullmatch(r"([A-Za-z]+)(\d+)", value)
+        if not m:
+            raise RuntimeError(f"Не поддерживается диапазон {value}")
+        c1, r1 = m.groups()
+        c2, r2 = c1, r1
+    return _a1_col_to_num(c1), int(r1), _a1_col_to_num(c2), int(r2)
+
+
+def grist_get_range_all(sheet_name, cell_range):
+    c1, r1, c2, r2 = grist_parse_range(cell_range)
+    rows = grist_all_fetch_rows(sheet_name, force=True)
+    out = []
+    for r in range(r1, r2 + 1):
+        row = list(rows[r - 1]) if 0 <= r - 1 < len(rows) else []
+        if len(row) < c2:
+            row += [""] * (c2 - len(row))
+        out.append(row[c1 - 1:c2])
+    return out
+
+
+def grist_update_range_all(sheet_name, cell_range, values):
+    values = [list(x or []) for x in (values or [])]
+    if not values:
+        return
+
+    c1, r1, c2, r2 = grist_parse_range(cell_range)
+
+    # Header row is metadata in Grist. Imported document already has its columns.
+    if r1 == 1:
+        return
+
+    if len(values) != (r2 - r1 + 1):
+        raise RuntimeError(f"Количество строк не совпадает с {cell_range}.")
+
+    cols = grist_columns_for_sheet(sheet_name)
+    grist_all_fetch_rows(sheet_name, force=True)
+    actions = []
+
+    for off, row_values in enumerate(values):
+        row_index = r1 + off
+        rid = grist_record_id(sheet_name, row_index, force=False)
+        width = c2 - c1 + 1
+        row_values = list(row_values) + [""] * max(0, width - len(row_values))
+        fields = {}
+        for i in range(width):
+            fields[cols[c1 - 1 + i]["id"]] = row_values[i]
+        actions.append([
+            "UpdateRecord",
+            grist_table_id_for_sheet(sheet_name),
+            rid,
+            fields
+        ])
+
+    grist_apply(actions)
+    grist_all_mark_stale(sheet_name)
+
+
+def grist_append_all(sheet_name, rows):
+    actions = [grist_add_action(sheet_name, row) for row in (rows or []) if row]
+    grist_apply(actions)
+    grist_all_mark_stale(sheet_name)
+
+
+def grist_delete_all(sheet_name, row_index, end_index=None):
+    row_index = int(row_index)
+    end_index = int(end_index if end_index is not None else row_index)
+    grist_all_fetch_rows(sheet_name, force=True)
+    actions = []
+    for r in range(row_index, end_index + 1):
+        actions.append([
+            "RemoveRecord",
+            grist_table_id_for_sheet(sheet_name),
+            grist_record_id(sheet_name, r, force=False)
+        ])
+    grist_apply(actions)
+    grist_all_mark_stale(sheet_name)
+
+
+class GristSheetProxy:
+    def __init__(self, sheet_name):
+        self.sheet_name = sheet_name
+        self.title = sheet_name
+        self.id = grist_table_id_for_sheet(sheet_name)
+
+    def get_all_values(self):
+        return grist_all_fetch_rows(self.sheet_name, force=True)
+
+    def get(self, cell_range):
+        return grist_get_range_all(self.sheet_name, cell_range)
+
+    def update(self, cell_range, values, **kwargs):
+        return grist_update_range_all(self.sheet_name, cell_range, values)
+
+    def append_row(self, row, **kwargs):
+        return grist_append_all(self.sheet_name, [row])
+
+    def append_rows(self, rows, **kwargs):
+        return grist_append_all(self.sheet_name, rows)
+
+    def delete_rows(self, start, end=None):
+        return grist_delete_all(self.sheet_name, start, end)
+
+    def col_values(self, col):
+        rows = grist_all_fetch_rows(self.sheet_name, force=True)
+        idx = int(col) - 1
+        return [r[idx] if idx < len(r) else "" for r in rows]
+
+    def batch_update(self, updates):
+        for item in updates or []:
+            if isinstance(item, dict) and item.get("range"):
+                grist_update_range_all(
+                    self.sheet_name,
+                    item["range"],
+                    item.get("values", [])
+                )
+
+
 ADMIN_POLL = "Опрос"
 
 POLL_SCOPE_ACCOUNTS = "👥Аккаунтерам"
@@ -1340,104 +1687,83 @@ table_cache_lock = threading.Lock()
 
 
 def refresh_sheet_cache(sheet_name):
-    if sheet_name == SHEET_CRYPTO_KINGS:
-        return grist_crypto_fetch_rows(force=True)
-
+    if storage_is_grist():
+        return grist_all_fetch_rows(sheet_name, force=True)
     def _do():
         with google_lock:
-            sheet = get_sheet(sheet_name)
+            sheet = get_google_sheet(sheet_name)
             return sheet.get_all_values()
-
     rows = google_read_with_retry(_do)
-
     with table_cache_lock:
         table_cache[sheet_name]["rows"] = rows
         table_cache[sheet_name]["updated_at"] = time.time()
-
     return rows
 
 
+
 def get_sheet_rows_cached(sheet_name, force=False):
-    if sheet_name == SHEET_CRYPTO_KINGS:
-        return grist_crypto_fetch_rows(force=force)
-
+    if storage_is_grist():
+        return grist_all_fetch_rows(sheet_name, force=force)
     now = time.time()
-
     with table_cache_lock:
         cache = table_cache.get(sheet_name)
         if cache:
             is_fresh = (
                 cache["rows"] is not None
-                and (now - cache["updated_at"] < TABLE_CACHE_TTL)
+                and now - cache["updated_at"] < TABLE_CACHE_TTL
             )
             if is_fresh and not force:
                 return cache["rows"]
-
     return refresh_sheet_cache(sheet_name)
 
+
 def get_sheet_row_live(sheet_name, row_index, min_len=0):
-    if sheet_name == SHEET_CRYPTO_KINGS:
-        rows = grist_crypto_fetch_rows(force=True)
-        try:
-            row = list(rows[int(row_index) - 1])
-        except Exception:
-            row = []
-        if min_len > 0:
-            row = ensure_row_len(row, min_len)
-        return row
+    if storage_is_grist():
+        rows = grist_all_fetch_rows(sheet_name, force=True)
+        idx = int(row_index) - 1
+        row = list(rows[idx]) if 0 <= idx < len(rows) else []
+        return ensure_row_len(row, min_len) if min_len > 0 else row
 
     def _do():
         with google_lock:
-            sheet = get_sheet(sheet_name)
+            sheet = get_google_sheet(sheet_name)
             end_col = max(min_len, 1)
-
             def col_to_letter(col_num):
                 result = ""
                 while col_num > 0:
                     col_num, rem = divmod(col_num - 1, 26)
                     result = chr(65 + rem) + result
                 return result
-
-            end_col_letter = col_to_letter(end_col)
-            values = sheet.get(f"A{row_index}:{end_col_letter}{row_index}")
-
-            if values and isinstance(values, list):
-                row = values[0]
-            else:
-                row = []
-
-            return row
+            values = sheet.get(
+                f"A{row_index}:{col_to_letter(end_col)}{row_index}"
+            )
+            return values[0] if values else []
 
     row = google_read_with_retry(_do)
+    return ensure_row_len(row, min_len) if min_len > 0 else row
 
-    if min_len > 0:
-        row = ensure_row_len(row, min_len)
-
-    return row
 
 
 def mark_sheet_cache_stale(sheet_name):
-    if sheet_name == SHEET_CRYPTO_KINGS:
-        grist_crypto_mark_stale()
+    if storage_is_grist():
+        grist_all_mark_stale(sheet_name)
         return
-
     with table_cache_lock:
         if sheet_name in table_cache:
             table_cache[sheet_name]["updated_at"] = 0
 
 
-def sheet_update_and_refresh(sheet_name, cell_range, values):
-    if sheet_name == SHEET_CRYPTO_KINGS:
-        grist_crypto_update_range(cell_range, values)
-        return
 
+def sheet_update_and_refresh(sheet_name, cell_range, values):
+    if storage_is_grist():
+        grist_update_range_all(sheet_name, cell_range, values)
+        return
     def _do():
         with google_lock:
-            sheet = get_sheet(sheet_name)
-            sheet.update(cell_range, values)
-
+            get_google_sheet(sheet_name).update(cell_range, values)
     google_write_with_retry(_do)
     mark_sheet_cache_stale(sheet_name)
+
 
 def col_to_letter(col_num):
     result = ""
@@ -1492,17 +1818,19 @@ def ensure_sheet_payment_hash_column(sheet_name, target_col_num, header_hints=No
     return col_num
 
 def ensure_payment_hash_columns_ready():
-    ensure_issues_sheet_schema()
+    if storage_is_grist():
+        ensure_issues_sheet_schema()
+        return
     ensure_sheet_payment_hash_column(SHEET_ISSUES, ISSUES_REQUEST_COL_NUM, header_hints=["Тип", "Комментарий"])
     ensure_sheet_payment_hash_column(SHEET_ACCOUNTS, ACCOUNTS_REQUEST_COL_NUM)
     ensure_sheet_payment_hash_column(SHEET_KINGS, KINGS_REQUEST_COL_NUM)
-    # Crypto king теперь в Grist, Google-лист не трогаем.
     ensure_sheet_payment_hash_column(SHEET_FARM_KINGS, KINGS_REQUEST_COL_NUM)
     ensure_sheet_payment_hash_column(SHEET_BMS, BMS_REQUEST_COL_NUM)
     ensure_sheet_payment_hash_column(SHEET_FARM_BMS, BMS_REQUEST_COL_NUM)
     ensure_sheet_payment_hash_column(SHEET_FPS, FPS_REQUEST_COL_NUM)
     ensure_sheet_payment_hash_column(SHEET_FARM_FPS, FPS_REQUEST_COL_NUM)
     ensure_sheet_payment_hash_column(SHEET_PIXELS, PIXELS_REQUEST_COL_NUM)
+
 
 def current_issue_month(dt=None):
     dt = dt or datetime.now(MOSCOW_TZ)
@@ -1631,53 +1959,25 @@ def normalize_issue_row_for_append(row):
 
 
 def ensure_issues_sheet_schema():
-    """Одноразово переводит лист Простые лички 26 со старых 10 колонок на новые 12."""
     global issues_schema_ready
-
     if issues_schema_ready:
         return True
-
     with issues_schema_lock:
         if issues_schema_ready:
             return True
-
-        with google_lock:
-            sheet = get_sheet(SHEET_ISSUES)
-            rows = google_read_with_retry(lambda: sheet.get_all_values())
-
-            if rows and list(rows[0][:12]) == ISSUE_HEADERS:
-                issues_schema_ready = True
-                return True
-
-            migrated = [ISSUE_HEADERS]
-            for raw_row in (rows[1:] if rows else []):
-                if not any(str(x or "").strip() for x in raw_row):
-                    continue
-                migrated.append(normalize_issue_row_for_append(raw_row))
-
-            end_row = max(1, len(migrated))
-            google_write_with_retry(
-                lambda: sheet.update(
-                    f"A1:L{end_row}",
-                    migrated,
-                    value_input_option="USER_ENTERED"
+        if storage_is_grist():
+            rows = grist_all_fetch_rows(SHEET_ISSUES, force=True)
+            header = list(rows[0] if rows else [])
+            if len(header) < len(ISSUE_HEADERS):
+                raise RuntimeError(
+                    f"Grist {SHEET_ISSUES}: {len(header)} колонок, "
+                    f"нужно минимум {len(ISSUE_HEADERS)}."
                 )
-            )
-
-            # Если раньше лист был длиннее, очищаем хвост старых строк только в A:L.
-            old_count = len(rows)
-            if old_count > end_row:
-                try:
-                    google_write_with_retry(
-                        lambda: sheet.batch_clear([f"A{end_row + 1}:L{old_count}"])
-                    )
-                except Exception:
-                    logging.exception("Не удалось очистить хвост после миграции Простые лички 26")
-
-        mark_sheet_cache_stale(SHEET_ISSUES)
+            issues_schema_ready = True
+            return True
         issues_schema_ready = True
-        logging.info("Простые лички 26 переведён на новую схему из 12 колонок")
         return True
+
 
 
 def get_payment_hash_value_by_index(row, index_0_based):
@@ -1719,111 +2019,85 @@ def append_issue_rows_fixed(rows_to_add):
     sheet_update_and_refresh(SHEET_ISSUES, f"A{start_row}:L{end_row}", rows)
 
 def sheet_update_raw(sheet_name, cell_range, values):
-    if sheet_name == SHEET_CRYPTO_KINGS:
-        grist_crypto_update_range(cell_range, values)
-        return
+    return sheet_update_and_refresh(sheet_name, cell_range, values)
 
-    def _do():
-        with google_lock:
-            sheet = get_sheet(sheet_name)
-            sheet.update(cell_range, values)
-
-    google_write_with_retry(_do)
-    mark_sheet_cache_stale(sheet_name)
 
 def sheet_batch_update_raw(sheet_name, updates):
     if not updates:
         return
-
+    if storage_is_grist():
+        GristSheetProxy(sheet_name).batch_update(updates)
+        return
     def _do():
         with google_lock:
-            sheet = get_sheet(sheet_name)
-            sheet.batch_update(updates)
-
+            get_google_sheet(sheet_name).batch_update(updates)
     google_write_with_retry(_do)
     mark_sheet_cache_stale(sheet_name)
 
+
 def sheet_append_row_and_refresh(sheet_name, row, value_input_option="USER_ENTERED"):
     values = list(row or [])
-    if sheet_name == SHEET_CRYPTO_KINGS:
-        grist_crypto_append_rows([values])
-        return
     if sheet_name == SHEET_ISSUES:
         ensure_issues_sheet_schema()
         values = normalize_issue_row_for_append(values)
-
+    if storage_is_grist():
+        grist_append_all(sheet_name, [values])
+        return
     current_rows = get_sheet_rows_cached(sheet_name, force=True)
     next_row = len(current_rows) + 1
-
-    end_col = len(values)
-    if end_col <= 0:
+    if not values:
         return
-
     def col_to_letter(col_num):
         result = ""
         while col_num > 0:
             col_num, rem = divmod(col_num - 1, 26)
             result = chr(65 + rem) + result
         return result
-
-    end_col_letter = col_to_letter(end_col)
-
     sheet_update_and_refresh(
         sheet_name,
-        f"A{next_row}:{end_col_letter}{next_row}",
+        f"A{next_row}:{col_to_letter(len(values))}{next_row}",
         [values]
     )
 
-def sheet_delete_row_and_refresh(sheet_name, row_index):
-    if sheet_name == SHEET_CRYPTO_KINGS:
-        grist_crypto_delete_sheet_row(row_index)
-        return
 
+def sheet_delete_row_and_refresh(sheet_name, row_index):
+    if storage_is_grist():
+        grist_delete_all(sheet_name, row_index)
+        return
     def _do():
         with google_lock:
-            sheet = get_sheet(sheet_name)
-            sheet.delete_rows(row_index)
-
+            get_google_sheet(sheet_name).delete_rows(row_index)
     google_write_with_retry(_do)
     mark_sheet_cache_stale(sheet_name)
 
+
 def sheet_append_rows_and_refresh(sheet_name, rows, value_input_option="USER_ENTERED"):
     rows = [list(r or []) for r in (rows or []) if r]
-    if sheet_name == SHEET_CRYPTO_KINGS:
-        grist_crypto_append_rows(rows)
-        return
     if sheet_name == SHEET_ISSUES:
         ensure_issues_sheet_schema()
         rows = [normalize_issue_row_for_append(r) for r in rows]
     if not rows:
         return
-
+    if storage_is_grist():
+        grist_append_all(sheet_name, rows)
+        return
     max_len = max(len(r) for r in rows)
-    normalized = []
-
-    for row in rows:
-        if len(row) < max_len:
-            row = row + [""] * (max_len - len(row))
-        normalized.append(row[:max_len])
-
+    normalized = [r + [""] * (max_len - len(r)) for r in rows]
     current_rows = get_sheet_rows_cached(sheet_name, force=True)
     start_row = len(current_rows) + 1
     end_row = start_row + len(normalized) - 1
-
     def col_to_letter(col_num):
         result = ""
         while col_num > 0:
             col_num, rem = divmod(col_num - 1, 26)
             result = chr(65 + rem) + result
         return result
-
-    end_col_letter = col_to_letter(max_len)
-
     sheet_update_and_refresh(
         sheet_name,
-        f"A{start_row}:{end_col_letter}{end_row}",
+        f"A{start_row}:{col_to_letter(max_len)}{end_row}",
         normalized
     )
+
 
 def is_google_quota_error(exc):
     text = str(exc).lower()
@@ -1937,7 +2211,7 @@ def get_gspread_client():
         gspread_client = None
         raise
 
-def get_sheet(sheet_name):
+def get_google_sheet(sheet_name):
     global sheet_cache, google_error_until, google_error_count
 
     check_google_available()
@@ -1978,6 +2252,13 @@ def get_sheet(sheet_name):
         google_error_until = time.time() + cooldown
         reset_google_cache()
         raise
+
+def get_sheet(sheet_name):
+    if storage_is_grist():
+        return GristSheetProxy(sheet_name)
+    return get_google_sheet(sheet_name)
+
+
 
 
 # =========================
@@ -2126,39 +2407,10 @@ def tg_send_sticker_inline(chat_id, sticker_file_id, inline_buttons):
 
 
 def ensure_stickers_sheet_exists():
-    try:
-        with google_lock:
-            client = get_gspread_client()
-            spreadsheet = client.open_by_key(SPREADSHEET_ID)
+    if storage_is_grist():
+        return GristSheetProxy(SHEET_STICKERS)
+    return get_google_sheet(SHEET_STICKERS)
 
-            try:
-                sheet = spreadsheet.worksheet(SHEET_STICKERS)
-            except gspread.exceptions.WorksheetNotFound:
-                sheet = spreadsheet.add_worksheet(title=SHEET_STICKERS, rows=1000, cols=10)
-
-            rows = sheet.get_all_values()
-
-            need_init = False
-            if not rows:
-                need_init = True
-            elif len(rows[0]) < 8:
-                need_init = True
-            elif str(rows[0][0]).strip() != "file_id":
-                need_init = True
-
-            if need_init:
-                sheet.update("A1:H2", [[
-                    "file_id", "type", "emoji", "set_name", "added_at", "", "next_index", "last_slot_key"
-                ], [
-                    "", "", "", "", "", "", "0", ""
-                ]])
-
-            mark_sheet_cache_stale(SHEET_STICKERS)
-            return sheet
-
-    except Exception:
-        logging.exception("ensure_stickers_sheet_exists crashed")
-        raise
 
 
 def get_stickers_list():
@@ -3202,28 +3454,10 @@ free_resources_history_lock = threading.Lock()
 
 
 def get_or_create_free_resources_history_sheet():
-    def _do():
-        with google_lock:
-            client = get_gspread_client()
-            spreadsheet = client.open_by_key(SPREADSHEET_ID)
-            try:
-                sheet = spreadsheet.worksheet(SHEET_FREE_RESOURCES_HISTORY)
-            except Exception:
-                sheet = spreadsheet.add_worksheet(
-                    title=SHEET_FREE_RESOURCES_HISTORY,
-                    rows=2000,
-                    cols=len(FREE_RESOURCES_HISTORY_HEADERS) + 2
-                )
-                sheet.update("A1:V1", [FREE_RESOURCES_HISTORY_HEADERS])
-                return sheet
+    if storage_is_grist():
+        return GristSheetProxy(SHEET_FREE_RESOURCES_HISTORY)
+    return get_google_sheet(SHEET_FREE_RESOURCES_HISTORY)
 
-            header_values = sheet.get("A1:V1")
-            header = header_values[0] if header_values else []
-            if len(header) < len(FREE_RESOURCES_HISTORY_HEADERS) or header[:len(FREE_RESOURCES_HISTORY_HEADERS)] != FREE_RESOURCES_HISTORY_HEADERS:
-                sheet.update("A1:V1", [FREE_RESOURCES_HISTORY_HEADERS])
-            return sheet
-
-    return google_write_with_retry(_do)
 
 
 def build_free_resources_snapshot():
@@ -4365,48 +4599,10 @@ def tg_send_kings_as_zip(chat_id, issued_items, archive_name="kings_bundle.zip")
     return resp.json()
 
 def ensure_king_downloads_sheet_exists():
-    try:
-        with google_lock:
-            client = get_gspread_client()
-            spreadsheet = client.open_by_key(SPREADSHEET_ID)
+    if storage_is_grist():
+        return GristSheetProxy(SHEET_KING_DOWNLOADS)
+    return get_google_sheet(SHEET_KING_DOWNLOADS)
 
-            try:
-                sheet = spreadsheet.worksheet(SHEET_KING_DOWNLOADS)
-            except gspread.exceptions.WorksheetNotFound:
-                sheet = spreadsheet.add_worksheet(title=SHEET_KING_DOWNLOADS, rows=2000, cols=9)
-
-            rows = sheet.get_all_values()
-            need_init = False
-
-            if not rows:
-                need_init = True
-            elif len(rows[0]) < 9:
-                need_init = True
-            elif str(rows[0][0]).strip() != "token":
-                need_init = True
-
-            if need_init:
-                sheet.update(
-                    "A1:I1",
-                    [[
-                        "token",
-                        "owner_user_id",
-                        "bundle_kind",
-                        "item_index",
-                        "king_name",
-                        "part_index",
-                        "total_parts",
-                        "payload_chunk",
-                        "created_at",
-                    ]]
-                )
-
-            mark_sheet_cache_stale(SHEET_KING_DOWNLOADS)
-            return sheet
-
-    except Exception:
-        logging.exception("ensure_king_downloads_sheet_exists crashed")
-        raise
 
 
 KING_DOWNLOAD_CHUNK_SIZE = 40000
@@ -4443,16 +4639,10 @@ def append_king_download_rows(rows_to_add):
     rows_to_add = [list(x or []) for x in (rows_to_add or []) if x]
     if not rows_to_add:
         return
+    sheet_append_rows_and_refresh(
+        SHEET_KING_DOWNLOADS, rows_to_add, value_input_option="RAW"
+    )
 
-    ensure_king_downloads_sheet_exists()
-
-    def _do():
-        with google_lock:
-            sheet = get_sheet(SHEET_KING_DOWNLOADS)
-            sheet.append_rows(rows_to_add, value_input_option="RAW")
-
-    google_write_with_retry(_do)
-    mark_sheet_cache_stale(SHEET_KING_DOWNLOADS)
 
 
 
@@ -11288,87 +11478,58 @@ def is_ban_storm_excluded_target(value):
 
 
 def ensure_ban_monitor_sheet_exists():
-    try:
-        with google_lock:
-            client = get_gspread_client()
-            spreadsheet = client.open_by_key(SPREADSHEET_ID)
+    if storage_is_grist():
+        return GristSheetProxy(SHEET_BAN_MONITOR)
+    return get_google_sheet(SHEET_BAN_MONITOR)
 
-            try:
-                sheet = spreadsheet.worksheet(SHEET_BAN_MONITOR)
-            except gspread.exceptions.WorksheetNotFound:
-                sheet = spreadsheet.add_worksheet(title=SHEET_BAN_MONITOR, rows=500, cols=3)
-
-            rows = sheet.get_all_values()
-            need_init = False
-
-            if not rows:
-                need_init = True
-            elif len(rows[0]) < 3:
-                need_init = True
-            elif str(rows[0][0]).strip() != "key":
-                need_init = True
-
-            if need_init:
-                sheet.update("A1:C1", [["key", "value", "updated_at"]])
-
-            return sheet
-
-    except Exception:
-        logging.exception("ensure_ban_monitor_sheet_exists crashed")
-        raise
 
 
 def load_ban_monitor_state():
     try:
-        sheet = ensure_ban_monitor_sheet_exists()
-        with google_lock:
-            rows = sheet.get_all_values()
-
+        rows = get_sheet_rows_cached(SHEET_BAN_MONITOR, force=True)
         state = {}
-        for raw_row in rows[1:]:
-            row = list(raw_row or [])
+        for raw in rows[1:]:
+            row = list(raw or [])
             if len(row) < 2:
                 continue
             key = str(row[0]).strip()
             value = str(row[1]).strip()
             if key:
                 state[key] = value
-
         return state
-
     except Exception:
         logging.exception("load_ban_monitor_state crashed")
         return {}
+
 
 
 def save_ban_monitor_state_value(key, value):
     key = str(key or "").strip()
     if not key:
         return
-
     value = str(value or "").strip()
     updated_at = datetime.now(MOSCOW_TZ).strftime("%d/%m/%Y %H:%M:%S")
-
     try:
-        sheet = ensure_ban_monitor_sheet_exists()
-
-        with google_lock:
-            rows = sheet.get_all_values()
-            target_row = None
-
-            for idx, raw_row in enumerate(rows[1:], start=2):
-                row_key = str(raw_row[0]).strip() if raw_row else ""
-                if row_key == key:
-                    target_row = idx
-                    break
-
-            if target_row:
-                sheet.update(f"B{target_row}:C{target_row}", [[value, updated_at]])
-            else:
-                sheet.append_row([key, value, updated_at], value_input_option="USER_ENTERED")
-
+        rows = get_sheet_rows_cached(SHEET_BAN_MONITOR, force=True)
+        target = None
+        for idx, raw in enumerate(rows[1:], start=2):
+            if raw and str(raw[0]).strip() == key:
+                target = idx
+                break
+        if target:
+            sheet_update_and_refresh(
+                SHEET_BAN_MONITOR,
+                f"B{target}:C{target}",
+                [[value, updated_at]]
+            )
+        else:
+            sheet_append_row_and_refresh(
+                SHEET_BAN_MONITOR,
+                [key, value, updated_at]
+            )
     except Exception:
-        logging.exception(f"save_ban_monitor_state_value crashed: key={key}")
+        logging.exception("save_ban_monitor_state_value crashed")
+
 
 
 def format_ban_storm_short_date(value):
@@ -17722,28 +17883,16 @@ assembly_sheet_lock = threading.RLock()
 
 
 def get_or_create_assemblies_sheet():
-    def _do():
-        with google_lock:
-            client = get_gspread_client()
-            spreadsheet = client.open_by_key(SPREADSHEET_ID)
-            try:
-                sheet = spreadsheet.worksheet(SHEET_ASSEMBLIES)
-            except gspread.exceptions.WorksheetNotFound:
-                sheet = spreadsheet.add_worksheet(title=SHEET_ASSEMBLIES, rows=3000, cols=18)
-                sheet.update("A1:N1", [ASSEMBLY_HEADERS])
-                return sheet
+    if storage_is_grist():
+        return GristSheetProxy(SHEET_ASSEMBLIES)
+    return get_google_sheet(SHEET_ASSEMBLIES)
 
-            header = sheet.get("A1:N1")
-            if not header or not header[0] or header[0][:len(ASSEMBLY_HEADERS)] != ASSEMBLY_HEADERS:
-                sheet.update("A1:N1", [ASSEMBLY_HEADERS])
-            return sheet
-    return google_write_with_retry(_do)
 
 
 def get_assemblies_rows():
     with assembly_sheet_lock:
-        sheet = get_or_create_assemblies_sheet()
-        return google_read_with_retry(lambda: sheet.get_all_values())
+        return get_sheet_rows_cached(SHEET_ASSEMBLIES, force=True)
+
 
 
 def assembly_creator_name(user_id, telegram_username=""):
@@ -17879,13 +18028,39 @@ def get_assembly_record(row_index):
 
 def update_assembly_cells(row_index, cell_range_suffix, values):
     with assembly_sheet_lock:
-        sheet = get_or_create_assemblies_sheet()
-        google_write_with_retry(lambda: sheet.update(f"{cell_range_suffix}{row_index}", [values]))
+        sheet_update_and_refresh(
+            SHEET_ASSEMBLIES,
+            f"{cell_range_suffix}{row_index}",
+            [values]
+        )
+
 
 
 
 ASSEMBLY_HISTORY_RED = {"red": 0.85, "green": 0.12, "blue": 0.12}
 ASSEMBLY_HISTORY_GREEN = {"red": 0.05, "green": 0.62, "blue": 0.20}
+
+def grist_assembly_history_next(old_history, new_active):
+    old_history = str(old_history or "").rstrip()
+    new_active = str(new_active or "").strip()
+    if old_history and new_active:
+        return old_history + "\n" + new_active
+    return new_active or old_history
+
+
+def grist_assembly_history_replace_active(old_history, old_active, new_active):
+    old_history = str(old_history or "").rstrip()
+    old_active = str(old_active or "").strip()
+    new_active = str(new_active or "").strip()
+    if old_history and old_active and old_history.endswith(old_active):
+        prefix = old_history[:-len(old_active)].rstrip("\n")
+        if prefix and new_active:
+            return prefix + "\n" + new_active
+        return new_active or prefix
+    if old_history and new_active:
+        return old_history + "\n" + new_active
+    return new_active or old_history
+
 
 
 def build_assembly_rich_text_request(sheet_id, row_index, column_index_zero_based, old_text, new_text):
@@ -18017,40 +18192,23 @@ def build_assembly_active_accounts_edit_request(
 
 
 def update_assembly_account_card_or_timezone(row_index, account_index, field, new_value):
-    """Атомарно обновляет карту/TZ и в истории G, и в активных личках M."""
-    try:
-        rec = get_assembly_record(row_index)
-    except Exception as e:
-        if is_google_quota_error(e) or "Google Sheets временно перегружен" in str(e):
-            return False, (
-                "⚠️ Google Sheets временно перегружен. "
-                "Изменение не применено — подожди немного и отправь значение ещё раз."
-            )
-        raise
-
+    rec = get_assembly_record(row_index)
     if not rec:
         return False, "Сборка не найдена."
-
     accounts = [dict(x) for x in (rec.get("accounts") or [])]
-
     try:
         account_index = int(account_index)
     except Exception:
         return False, "Личка в сборке не найдена."
-
     if account_index < 0 or account_index >= len(accounts):
         return False, "Личка в сборке не найдена."
-
     field = str(field or "").strip().lower()
     if field not in {"card", "timezone"}:
         return False, "Неизвестное поле лички."
-
     new_value = str(new_value or "").strip()
     if not new_value:
         return False, "Новое значение пустое."
-
-    old_active_text = encode_assembly_accounts(accounts)
-
+    old_active = encode_assembly_accounts(accounts)
     if field == "card":
         accounts[account_index]["card"] = new_value
     else:
@@ -18060,52 +18218,24 @@ def update_assembly_account_card_or_timezone(row_index, account_index, field, ne
         if not tz.startswith(("+", "-")) and tz != "0":
             tz = "+" + tz
         accounts[account_index]["timezone"] = tz
-
-    new_active_text = encode_assembly_accounts(accounts)
-
-    with assembly_sheet_lock:
-        assembly_sheet = get_or_create_assemblies_sheet()
-        client = get_gspread_client()
-        spreadsheet = client.open_by_key(SPREADSHEET_ID)
-
-        requests_list = [
-            # G — сохраняем всю красную историю и заменяем только текущий зелёный блок.
-            build_assembly_active_accounts_edit_request(
-                assembly_sheet.id,
+    new_active = encode_assembly_accounts(accounts)
+    if storage_is_grist():
+        history = grist_assembly_history_replace_active(
+            rec.get("history_accounts_raw", ""),
+            old_active,
+            new_active
+        )
+        grist_apply([
+            grist_update_action(
+                SHEET_ASSEMBLIES,
                 row_index,
-                rec.get("history_accounts_raw", ""),
-                old_active_text,
-                new_active_text,
-            ),
-            # M — источник истины для логики бота.
-            {
-                "updateCells": {
-                    "range": {
-                        "sheetId": assembly_sheet.id,
-                        "startRowIndex": int(row_index) - 1,
-                        "endRowIndex": int(row_index),
-                        "startColumnIndex": 12,  # M = Активные лички
-                        "endColumnIndex": 13,
-                    },
-                    "rows": [_assembly_google_row([new_active_text])],
-                    "fields": "userEnteredValue",
-                }
-            },
-        ]
-
-        try:
-            google_write_with_retry(
-                lambda: spreadsheet.batch_update({"requests": requests_list})
+                {6: history, 12: new_active}
             )
-        except Exception as e:
-            if is_google_quota_error(e) or "Google Sheets временно перегружен" in str(e):
-                return False, (
-                    "⚠️ Google Sheets временно перегружен. "
-                    "Изменение не применено — подожди немного и отправь значение ещё раз."
-                )
-            raise
+        ])
+        grist_all_mark_stale(SHEET_ASSEMBLIES)
+        return True, "✅ Данные лички обновлены."
+    return False, "Эта операция сейчас настроена на Grist."
 
-    return True, "✅ Данные лички обновлены."
 
 
 def find_assembly_issue_row(assembly_name):
@@ -18128,18 +18258,9 @@ def find_assembly_issue_row(assembly_name):
 
 
 def apply_assembly_replacement(row_index, field, new_active_text, expense_party="", buyer_surcharge=None):
-    """Сохраняет замену без удаления старых данных.
-
-    F/G/H: история — старое красным, новый блок зелёным.
-    L/M/N: только актуальные значения для логики бота.
-
-    Если расход относится на байера, цена сборки и её строка в Простые лички 26
-    меняются одним batchUpdate вместе с заменой.
-    """
     rec = get_assembly_record(row_index)
     if not rec:
         return False, "Сборка не найдена."
-
     field_map = {
         "kings": (5, 11, rec.get("history_kings_raw", "")),
         "accounts": (6, 12, rec.get("history_accounts_raw", "")),
@@ -18147,112 +18268,61 @@ def apply_assembly_replacement(row_index, field, new_active_text, expense_party=
     }
     if field not in field_map:
         return False, "Неизвестное поле сборки."
-
     history_col, active_col, old_history = field_map[field]
     new_active_text = str(new_active_text or "").strip()
     if not new_active_text:
         return False, "Новые данные пустые."
-
     is_issued = rec["status"].strip().lower() == "taken"
     expense_party = str(expense_party or "").strip().lower()
-
     new_price = None
     issue_row_index = None
-
     if is_issued and expense_party == "buyer":
-        surcharge_num = parse_price(buyer_surcharge)
-        if surcharge_num is None:
+        surcharge = parse_price(buyer_surcharge)
+        if surcharge is None or float(surcharge) < 0:
             return False, "Доплата указана неверно."
-        if float(surcharge_num) < 0:
-            return False, "Доплата не может быть отрицательной."
-
-        current_price = parse_price(rec.get("issue_price", ""))
-        if current_price is None:
-            current_price = 0
-        new_price = float(current_price) + float(surcharge_num)
+        current = parse_price(rec.get("issue_price", "")) or 0
+        new_price = float(current) + float(surcharge)
         issue_row_index = find_assembly_issue_row(rec["name"])
         if not issue_row_index:
-            return False, (
-                f"Не нашёл выдачу сборки {rec['name']} в листе {SHEET_ISSUES}. "
-                "Замена и изменение цены не выполнены."
+            return False, f"Не нашёл выдачу сборки {rec['name']} в {SHEET_ISSUES}."
+    if storage_is_grist():
+        history = grist_assembly_history_next(old_history, new_active_text)
+        fields = {history_col: history, active_col: new_active_text}
+        if new_price is not None:
+            fields[9] = normalize_numeric_for_sheet(new_price)
+        actions = [
+            grist_update_action(SHEET_ASSEMBLIES, row_index, fields)
+        ]
+        if new_price is not None:
+            actions.append(
+                grist_update_action(
+                    SHEET_ISSUES,
+                    issue_row_index,
+                    {4: normalize_numeric_for_sheet(new_price)}
+                )
             )
-
-    with issue_lock:
-        with assembly_sheet_lock:
-            assembly_sheet = get_or_create_assemblies_sheet()
-            client = get_gspread_client()
-            spreadsheet = client.open_by_key(SPREADSHEET_ID)
-
-            requests_list = [
-                build_assembly_rich_text_request(
-                    assembly_sheet.id, row_index, history_col, old_history, new_active_text
-                ),
-                {
-                    "updateCells": {
-                        "range": {
-                            "sheetId": assembly_sheet.id,
-                            "startRowIndex": int(row_index) - 1,
-                            "endRowIndex": int(row_index),
-                            "startColumnIndex": active_col,
-                            "endColumnIndex": active_col + 1,
-                        },
-                        "rows": [_assembly_google_row([new_active_text])],
-                        "fields": "userEnteredValue",
-                    }
-                },
-            ]
-
-            if new_price is not None:
-                normalized_new_price = normalize_numeric_for_sheet(new_price)
-                requests_list.append({
-                    "updateCells": {
-                        "range": {
-                            "sheetId": assembly_sheet.id,
-                            "startRowIndex": int(row_index) - 1,
-                            "endRowIndex": int(row_index),
-                            "startColumnIndex": 9,
-                            "endColumnIndex": 10,
-                        },
-                        "rows": [_assembly_google_row([normalized_new_price])],
-                        "fields": "userEnteredValue",
-                    }
-                })
-
-                issues_sheet = get_sheet(SHEET_ISSUES)
-                requests_list.append({
-                    "updateCells": {
-                        "range": {
-                            "sheetId": issues_sheet.id,
-                            "startRowIndex": int(issue_row_index) - 1,
-                            "endRowIndex": int(issue_row_index),
-                            "startColumnIndex": 4,
-                            "endColumnIndex": 5,
-                        },
-                        "rows": [_assembly_google_row([normalized_new_price])],
-                        "fields": "userEnteredValue",
-                    }
-                })
-
-            google_write_with_retry(
-                lambda: spreadsheet.batch_update({"requests": requests_list})
+        grist_apply(actions)
+        grist_all_mark_stale(SHEET_ASSEMBLIES)
+        if new_price is not None:
+            grist_all_mark_stale(SHEET_ISSUES)
+            invalidate_stats_cache()
+            return True, (
+                f"✅ Данные сборки обновлены.\n"
+                f"Расход: на байера\n"
+                f"Новая цена сборки: {format_issue_price(new_price)}"
             )
-
-    if new_price is not None:
-        mark_sheet_cache_stale(SHEET_ISSUES)
-        invalidate_stats_cache()
-        return True, (
-            f"✅ Данные сборки обновлены.\\n"
-            f"Расход: на байера\\n"
-            f"Новая цена сборки: {format_issue_price(new_price)}"
+        labels = {
+            "company": "на компанию",
+            "seller": "на селлера",
+            "buyer": "на байера",
+        }
+        suffix = (
+            f"\nРасход: {labels.get(expense_party, expense_party)}"
+            if is_issued and expense_party else ""
         )
+        return True, "✅ Данные сборки обновлены." + suffix
+    return False, "Эта операция сейчас настроена на Grist."
 
-    party_labels = {
-        "company": "на компанию",
-        "seller": "на селлера",
-        "buyer": "на байера",
-    }
-    suffix = f"\\nРасход: {party_labels.get(expense_party, expense_party)}" if is_issued and expense_party else ""
-    return True, "✅ Данные сборки обновлены." + suffix
 
 
 def build_assembly_expense_buttons(row_index, field):
@@ -18291,42 +18361,26 @@ def set_assembly_replacement_input_state(user_id, row_index, field, expense_part
 def create_assembly(user_id, telegram_username, kings, accounts, bms):
     creator = assembly_creator_name(user_id, telegram_username)
     today = datetime.now(MOSCOW_TZ).strftime("%d/%m/%Y")
-    with assembly_sheet_lock:
-        sheet = get_or_create_assemblies_sheet()
-        rows = google_read_with_retry(lambda: sheet.get_all_values())
-        pattern = re.compile(rf'^{re.escape(creator)}-(\d+)$', re.IGNORECASE)
-        max_n = 0
-        for row in rows[1:]:
-            if not row:
-                continue
+    rows = get_sheet_rows_cached(SHEET_ASSEMBLIES, force=True)
+    pattern = re.compile(rf'^{re.escape(creator)}-(\d+)$', re.IGNORECASE)
+    max_n = 0
+    for row in rows[1:]:
+        if row:
             m = pattern.match(str(row[0]).strip())
             if m:
                 max_n = max(max_n, int(m.group(1)))
-        name = f"{creator}-{max_n + 1}"
-        next_row = len(rows) + 1
-        kings_text = "\n".join(kings)
-        accounts_text = encode_assembly_accounts(accounts)
-        bms_text = "\n".join(bms)
-        values = [
-            name, "free", today, str(user_id), creator,
-            kings_text, accounts_text, bms_text, "", "", "",
-            kings_text, accounts_text, bms_text
-        ]
-        google_write_with_retry(lambda: sheet.update(f"A{next_row}:N{next_row}", [values]))
-
-        # Текущие данные новой сборки сразу подсвечиваем зелёным.
-        try:
-            requests_body = {
-                "requests": [
-                    build_assembly_rich_text_request(sheet.id, next_row, 5, "", kings_text),
-                    build_assembly_rich_text_request(sheet.id, next_row, 6, "", accounts_text),
-                    build_assembly_rich_text_request(sheet.id, next_row, 7, "", bms_text),
-                ]
-            }
-            spreadsheet.batch_update(requests_body)
-        except Exception:
-            logging.exception("assembly initial green formatting failed")
+    name = f"{creator}-{max_n + 1}"
+    kings_text = "\n".join(kings)
+    accounts_text = encode_assembly_accounts(accounts)
+    bms_text = "\n".join(bms)
+    values = [
+        name, "free", today, str(user_id), creator,
+        kings_text, accounts_text, bms_text, "", "", "",
+        kings_text, accounts_text, bms_text
+    ]
+    sheet_append_row_and_refresh(SHEET_ASSEMBLIES, values)
     return name
+
 
 
 def format_assembly_full(rec):
@@ -18400,33 +18454,17 @@ def _assembly_google_row(values):
 
 
 def issue_assembly(row_index, buyer, price):
-    """Выдаёт сборку атомарно одним Google Sheets batchUpdate.
-
-    В одном запросе одновременно:
-      1) сборка переводится free -> taken;
-      2) строка добавляется в `Простые лички 26`.
-
-    Если Google возвращает 429/ошибку, весь batch отклоняется и ни один из
-    двух листов не должен остаться в промежуточном состоянии.
-    """
     ensure_issues_sheet_schema()
     rec = get_assembly_record(row_index)
     if not rec:
         return False, "Сборка не найдена."
     if rec["status"].lower() != "free":
         return False, f"Сборка {rec['name']} уже не свободна."
-
     price_num = parse_price(price)
     if price_num is None:
         return False, "Цена указана неверно."
-
     today = datetime.now(MOSCOW_TZ).strftime("%d/%m/%Y")
     normalized_price = normalize_numeric_for_sheet(price_num)
-
-    # При выдаче НЕ перезаписываем всю строку сборки.
-    # Исторические F/G/H могут содержать красные старые блоки + зелёный актуальный,
-    # а L/M/N содержат актуальные значения для логики бота.
-    # Выдача должна менять только статус, байера, цену и дату выдачи.
     issue_values = make_issue_row(
         name=rec["name"],
         issue_type="Сборка",
@@ -18437,80 +18475,30 @@ def issue_assembly(row_index, buyer, price):
         buyer=buyer,
         status="ok",
     )
+    if storage_is_grist():
+        live = get_sheet_row_live(SHEET_ASSEMBLIES, row_index, 14)
+        live_rec = assembly_row_to_record(row_index, live)
+        if not live_rec or live_rec["status"].lower() != "free":
+            return False, f"Сборка {rec['name']} уже не свободна."
+        actions = [
+            grist_update_action(
+                SHEET_ASSEMBLIES,
+                row_index,
+                {1: "taken", 8: buyer, 9: normalized_price, 10: today}
+            ),
+            grist_add_action(SHEET_ISSUES, issue_values),
+        ]
+        grist_apply(actions)
+        grist_all_mark_stale(SHEET_ASSEMBLIES)
+        grist_all_mark_stale(SHEET_ISSUES)
+        invalidate_stats_cache()
+        return True, (
+            f"✅ Сборка {rec['name']} выдана\n"
+            f"👨‍💻 Для кого: {buyer}\n"
+            f"💵 Цена: {format_issue_price(price_num)}"
+        )
+    return False, "Эта операция сейчас настроена на Grist."
 
-    with issue_lock:
-        with assembly_sheet_lock:
-            assembly_sheet = get_or_create_assemblies_sheet()
-            issues_sheet = get_sheet(SHEET_ISSUES)
-            client = get_gspread_client()
-            spreadsheet = client.open_by_key(SPREADSHEET_ID)
-
-            # Проверяем статус непосредственно перед записью, чтобы два человека
-            # не смогли одновременно выдать одну и ту же сборку.
-            live_values = google_read_with_retry(
-                lambda: assembly_sheet.get(f"A{row_index}:N{row_index}")
-            )
-            if not live_values or not live_values[0]:
-                return False, "Сборка не найдена."
-
-            live_rec = assembly_row_to_record(row_index, live_values[0])
-            if live_rec["status"].lower() != "free":
-                return False, f"Сборка {live_rec['name']} уже не свободна."
-
-            requests_body = {
-                "requests": [
-                    {
-                        # B = Статус
-                        "updateCells": {
-                            "range": {
-                                "sheetId": assembly_sheet.id,
-                                "startRowIndex": int(row_index) - 1,
-                                "endRowIndex": int(row_index),
-                                "startColumnIndex": 1,
-                                "endColumnIndex": 2,
-                            },
-                            "rows": [_assembly_google_row(["taken"])],
-                            "fields": "userEnteredValue",
-                        }
-                    },
-                    {
-                        # I:K = Кому выдано / Цена выдачи / Дата выдачи
-                        # F:G:H (история) и L:M:N (активные данные) НЕ трогаем.
-                        "updateCells": {
-                            "range": {
-                                "sheetId": assembly_sheet.id,
-                                "startRowIndex": int(row_index) - 1,
-                                "endRowIndex": int(row_index),
-                                "startColumnIndex": 8,
-                                "endColumnIndex": 11,
-                            },
-                            "rows": [_assembly_google_row([
-                                buyer,
-                                normalized_price,
-                                today,
-                            ])],
-                            "fields": "userEnteredValue",
-                        }
-                    },
-                    {
-                        "appendCells": {
-                            "sheetId": issues_sheet.id,
-                            "rows": [_assembly_google_row(issue_values)],
-                            "fields": "userEnteredValue",
-                        }
-                    },
-                ]
-            }
-
-            google_write_with_retry(lambda: spreadsheet.batch_update(requests_body))
-
-    mark_sheet_cache_stale(SHEET_ISSUES)
-    invalidate_stats_cache()
-    return True, (
-        f"✅ Сборка {rec['name']} выдана\n"
-        f"👨‍💻 Для кого: {buyer}\n"
-        f"💵 Цена: {format_issue_price(price_num)}"
-    )
 
 
 def send_assemblies_overview(chat_id):
