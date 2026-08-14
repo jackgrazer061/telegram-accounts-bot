@@ -18125,11 +18125,6 @@ def get_assemblies_records(free_only=False):
 
 
 def get_assembly_record(row_index):
-    """Читает только одну строку сборки вместо всего листа.
-
-    Это особенно важно при частых действиях: раньше каждый выбор/выдача сборки
-    делал get_all_values() по целому листу и зря расходовал read quota Google.
-    """
     try:
         row_index = int(row_index)
     except Exception:
@@ -18138,16 +18133,20 @@ def get_assembly_record(row_index):
     if row_index < 2:
         return None
 
-    with assembly_sheet_lock:
+    if storage_is_grist():
+        values = grist_get_range_all(
+            SHEET_ASSEMBLIES,
+            f"A{row_index}:N{row_index}"
+        )
+    else:
         sheet = get_or_create_assemblies_sheet()
-        values = google_read_with_retry(lambda: sheet.get(f"A{row_index}:N{row_index}"))
+        values = sheet.get(f"A{row_index}:N{row_index}")
 
     if not values or not values[0]:
         return None
 
     rec = assembly_row_to_record(row_index, values[0])
     return rec if rec["name"] else None
-
 
 def update_assembly_cells(row_index, cell_range_suffix, values):
     with assembly_sheet_lock:
@@ -18636,14 +18635,150 @@ def send_assemblies_overview(chat_id):
 
 def build_assembly_edit_buttons(row_index):
     return [
-        [{"text": "Кинги", "callback_data": f"asm_edit_field:{row_index}:kings"},
-         {"text": "Лички", "callback_data": f"asm_edit_field:{row_index}:accounts"}],
-        [{"text": "Карты", "callback_data": f"asm_edit_field:{row_index}:cards"},
-         {"text": "Таймзону", "callback_data": f"asm_edit_field:{row_index}:timezone"}],
-        [{"text": "БМ", "callback_data": f"asm_edit_field:{row_index}:bms"}],
+        [
+            {"text": "Кинги", "callback_data": f"asm_edit_field:{row_index}:kings"},
+            {"text": "Лички", "callback_data": f"asm_edit_field:{row_index}:accounts"},
+        ],
+        [
+            {"text": "Карты", "callback_data": f"asm_edit_field:{row_index}:cards"},
+            {"text": "Таймзону", "callback_data": f"asm_edit_field:{row_index}:timezone"},
+        ],
+        [
+            {"text": "БМ", "callback_data": f"asm_edit_field:{row_index}:bms"},
+        ],
+        [
+            {"text": "🗑 Утилизация", "callback_data": f"asm_util:{row_index}"},
+        ],
     ]
 
 
+
+def build_assembly_utilization_buttons(row_index):
+    return [
+        [{"text": "👤 Удалить личку", "callback_data": f"asm_util_type:{row_index}:account"}],
+        [{"text": "👑 Удалить кинг", "callback_data": f"asm_util_type:{row_index}:king"}],
+        [{"text": "📁 Удалить БМ", "callback_data": f"asm_util_type:{row_index}:bm"}],
+        [{"text": "🗑 Удалить сборку", "callback_data": f"asm_util_delete_confirm:{row_index}"}],
+        [{"text": "⬅️ Назад", "callback_data": f"asm_edit:{row_index}"}],
+    ]
+
+
+def build_assembly_util_item_buttons(row_index, item_type):
+    rec=get_assembly_record(row_index)
+    if not rec:return []
+
+    buttons=[]
+    if item_type=="account":
+        for idx,acc in enumerate(rec.get("accounts") or []):
+            login=str((acc or {}).get("login","")).strip()
+            if login:
+                buttons.append([{"text":login,"callback_data":f"asm_util_item:{row_index}:account:{idx}"}])
+    elif item_type=="king":
+        for idx,item in enumerate(rec.get("kings") or []):
+            item=str(item or "").strip()
+            if item:
+                buttons.append([{"text":item,"callback_data":f"asm_util_item:{row_index}:king:{idx}"}])
+    elif item_type=="bm":
+        for idx,item in enumerate(rec.get("bms") or []):
+            item=str(item or "").strip()
+            if item:
+                buttons.append([{"text":item,"callback_data":f"asm_util_item:{row_index}:bm:{idx}"}])
+
+    buttons.append([{"text":"⬅️ Назад","callback_data":f"asm_util:{row_index}"}])
+    return buttons
+
+
+def build_assembly_delete_confirm_buttons(row_index):
+    return [
+        [{"text":"✅ Да, удалить","callback_data":f"asm_util_delete_yes:{row_index}"}],
+        [{"text":"❌ Нет","callback_data":f"asm_util:{row_index}"}],
+    ]
+
+
+def _assembly_history_after_utilization(old_history, old_active, new_active, removed):
+    old_history=str(old_history or "").rstrip()
+    old_active=str(old_active or "").strip()
+    new_active=str(new_active or "").strip()
+    removed=str(removed or "").strip()
+
+    prefix=old_history
+    if old_history and old_active and old_history.endswith(old_active):
+        prefix=old_history[:-len(old_active)].rstrip("\n")
+
+    parts=[]
+    if prefix:parts.append(prefix)
+    if removed:parts.append(f"🔴 УДАЛЕНО: {removed}")
+    if new_active:parts.append(new_active)
+    return "\n".join(parts)
+
+
+def delete_assembly_item(row_index,item_type,item_index):
+    rec=get_assembly_record(row_index)
+    if not rec:return False,"Сборка не найдена."
+    item_index=int(item_index)
+
+    if item_type=="account":
+        old_items=[dict(x) for x in (rec.get("accounts") or [])]
+        if item_index<0 or item_index>=len(old_items):
+            return False,"Личка не найдена."
+        items=[dict(x) for x in old_items]
+        removed=items.pop(item_index)
+        removed_text=f"{removed.get('login','')},{removed.get('card','')},{removed.get('timezone','')}"
+        old_active=encode_assembly_accounts(old_items)
+        new_active=encode_assembly_accounts(items)
+        history=_assembly_history_after_utilization(
+            rec.get("history_accounts_raw",""),old_active,new_active,removed_text
+        )
+        grist_apply([
+            grist_update_action(SHEET_ASSEMBLIES,row_index,{6:history,12:new_active})
+        ])
+        grist_all_mark_stale(SHEET_ASSEMBLIES)
+        return True,"✅ Личка утилизирована."
+
+    if item_type=="king":
+        old_items=[str(x or "").strip() for x in (rec.get("kings") or []) if str(x or "").strip()]
+        if item_index<0 or item_index>=len(old_items):
+            return False,"Кинг не найден."
+        items=list(old_items)
+        removed=items.pop(item_index)
+        old_active="\n".join(old_items)
+        new_active="\n".join(items)
+        history=_assembly_history_after_utilization(
+            rec.get("history_kings_raw",""),old_active,new_active,removed
+        )
+        grist_apply([
+            grist_update_action(SHEET_ASSEMBLIES,row_index,{5:history,11:new_active})
+        ])
+        grist_all_mark_stale(SHEET_ASSEMBLIES)
+        return True,"✅ Кинг утилизирован."
+
+    if item_type=="bm":
+        old_items=[str(x or "").strip() for x in (rec.get("bms") or []) if str(x or "").strip()]
+        if item_index<0 or item_index>=len(old_items):
+            return False,"БМ не найден."
+        items=list(old_items)
+        removed=items.pop(item_index)
+        old_active="\n".join(old_items)
+        new_active="\n".join(items)
+        history=_assembly_history_after_utilization(
+            rec.get("history_bms_raw",""),old_active,new_active,removed
+        )
+        grist_apply([
+            grist_update_action(SHEET_ASSEMBLIES,row_index,{7:history,13:new_active})
+        ])
+        grist_all_mark_stale(SHEET_ASSEMBLIES)
+        return True,"✅ БМ утилизирован."
+
+    return False,"Неизвестный тип утилизации."
+
+
+def delete_assembly_entirely(row_index):
+    rec=get_assembly_record(row_index)
+    if not rec:return False,"Сборка уже удалена."
+    name=rec["name"]
+    grist_delete_all(SHEET_ASSEMBLIES,row_index)
+    grist_all_mark_stale(SHEET_ASSEMBLIES)
+    return True,f"✅ Сборка {name} полностью удалена."
 def build_assembly_account_pick_buttons(row_index, field):
     rec = get_assembly_record(row_index)
     buttons = []
@@ -23942,6 +24077,71 @@ def handle_callback_query(callback_query):
             tg_send_message(chat_id, f"Сборка: {rec['name']}\nДля кого: {buyer}\n\nУкажи цену сборки:")
             return jsonify({"ok": True})
 
+
+        if data.startswith("asm_util:"):
+            row_index=int(data.split(":",1)[1])
+            rec=get_assembly_record(row_index)
+            if not rec:
+                tg_answer_callback_query(callback_id,"Сборка не найдена")
+                return jsonify({"ok":True})
+            tg_answer_callback_query(callback_id)
+            tg_edit_message_text(
+                chat_id,message_id,
+                format_assembly_full(rec)+"\n\n🗑 Что утилизировать?",
+                build_assembly_utilization_buttons(row_index)
+            )
+            return jsonify({"ok":True})
+
+        if data.startswith("asm_util_type:"):
+            _,row_raw,item_type=data.split(":",2)
+            row_index=int(row_raw)
+            labels={"account":"личку","king":"кинг","bm":"БМ"}
+            buttons=build_assembly_util_item_buttons(row_index,item_type)
+            tg_answer_callback_query(callback_id)
+            tg_edit_message_text(
+                chat_id,message_id,
+                f"🗑 Выбери {labels.get(item_type,'элемент')}:",
+                buttons
+            )
+            return jsonify({"ok":True})
+
+        if data.startswith("asm_util_item:"):
+            _,row_raw,item_type,idx_raw=data.split(":",3)
+            row_index=int(row_raw)
+            ok,message=delete_assembly_item(row_index,item_type,int(idx_raw))
+            tg_answer_callback_query(callback_id,"Готово" if ok else "Ошибка")
+            rec=get_assembly_record(row_index)
+            if rec:
+                tg_edit_message_text(
+                    chat_id,message_id,
+                    format_assembly_full(rec)+"\n\n🗑 Что утилизировать?",
+                    build_assembly_utilization_buttons(row_index)
+                )
+            else:
+                tg_edit_message_text(chat_id,message_id,message,[])
+            return jsonify({"ok":True})
+
+        if data.startswith("asm_util_delete_confirm:"):
+            row_index=int(data.split(":",1)[1])
+            rec=get_assembly_record(row_index)
+            if not rec:
+                tg_answer_callback_query(callback_id,"Сборка не найдена")
+                return jsonify({"ok":True})
+            tg_answer_callback_query(callback_id)
+            tg_edit_message_text(
+                chat_id,message_id,
+                f"⚠️ Точно удалить сборку {rec['name']} полностью?",
+                build_assembly_delete_confirm_buttons(row_index)
+            )
+            return jsonify({"ok":True})
+
+        if data.startswith("asm_util_delete_yes:"):
+            row_index=int(data.split(":",1)[1])
+            ok,message=delete_assembly_entirely(row_index)
+            tg_answer_callback_query(callback_id,"Удалено" if ok else "Ошибка")
+            tg_edit_message_text(chat_id,message_id,message,[])
+            return jsonify({"ok":True})
+
         if data.startswith("asm_edit:"):
             row_index = int(data.split(":", 1)[1])
             rec = get_assembly_record(row_index)
@@ -25617,76 +25817,68 @@ def fastadscheck_add():
 
 def run_auto_healthcheck_once():
     try:
-        rows_accounts = get_sheet_rows_cached(SHEET_ACCOUNTS, force=True)
-        rows_issues = get_sheet_rows_cached(SHEET_ISSUES, force=True)
-        rows_kings = get_sheet_rows_cached(SHEET_KINGS, force=True)
-        rows_crypto = get_sheet_rows_cached(SHEET_CRYPTO_KINGS, force=True)
-        rows_bms = get_sheet_rows_cached(SHEET_BMS, force=True)
-        rows_fps = get_sheet_rows_cached(SHEET_FPS, force=True)
-        rows_pixels = get_sheet_rows_cached(SHEET_PIXELS, force=True)
-        rows_farm_kings = get_sheet_rows_cached(SHEET_FARM_KINGS, force=True)
-        rows_farm_bms = get_sheet_rows_cached(SHEET_FARM_BMS, force=True)
-        rows_farm_fps = get_sheet_rows_cached(SHEET_FARM_FPS, force=True)
+        if not storage_is_grist():
+            return True
 
-        all_checks = [
-            ("База_личек", rows_accounts, 14),
-            ("Простые лички 26", rows_issues, 9),
-            ("База_кингов", rows_kings, 12),
-            ("База_крипта_кинги", rows_crypto, 12),
-            ("База_БМ", rows_bms, 9),
-            ("База_ФП", rows_fps, 9),
-            ("База_пикселей", rows_pixels, 8),
-            ("База фарм кинги", rows_farm_kings, 12),
-            ("База фарм бм", rows_farm_bms, 9),
-            ("База фарм фп", rows_farm_fps, 9),
-            ("Стикеры", get_sheet_rows_cached( force=True), 8),
+        health_sheets = [
+            (SHEET_ACCOUNTS, 14),
+            (SHEET_ISSUES, 12),
+            (SHEET_KINGS, 12),
+            (SHEET_CRYPTO_KINGS, 12),
+            (SHEET_BMS, 9),
+            (SHEET_FPS, 9),
+            (SHEET_PIXELS, 8),
+            (SHEET_FARM_KINGS, 12),
+            (SHEET_FARM_BMS, 9),
+            (SHEET_FARM_FPS, 9),
+            (SHEET_ASSEMBLIES, 14),
+            (SHEET_KING_DOWNLOADS, 1),
+            (SHEET_FREE_RESOURCES_HISTORY, 1),
+            (SHEET_BAN_MONITOR, 1),
         ]
 
-        for title, rows, min_cols in all_checks:
-            if not rows:
-                raise RuntimeError(f"Лист '{title}' пустой или не читается")
+        for sheet_name, min_cols in health_sheets:
+            table_id = grist_table_id_for_sheet(sheet_name)
+            columns = grist_columns_for_sheet(sheet_name)
 
-            header = rows[0]
-            if len(header) < min_cols:
+            if not table_id:
+                raise RuntimeError(f"Не найден Table ID для {sheet_name}")
+            if len(columns) < min_cols:
                 raise RuntimeError(
-                    f"Лист '{title}' сломан: колонок меньше нормы ({len(header)} < {min_cols})"
+                    f"Таблица '{sheet_name}' сломана: "
+                    f"колонок меньше нормы ({len(columns)} < {min_cols})"
                 )
 
-        # Доп. проверка статистики
-        build_stats_text()
-        build_manager_stats_summary_text("test_user")
-        build_farmer_stats_summary_text("test_user")
-        duplicates_result = run_duplicates_checks()
-        if duplicates_result["fail_count"] > 0:
-            raise RuntimeError(
-                "Найдены дубли в таблицах: " + " | ".join(duplicates_result["report"][:10])
-            )
+            # Проверяем чтение только одной записи, не тянем весь лист.
+            grist_query_records(sheet_name, limit=1)
 
         return True
 
     except Exception as e:
-        notify_admin_about_error("auto_healthcheck", str(e))
+        notify_admin_about_error(
+            "auto_healthcheck",
+            humanize_storage_error(e)
+        )
         logging.exception("run_auto_healthcheck_once crashed")
         return False
-
 
 def auto_healthcheck_loop():
     logging.info("auto_healthcheck_loop started")
     time.sleep(AUTO_HEALTHCHECK_INITIAL_DELAY)
+
     while True:
         try:
             touch_background_heartbeat()
             cleanup_error_notifications()
             run_auto_healthcheck_once()
-            time.sleep(1800)  # каждые 30 минут
+            time.sleep(1800)
         except Exception as e:
-            if is_google_temporarily_unavailable_error(e):
-                logging.warning(f"auto_healthcheck_loop paused: Google Sheets limit/slowdown: {e}")
-                sleep_for_google_cooldown(GOOGLE_QUOTA_BACKGROUND_SLEEP)
-            else:
-                notify_admin_about_error("auto_healthcheck_loop", str(e))
-                logging.exception("auto_healthcheck_loop crashed")
-                time.sleep(300)
+            notify_admin_about_error(
+                "auto_healthcheck_loop",
+                humanize_storage_error(e)
+            )
+            logging.exception("auto_healthcheck_loop crashed")
+            time.sleep(300)
 
 def startup_google_maintenance_loop():
     logging.info("startup_google_maintenance_loop started")
@@ -25724,14 +25916,7 @@ def start_background_threads_once():
 
         free_resources_history_thread = threading.Thread(target=free_resources_history_scheduler_loop, daemon=True)
         free_resources_history_thread.start()
-
-        if ENABLE_SCHEDULED_STICKER_BROADCAST:
-            sticker_thread = threading.Thread(target=sticker_broadcast_loop, daemon=True)
-            sticker_thread.start()
-        else:
-            logging.info("Scheduled sticker broadcast disabled")
-
-        background_threads_started = True
+background_threads_started = True
 
 
 start_background_threads_once()
