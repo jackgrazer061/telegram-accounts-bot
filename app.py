@@ -6374,7 +6374,7 @@ def return_fp_to_free(fp_link):
     invalidate_stats_cache()
     return True, "ФП возвращено в free."
 
-FP_WAREHOUSE_LINKED_KING_ACCOUNT_RECIPIENTS = {"team"} | {str(x).strip().lower() for x in OTHER_NAMES}
+FP_WAREHOUSE_LINKED_KING_ACCOUNT_RECIPIENTS = {"team"}
 FP_WAREHOUSE_LINKED_KING_FARM_RECIPIENTS = {"farm"}
 
 
