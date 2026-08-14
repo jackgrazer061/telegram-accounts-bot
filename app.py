@@ -156,6 +156,155 @@ MISC_HIDDEN_USERS = {
     8589105033,  # owenwilson_farmer
 }
 
+
+
+# ============================================================
+# RESTORED GLOBAL CONSTANTS — recovered from last known-good build
+# ============================================================
+ADMIN_POLL = "Опрос"
+POLL_SCOPE_ACCOUNTS = "👥Аккаунтерам"
+POLL_SCOPE_FARMERS = "🌾Фармерам"
+POLL_SCOPE_ALL = "Всем"
+POLL_MODE_SCOPE = "awaiting_poll_scope"
+POLL_MODE_TEXT = "awaiting_poll_text"
+ADMIN_MESSAGE = "Сообщение"
+MSG_MODE_SCOPE = "awaiting_msg_scope"
+MSG_MODE_TEXT = "awaiting_msg_text"
+MSG_MODE_REPLY = "awaiting_msg_reply"
+ADMIN_ADD_STICKERS = 'Добавить стикер'
+ADMIN_SEND_STICKER = 'Отправить стикер'
+STICKER_BROADCAST_USERS = [
+    7573650707,
+    7681133609,
+    7953116439,
+    8334712952,
+    8035275476,
+    8482380951,
+    8389730381,
+    8503147017,
+    7172090459,
+    7389698288,
+]
+STICKER_SEND_HOURS = {6, 8, 10, 12, 14, 16}
+SYNC_COL_KINGS = 12
+SYNC_COL_BMS = 9
+SYNC_COL_CRYPTO_KINGS = 12
+SYNC_COL_PIXELS = 8
+SYNC_COL_FARM_KINGS = 12
+SYNC_COL_FARM_BMS = 9
+LIMIT_OPTIONS = ['-250', '250-500', '500-1200', '1200-1500', 'unlim']
+THRESHOLD_OPTIONS = ['0-49', '50-99', '100-199', '200-499', '500+']
+GMT_OPTIONS = ['-10', '-9', '-8', '-7', '-6', '-5', '-4', '-3', '-2', '-1', '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', '10']
+ACCOUNT_CURRENCY_COL = 12
+PAYMENT_HASH_COL_NAME = "Хэш оплаты"
+REQUEST_COL_NAME = PAYMENT_HASH_COL_NAME
+ISSUES_REQUEST_COL_NUM = 12
+ISSUE_HEADERS = [
+    "Месяц",
+    "Имя",
+    "Тип",
+    "Дата покупки",
+    "Цена",
+    "Дата передачи",
+    "Поставщик",
+    "Кому передали",
+    "Статус",
+    "Момент бана",
+    "Комментарий",
+    "Хэш",
+]
+ISSUE_COL_MONTH = 0
+ISSUE_COL_NAME = 1
+ISSUE_COL_TYPE = 2
+ISSUE_COL_PURCHASE_DATE = 3
+ISSUE_COL_PRICE = 4
+ISSUE_COL_TRANSFER_DATE = 5
+ISSUE_COL_SUPPLIER = 6
+ISSUE_COL_BUYER = 7
+ISSUE_COL_STATUS = 8
+ISSUE_COL_BAN_MOMENT = 9
+ISSUE_COL_COMMENT = 10
+ISSUE_COL_HASH = 11
+KINGS_REQUEST_COL_NUM = 14
+BMS_REQUEST_COL_NUM = 11
+FPS_REQUEST_COL_NUM = 10
+PIXELS_REQUEST_COL_NUM = 10
+ACCOUNTS_REQUEST_COL_NUM = 15
+MENU_ACCOUNTS = 'Accounts'
+MENU_PIXELS = 'Пиксели'
+MENU_FARMERS = 'Farmers'
+FARM_MENU_KING = 'King'
+FARM_MENU_BM = 'BM'
+FARM_MENU_FP = 'FP'
+FARM_MENU_ASSEMBLIES = '🧩 Сборки'
+FARM_ASSEMBLY_CREATE = '➕ Создать сборку'
+FARM_ASSEMBLY_ISSUE = '➡️ Выдать сборку'
+FARM_ASSEMBLY_EDIT = '✏️ Редактировать сборки'
+FARM_ASSEMBLY_VIEW = '👀 Посмотреть сборки'
+BTN_BACK_FROM_ASSEMBLIES = 'Назад в Farmers'
+FARM_SUBMENU_GET_KINGS = '➡️Взять кинги'
+FARM_SUBMENU_FREE_KINGS = '🆓Cвободныe кинги'
+FARM_SUBMENU_RETURN_KING = '↩️Beрнуть кинг'
+FARM_SUBMENU_SEARCH_KING = '🔎Пoиск кингa'
+BTN_FARM_KINGS_PARTIAL_CONFIRM = 'Выдать'
+BTN_FARM_KINGS_PARTIAL_CANCEL = 'Отмена'
+FARM_SUBMENU_GET_BM = '➡️Получить BM'
+FARM_SUBMENU_FREE_BMS = '🆓Свободные BMы'
+FARM_SUBMENU_SEARCH_BM = '🔎Поиск BMа'
+FARM_SUBMENU_RETURN_BM = '↩️Вернуть BM'
+FARM_SUBMENU_GET_FP = '➡️Выдать FP'
+FARM_SUBMENU_SEARCH_FP = '🔎Поиск FP'
+BTN_BACK_TO_FARMERS = 'Назад в Farmers'
+MENU_KINGS = 'Кинги'
+MENU_BMS = 'БМ'
+MENU_FPS = 'ФП'
+MENU_STATS = 'Статистика'
+MENU_MANAGER_STATS = 'Статистика менеджера'
+MENU_ISSUED_TO_BUYER = 'Выдано байеру'
+MENU_FARMER_STATS = 'Статистика фармера'
+MENU_ADMIN = 'Admin'
+MENU_CANCEL = 'Отмена'
+MENU_MISC = 'Прочее'
+BTN_BACK_FROM_MISC = 'Назад из Прочее'
+MISC_FREE_RESOURCES = '📊 Остатки расходников'
+MISC_FREE_RESOURCES_DAILY = '📦 Остатки по дням'
+SHEET_FREE_RESOURCES_HISTORY = 'История_остатков'
+FREE_RESOURCES_HISTORY_DAYS_PER_PAGE = 5
+FREE_RESOURCES_HISTORY_MODE_MONTH = 'awaiting_free_resources_history_month'
+FREE_RESOURCES_HISTORY_MODE_DATE = 'awaiting_free_resources_history_date'
+SUBMENU_GET_PIXELS = '➡️Получить Пиксели'
+SUBMENU_SEARCH_PIXEL = '🔎Найти Пиксель'
+SUBMENU_RETURN_PIXEL = '↩️Вернуть Пиксель'
+SUBMENU_ACCOUNTS_MAIN = 'Лички'
+SUBMENU_BACK_MAIN = 'В меню'
+DEPT_CRYPTO = '🪙Крипта'
+DEPT_GAMBLA = '🎰Гембла'
+DEPT_OTHER = '📦Прочее'
+CRYPTO_NAMES = [
+    '№3 DS78', '№5 MCH79', '№20 MS77',
+    '№32 alex', '№34 AK81', '№37 VK82',
+    '№4 NH25', '№57 VD22', '№60 MSH5', '№62 IA14', '№68 MK136', '№70 AI140',
+    '№71 AL146'
+]
+GAMBLA_NAMES = [
+    '№8 AK91', '№13 IJ90', '№16 SV89', '№19 IK92', '№26 MD94',
+    '№27 DD93', '№29 ISH95', '№14 ES86', '№777 AM87',
+    '№30 MG88', '№39 AA96', '№47 DK99', '№49 IE97',
+    '№51 VG98', '№21 VK84', '№22 AU85', '№53 DR100', '№54 VP101',
+    '№000 richard', '№55 AL102', '№56 IC1', '№58 KM2', '№59 AH6', '№43 MD9', '№45 AA8', '№61 SN11',
+    '№63 ED123', '№64 SA122', '№65 BS125', '№66 AD129', '№67 AG135', '№69 sasha', '№72 AP147', '№111 DG83', '№73 NR152'
+]
+OTHER_NAMES = [
+    'ACC DEP', 'TEST ACC DEP'
+]
+BTN_RETURN_FP_BAN_ALL = '🚫В бан всю ФП'
+# ============================================================
+
+
+# Restored schema state globals
+issues_schema_lock = threading.Lock()
+issues_schema_ready = False
+
 def is_admin(user_id):
     return user_id in ADMINS or user_id in ADMIN_FARM_USERS
 
