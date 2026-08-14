@@ -814,6 +814,136 @@ def grist_atomic_take_with_issue(source_sheet,record_id,source_fields_by_pos,iss
     return True
 
 
+
+
+def grist_get_record_by_id(sheet_name, record_id):
+    table_id=grist_table_id_for_sheet(sheet_name)
+    data=_grist_request(
+        "GET",
+        f"/api/docs/{GRIST_DOC_ID}/tables/{table_id}/records/{int(record_id)}"
+    )
+    return data if isinstance(data,dict) else None
+
+
+def grist_resolve_record_id(sheet_name, row_index=None, record_id=None):
+    if record_id:
+        return int(record_id)
+    if row_index:
+        return int(grist_record_id(sheet_name,int(row_index),force=True))
+    raise RuntimeError("Не указан record_id/row_index.")
+
+
+def grist_atomic_batch_issue(entries):
+    """Проверяет выбранные records и одним /apply выполняет всю выдачу.
+
+    entries:
+      sheet_name, row_index|record_id, status_pos, fields_by_pos, issue_row(optional),
+      validators(optional list of callables(row)->error text or None)
+    """
+    entries=[dict(x or {}) for x in (entries or []) if x]
+    if not entries:
+        return []
+
+    prepared=[]
+    actions=[]
+
+    # issue_lock снаружи/внутри сериализует выдачи в одном worker.
+    for entry in entries:
+        sheet=entry["sheet_name"]
+        rid=grist_resolve_record_id(
+            sheet,
+            row_index=entry.get("row_index"),
+            record_id=entry.get("record_id")
+        )
+        record=grist_get_record_by_id(sheet,rid)
+        if not record:
+            raise RuntimeError("Расходник уже удалён или недоступен.")
+
+        row=grist_record_to_sheet_row(sheet,record)
+        status_pos=int(entry.get("status_pos",4))
+        if len(row)<=status_pos:
+            raise RuntimeError(f"В {sheet} отсутствует колонка статуса.")
+
+        status=str(row[status_pos] or "").strip().lower()
+        if status!="free":
+            name=str(row[0] if row else "").strip()
+            raise RuntimeError(
+                f"{name or 'Расходник'} уже недоступен: статус {status or 'пусто'}."
+            )
+
+        for validator in entry.get("validators") or []:
+            error_text=validator(row)
+            if error_text:
+                raise RuntimeError(str(error_text))
+
+        actions.append(
+            grist_update_record_id(
+                sheet,
+                rid,
+                entry.get("fields_by_pos") or {}
+            )
+        )
+
+        issue_row=entry.get("issue_row")
+        if issue_row is not None:
+            actions.append(
+                grist_add_action(
+                    SHEET_ISSUES,
+                    normalize_issue_row_for_append(issue_row)
+                )
+            )
+
+        prepared.append({
+            "record_id":rid,
+            "row":row,
+            "sheet_name":sheet,
+        })
+
+    # Один атомарный пакет на все source updates + all issue rows.
+    grist_apply(actions)
+
+    touched=set()
+    has_issue=False
+    for entry in entries:
+        touched.add(entry["sheet_name"])
+        if entry.get("issue_row") is not None:
+            has_issue=True
+
+    for sheet in touched:
+        grist_all_mark_stale(sheet)
+
+    if has_issue:
+        grist_all_mark_stale(SHEET_ISSUES)
+        invalidate_stats_cache()
+
+    return prepared
+
+
+def grist_free_records_by_status_pos(sheet_name,status_pos,limit=None,extra_filters_by_pos=None):
+    """Точечный Grist filter по позициям колонок без чтения всей таблицы."""
+    cols=grist_columns_for_sheet(sheet_name)
+    filt={}
+    status_pos=int(status_pos)
+    if status_pos>=len(cols):
+        return []
+    filt[cols[status_pos]["id"]]=["free"]
+
+    for pos,vals in (extra_filters_by_pos or {}).items():
+        pos=int(pos)
+        if pos<0 or pos>=len(cols):
+            continue
+        filt[cols[pos]["id"]]=vals if isinstance(vals,list) else [vals]
+
+    data=_grist_request(
+        "GET",
+        f"/api/docs/{GRIST_DOC_ID}/tables/{grist_table_id_for_sheet(sheet_name)}/records",
+        params={
+            "filter":json.dumps(filt,ensure_ascii=False),
+            "limit":int(limit) if limit is not None else 0,
+            "sort":"manualSort",
+        }
+    )
+    return data.get("records",[]) if isinstance(data,dict) else []
 def humanize_storage_error(error):
     raw=str(error or "").strip()
     low=raw.lower()
@@ -4715,9 +4845,6 @@ def send_crypto_bulk_followup_messages(chat_id, results):
 def finish_crypto_kings_bulk(chat_id, user_id):
     state = get_state(user_id)
 
-    pending_issue_rows = state.get("crypto_bulk_issue_rows", [])
-    if pending_issue_rows:
-        append_issue_rows_fixed(pending_issue_rows)
 
     results = state.get("crypto_bulk_results", [])
     for_whom = state.get("king_for_whom", "")
@@ -6912,550 +7039,159 @@ def show_found_fp(chat_id, user_id, found):
     tg_send_message(chat_id, text, keyboard)
 
 
-def confirm_fp_issue(chat_id, user_id, username):
+def confirm_fp_issue(chat_id,user_id,username):
     try:
         with issue_lock:
-            state = get_state(user_id)
+            state=get_state(user_id)
+            if state.get("mode")!="fp_found":
+                send_fps_menu(chat_id,"Сначала выбери ФП заново.");return
+            for_whom=str(state.get("fp_for_whom","")).strip()
+            row_index=state.get("fp_row")
+            if not for_whom or not row_index:
+                clear_state(user_id);send_fps_menu(chat_id,"Потеряны данные ФП.");return
+            row=ensure_row_len(get_sheet_row_live(SHEET_FPS,row_index,9),9)
+            if str(row[5]).strip().lower()!="free":
+                clear_state(user_id);send_fps_menu(chat_id,"Это ФП уже недоступно.");return
 
-            if state.get("mode") != "fp_found":
-                send_fps_menu(chat_id, "Сначала выбери ФП заново.")
-                return
+            warehouse=row[4]
+            if is_fp_warehouse_locked_for_other_user(warehouse,user_id=user_id,farm=False):
+                clear_state(user_id);send_fps_menu(chat_id,"Этот склад ФП сейчас занят.");return
+            maybe_open_fp_warehouse_in_octo(warehouse,farm=False)
 
-            fp_for_whom = state.get("fp_for_whom", "").strip()
-            if not fp_for_whom:
-                clear_state(user_id)
-                send_fps_menu(chat_id, "Не найдено для кого выдавать ФП. Начни заново.")
-                return
+            today=datetime.now(MOSCOW_TZ).strftime("%d/%m/%Y")
+            who=f"@{username}" if username else "без username"
 
-            row_index = state.get("fp_row")
-            if not row_index:
-                clear_state(user_id)
-                send_fps_menu(chat_id, "Не найдено выбранное ФП. Начни заново.")
-                return
-
-            row = get_sheet_row_live(SHEET_FPS, row_index, 9)
-
-            if not row or not any(str(x).strip() for x in row):
-                clear_state(user_id)
-                send_fps_menu(chat_id, "ФП не найдено в таблице. Начни заново.")
-                return
-
-            status = str(row[5]).strip().lower()
-
-            if status == "taken":
-                clear_state(user_id)
-                send_fps_menu(chat_id, "Это ФП уже занято.")
-                return
-
-            if status == "ban":
-                clear_state(user_id)
-                send_fps_menu(chat_id, "Это ФП уже в ban.")
-                return
-
-            if status != "free":
-                clear_state(user_id)
-                send_fps_menu(chat_id, "Это ФП недоступно.")
-                return
-
-            fp_link = row[0]
-            purchase_date = row[1]
-            price = row[2]
-            supplier = row[3]
-            warehouse_name = row[4]
-
-            if is_fp_warehouse_locked_for_other_user(warehouse_name, user_id=user_id, farm=False):
-                clear_state(user_id)
-                send_fps_menu(chat_id, "Этот склад ФП сейчас занят другим менеджером. Начни выдачу заново.")
-                return
-
-            maybe_open_fp_warehouse_in_octo(warehouse_name, farm=False)
-
-            today = datetime.now(MOSCOW_TZ).strftime("%d/%m/%Y")
-            who_took_text = f"@{username}" if username else "без username"
-
-            sheet_update_raw(
-                SHEET_FPS,
-                f"F{row_index}:I{row_index}",
-                [[
-                    "taken",
-                    fp_for_whom,
-                    who_took_text,
-                    today
-                ]]
-            )
-
-            sheet_append_row_and_refresh(
-                SHEET_ISSUES,
-                [
-                    fp_link,
-                    "FP",
-                    purchase_date,
-                    normalize_numeric_for_sheet(price),
-                    today,
-                    supplier,
-                    fp_for_whom
-                ],
-                value_input_option="USER_ENTERED"
-            )
-
-            mark_sheet_cache_stale(SHEET_FPS)
-            mark_sheet_cache_stale(SHEET_ISSUES)
-            invalidate_stats_cache()
-
-            set_fp_warehouse_time_lock(warehouse_name, user_id, 1, farm=False)
-
-            remaining_in_warehouse = count_free_fp_in_warehouse(warehouse_name)
-            if remaining_in_warehouse == 0:
-                try:
-                    notify_admin_fp_warehouse_finished(warehouse_name)
-                except Exception:
-                    logging.exception("notify_admin_fp_warehouse_finished crashed")
-
+            grist_atomic_batch_issue([{
+                "sheet_name":SHEET_FPS,"row_index":row_index,"status_pos":5,
+                "fields_by_pos":{5:"taken",6:for_whom,7:who,8:today},
+                "issue_row":[row[0],"FP",row[1],normalize_numeric_for_sheet(row[2]),today,row[3],for_whom,"","",get_payment_hash_from_fp_row(row)]
+            }])
+            set_fp_warehouse_time_lock(warehouse,user_id,1,farm=False)
             clear_state(user_id)
 
-        tg_send_message(
-            chat_id,
-            f"Готово ✅\n\n"
-            f"ФП выдано.\n"
-            f"🔗Ссылка: {fp_link}\n"
-            f"💵Цена: {format_issue_price(price)}\n"
-            f"🗃Склад: {warehouse_name}\n"
-            f"👨‍💻Для кого: {fp_for_whom}"
-        )
-
-        send_accounts_main_menu(chat_id, "Меню Accounts:")
-
-    except Exception:
+        tg_send_message(chat_id,f"Готово ✅\n\nФП выдано.\n🔗Ссылка: {row[0]}\n💵Цена: {format_issue_price(row[2])}\n🗃Склад: {warehouse}\n👨‍💻Для кого: {for_whom}")
+        send_accounts_main_menu(chat_id,"Меню Accounts:")
+    except Exception as e:
         logging.exception("confirm_fp_issue crashed")
-        tg_send_message(chat_id, "Ошибка выдачи ФП. Попробуй ещё раз.")
-        send_accounts_main_menu(chat_id, "Меню Accounts:")
+        tg_send_message(chat_id,"❌ "+humanize_storage_error(e))
+        send_accounts_main_menu(chat_id,"Меню Accounts:")
 
-def issue_fps_bulk(chat_id, user_id, username, count_needed):
+def issue_fps_bulk(chat_id,user_id,username,count_needed):
     try:
-        state = get_state(user_id)
+        state=get_state(user_id)
+        for_whom=str(state.get("fp_for_whom","")).strip()
+        if state.get("mode")!="awaiting_fp_count" or not for_whom:
+            send_fps_menu(chat_id,"Начни выдачу ФП заново.");return
 
-        if state.get("mode") != "awaiting_fp_count":
-            send_fps_menu(chat_id, "Сначала начни выдачу ФП заново.")
-            return
+        warehouse,free_counts,busy=choose_fp_warehouse_for_issue(
+            SHEET_FPS,count_needed=count_needed,user_id=user_id,farm=False)
+        if not warehouse:
+            clear_state(user_id);send_fps_menu(chat_id,"Свободного склада ФП сейчас нет.");return
+        maybe_open_fp_warehouse_in_octo(warehouse,farm=False)
 
-        fp_for_whom = state.get("fp_for_whom", "").strip()
-        if not fp_for_whom:
-            clear_state(user_id)
-            send_fps_menu(chat_id, "Не найдено для кого выдавать ФП. Начни заново.")
-            return
+        records=grist_free_records_by_status_pos(SHEET_FPS,5,limit=count_needed,extra_filters_by_pos={4:warehouse})
+        if len(records)<count_needed:
+            clear_state(user_id);send_fps_menu(chat_id,f"Недостаточно свободных ФП. Доступно: {len(records)}");return
 
-        current_warehouse, free_counts, busy_warehouses = choose_fp_warehouse_for_issue(
-            SHEET_FPS,
-            count_needed=count_needed,
-            user_id=user_id,
-            farm=False
-        )
-
-        if not current_warehouse:
-            clear_state(user_id)
-            if busy_warehouses:
-                send_fps_menu(chat_id, "Склады ФП сейчас заняты. Попробуй позже.")
-            else:
-                send_fps_menu(chat_id, "Свободных ФП сейчас нет.")
-            return
-
-        available_in_current = int(free_counts.get(current_warehouse, 0) or 0)
-        if available_in_current < count_needed:
-            clear_state(user_id)
-            send_fps_menu(
-                chat_id,
-                f"Недостаточно свободных ФП на доступном складе {current_warehouse}. Доступно: {available_in_current}"
-            )
-            return
-
-        maybe_open_fp_warehouse_in_octo(current_warehouse, farm=False)
-
-        rows = get_sheet_rows_cached(SHEET_FPS)
-        candidates = []
-
-        for idx, row in enumerate(rows[1:], start=2):
-            if len(row) < 9:
-                row = row + [''] * (9 - len(row))
-
-            if str(row[5]).strip().lower() != "free":
-                continue
-
-            if str(row[4]).strip() != current_warehouse:
-                continue
-
-            purchase_date = parse_date(row[1]) or datetime.max
-            warehouse_key = extract_warehouse_sort_key(row[4])
-            candidates.append((idx, warehouse_key, purchase_date, row))
-
-        candidates.sort(key=lambda x: (x[1], x[2]))
-        selected = candidates[:count_needed]
-
-        if len(selected) < count_needed:
-            clear_state(user_id)
-            send_fps_menu(chat_id, f"Недостаточно свободных ФП на складе {current_warehouse}. Доступно: {len(selected)}")
-            return
-
-        today = datetime.now(MOSCOW_TZ).strftime("%d/%m/%Y")
-        who_took_text = f"@{username}" if username else "без username"
-
-        issued_items = []
+        today=datetime.now(MOSCOW_TZ).strftime("%d/%m/%Y")
+        who=f"@{username}" if username else "без username"
+        entries=[];items=[]
+        for rec in records[:count_needed]:
+            row=ensure_row_len(grist_record_to_sheet_row(SHEET_FPS,rec),9)
+            entries.append({
+                "sheet_name":SHEET_FPS,"record_id":int(rec["id"]),"status_pos":5,
+                "fields_by_pos":{5:"taken",6:for_whom,7:who,8:today},
+                "issue_row":[row[0],"FP",row[1],normalize_numeric_for_sheet(row[2]),today,row[3],for_whom,"","",get_payment_hash_from_fp_row(row)]
+            })
+            items.append({"fp_link":row[0],"price":row[2],"warehouse":row[4]})
 
         with issue_lock:
-            current_rows = get_sheet_rows_cached(SHEET_FPS, force=True)
-
-            for row_index, _, _, _ in selected:
-                if row_index - 1 >= len(current_rows):
-                    clear_state(user_id)
-                    send_fps_menu(chat_id, "Одна из ФП пропала из таблицы. Начни заново.")
-                    return
-
-                row = current_rows[row_index - 1]
-                if len(row) < 9:
-                    row = row + [''] * (9 - len(row))
-
-                if str(row[5]).strip().lower() != "free":
-                    clear_state(user_id)
-                    send_fps_menu(chat_id, "Одна из ФП уже не свободна. Начни заново.")
-                    return
-
-                if str(row[4]).strip() != current_warehouse:
-                    clear_state(user_id)
-                    send_fps_menu(chat_id, "Одна из ФП уже не из доступного склада. Начни заново.")
-                    return
-
-            issue_rows = []
-            warehouses_touched = []
-
-            for row_index, _, _, _ in selected:
-                row = current_rows[row_index - 1]
-                if len(row) < 9:
-                    row = row + [''] * (9 - len(row))
-
-                warehouse_name = row[4]
-
-                sheet_update_raw(
-                    SHEET_FPS,
-                    f"F{row_index}:I{row_index}",
-                    [[
-                        "taken",
-                        fp_for_whom,
-                        who_took_text,
-                        today
-                    ]]
-                )
-
-                issue_rows.append([
-                    row[0],
-                    "FP",
-                    row[1],
-                    normalize_numeric_for_sheet(row[2]),
-                    today,
-                    row[3],
-                    fp_for_whom,
-                    "",
-                    "",
-                    get_payment_hash_from_fp_row(row)
-                ])
-
-                issued_items.append({
-                    "fp_link": row[0],
-                    "price": row[2],
-                    "warehouse": warehouse_name
-                })
-
-                warehouses_touched.append(warehouse_name)
-
-            refresh_sheet_cache(SHEET_FPS)
-
-            if issue_rows:
-                sheet_append_rows_and_refresh(
-                    SHEET_ISSUES,
-                    issue_rows,
-                    value_input_option="USER_ENTERED"
-                )
-
-            for warehouse_name in sorted(set(warehouses_touched), key=extract_warehouse_sort_key):
-                set_fp_warehouse_time_lock(warehouse_name, user_id, count_needed, farm=False)
-                remaining_in_warehouse = count_free_fp_in_warehouse(warehouse_name)
-                if remaining_in_warehouse == 0:
-                    try:
-                        notify_admin_fp_warehouse_finished(warehouse_name)
-                    except Exception:
-                        logging.exception("notify_admin_fp_warehouse_finished crashed")
-
-            invalidate_stats_cache()
-
+            grist_atomic_batch_issue(entries)
+        set_fp_warehouse_time_lock(warehouse,user_id,count_needed,farm=False)
         clear_state(user_id)
 
-        for item in issued_items:
-            tg_send_message(
-                chat_id,
-                f"Готово ✅\n\n"
-                f"ФП выдано.\n"
-                f"🔗Ссылка: {item['fp_link']}\n"
-                f"💵Цена: {format_issue_price(item.get('price', ''))}\n"
-                f"🗃Склад: {item['warehouse']}\n"
-                f"👨‍💻Для кого: {fp_for_whom}"
-            )
-
-        send_accounts_main_menu(chat_id, "Меню Accounts:")
-
-    except Exception:
+        for item in items:
+            tg_send_message(chat_id,f"Готово ✅\n\nФП выдано.\n🔗Ссылка: {item['fp_link']}\n💵Цена: {format_issue_price(item['price'])}\n🗃Склад: {item['warehouse']}\n👨‍💻Для кого: {for_whom}")
+        send_accounts_main_menu(chat_id,"Меню Accounts:")
+    except Exception as e:
         logging.exception("issue_fps_bulk crashed")
-        clear_state(user_id)
-        tg_send_message(chat_id, "Ошибка массовой выдачи ФП. Попробуй ещё раз.")
-        send_accounts_main_menu(chat_id, "Меню Accounts:")
+        tg_send_message(chat_id,"❌ "+humanize_storage_error(e))
+        send_accounts_main_menu(chat_id,"Меню Accounts:")
 
-def confirm_pixel_issue(chat_id, user_id, username):
+def confirm_pixel_issue(chat_id,user_id,username):
     try:
         with issue_lock:
-            state = get_state(user_id)
+            state=get_state(user_id)
+            if state.get("mode")!="pixel_found":
+                send_pixels_menu(chat_id,"Сначала выбери Пиксель заново.");return
+            for_whom=str(state.get("pixel_for_whom","")).strip()
+            row_index=state.get("pixel_row")
+            if not for_whom or not row_index:
+                clear_state(user_id);send_pixels_menu(chat_id,"Потеряны данные Пикселя.");return
+            row=ensure_row_len(get_sheet_row_live(SHEET_PIXELS,row_index,9),9)
+            if str(row[3]).strip().lower()!="free":
+                clear_state(user_id);send_pixels_menu(chat_id,"Этот Пиксель уже недоступен.");return
 
-            if state.get("mode") != "pixel_found":
-                send_pixels_menu(chat_id, "Сначала выбери Пиксель заново.")
-                return
+            today=datetime.now(MOSCOW_TZ).strftime("%d/%m/%Y")
+            who=f"@{username}" if username else "без username"
+            data_text=row[7]
+            pixel_name=extract_pixel_name_from_data(data_text)
+            pixel_id=extract_pixel_id_from_data(data_text)
+            issue_value=pixel_id or pixel_name
 
-            pixel_for_whom = state.get("pixel_for_whom", "").strip()
-            if not pixel_for_whom:
-                clear_state(user_id)
-                send_pixels_menu(chat_id, "Не найдено для кого выдавать Пиксель. Начни заново.")
-                return
-
-            row_index = state.get("pixel_row")
-            if not row_index:
-                clear_state(user_id)
-                send_pixels_menu(chat_id, "Не найден выбранный Пиксель. Начни заново.")
-                return
-
-            rows = get_sheet_rows_cached(SHEET_PIXELS)
-
-            if row_index - 1 >= len(rows):
-                clear_state(user_id)
-                send_pixels_menu(chat_id, "Пиксель не найден в таблице. Начни заново.")
-                return
-
-            row = rows[row_index - 1]
-            row = ensure_row_len(row, 9)
-            sync_id = row[8]
-
-            status = str(row[3]).strip().lower()
-
-            if status == "taken":
-                clear_state(user_id)
-                send_pixels_menu(chat_id, "Этот Пиксель уже занят.")
-                return
-
-            if status == "ban":
-                clear_state(user_id)
-                send_pixels_menu(chat_id, "Этот Пиксель уже в ban.")
-                return
-
-            if status != "free":
-                clear_state(user_id)
-                send_pixels_menu(chat_id, "Этот Пиксель недоступен.")
-                return
-
-            today = datetime.now(MOSCOW_TZ).strftime("%d/%m/%Y")
-            who_took_text = f"@{username}" if username else "без username"
-            data_text = row[7]
-            pixel_name = extract_pixel_name_from_data(data_text)
-            pixel_id = extract_pixel_id_from_data(data_text)
-            issue_pixel_value = pixel_id or pixel_name
-
-            sheet_update_and_refresh(
-                SHEET_PIXELS,
-                f"D{row_index}:G{row_index}",
-                [[
-                    "taken",
-                    pixel_for_whom,
-                    today,
-                    who_took_text
-                ]]
-            )
-
-            append_issue_row_fixed([
-                issue_pixel_value,
-                "PIXEL",
-                row[0],
-                normalize_numeric_for_sheet(row[1]),
-                today,
-                row[2],
-                pixel_for_whom,
-                "",
-                "",
-                get_payment_hash_from_pixel_row(row)
-            ])
-
-            invalidate_stats_cache()
+            grist_atomic_batch_issue([{
+                "sheet_name":SHEET_PIXELS,"row_index":row_index,"status_pos":3,
+                "fields_by_pos":{3:"taken",4:for_whom,5:today,6:who},
+                "issue_row":[issue_value,"PIXEL",row[0],normalize_numeric_for_sheet(row[1]),today,row[2],for_whom,"","",get_payment_hash_from_pixel_row(row)]
+            }])
             clear_state(user_id)
 
-        tg_send_message(
-            chat_id,
-            f"Готово ✅\n\n"
-            f"Пиксель выдан.\n"
-            f"🔥id Пикселя: {pixel_id}\n"
-            f"💵Цена: {format_issue_price(row[1])}\n"
-            f"👨‍💻Для кого: {pixel_for_whom}"
-        )
-
-        if data_text:
-            tg_send_message(chat_id, data_text)
-        else:
-            tg_send_message(chat_id, "Данные Пикселя не найдены.")
-
-        send_pixels_menu(chat_id, "Выбери следующее действие:")
-
-    except Exception:
+        tg_send_message(chat_id,f"Готово ✅\n\nПиксель выдан.\n🔥id Пикселя: {pixel_id}\n💵Цена: {format_issue_price(row[1])}\n👨‍💻Для кого: {for_whom}")
+        tg_send_message(chat_id,data_text or "Данные Пикселя не найдены.")
+        send_pixels_menu(chat_id,"Выбери следующее действие:")
+    except Exception as e:
         logging.exception("confirm_pixel_issue crashed")
-        tg_send_message(chat_id, "Ошибка выдачи Пикселя. Попробуй ещё раз.")
-        send_pixels_menu(chat_id, "Меню Пикселей:")
-        
-def issue_pixels_bulk(chat_id, user_id, username, count_needed):
+        tg_send_message(chat_id,"❌ "+humanize_storage_error(e))
+        send_pixels_menu(chat_id,"Меню Пикселей:")
+
+def issue_pixels_bulk(chat_id,user_id,username,count_needed):
     try:
-        state = get_state(user_id)
+        state=get_state(user_id)
+        if state.get("mode")!="awaiting_pixel_count":
+            send_pixels_menu(chat_id,"Сначала начни выдачу Пикселей заново.");return
+        for_whom=str(state.get("pixel_for_whom","")).strip()
+        records=grist_free_records_by_status_pos(SHEET_PIXELS,3,limit=count_needed)
+        if len(records)<count_needed:
+            clear_state(user_id);send_pixels_menu(chat_id,f"Недостаточно свободных Пикселей. Доступно: {len(records)}");return
 
-        if state.get("mode") != "awaiting_pixel_count":
-            send_pixels_menu(chat_id, "Сначала начни выдачу Пикселей заново.")
-            return
-
-        pixel_for_whom = state.get("pixel_for_whom", "").strip()
-        if not pixel_for_whom:
-            clear_state(user_id)
-            send_pixels_menu(chat_id, "Не найдено для кого выдавать Пиксели. Начни заново.")
-            return
-
-        try:
-            count_needed = int(count_needed)
-        except Exception:
-            tg_send_message(chat_id, "Количество Пикселей должно быть числом.")
-            return
-
-        if count_needed <= 0:
-            tg_send_message(chat_id, "Количество должно быть больше нуля.")
-            return
-
-        found_pixels = find_free_pixels(count_needed)
-
-        if len(found_pixels) < count_needed:
-            clear_state(user_id)
-            send_pixels_menu(
-                chat_id,
-                f"Недостаточно свободных Пикселей. Доступно: {len(found_pixels)}"
-            )
-            return
-
-        today = datetime.now(MOSCOW_TZ).strftime("%d/%m/%Y")
-        who_took_text = f"@{username}" if username else "без username"
-
-        issued_messages = []
-        issue_rows = []
+        today=datetime.now(MOSCOW_TZ).strftime("%d/%m/%Y")
+        who=f"@{username}" if username else "без username"
+        entries=[];items=[]
+        for rec in records[:count_needed]:
+            row=ensure_row_len(grist_record_to_sheet_row(SHEET_PIXELS,rec),9)
+            data_text=str(row[7] or "").strip()
+            pixel_name=extract_pixel_name_from_data(data_text)
+            pixel_id=extract_pixel_id_from_data(data_text)
+            issue_value=pixel_id or pixel_name
+            entries.append({
+                "sheet_name":SHEET_PIXELS,"record_id":int(rec["id"]),"status_pos":3,
+                "fields_by_pos":{3:"taken",4:for_whom,5:today,6:who},
+                "issue_row":[issue_value,"PIXEL",row[0],normalize_numeric_for_sheet(row[1]),today,row[2],for_whom,"","",get_payment_hash_from_pixel_row(row)]
+            })
+            items.append({"pixel_name":pixel_name,"pixel_id":pixel_id,"price":row[1],"data_text":data_text})
 
         with issue_lock:
-            current_rows = get_sheet_rows_cached(SHEET_PIXELS, force=True)
-
-            for item in found_pixels:
-                row_index = item["row_index"]
-
-                if row_index - 1 >= len(current_rows):
-                    clear_state(user_id)
-                    send_pixels_menu(chat_id, "Один из Пикселей пропал из таблицы. Начни заново.")
-                    return
-
-                row = current_rows[row_index - 1]
-                row = ensure_row_len(row, 9)
-                current_rows[row_index - 1] = row
-                sync_id = row[8]
-
-                status = str(row[3]).strip().lower()
-                if status != "free":
-                    clear_state(user_id)
-                    send_pixels_menu(chat_id, "Один из Пикселей уже не свободен. Начни заново.")
-                    return
-
-            for item in found_pixels:
-                row_index = item["row_index"]
-                row = current_rows[row_index - 1]
-
-                if len(row) < 8:
-                    row = row + [''] * (8 - len(row))
-                    current_rows[row_index - 1] = row
-
-                data_text = str(row[7] or "").strip()
-                pixel_name = extract_pixel_name_from_data(data_text)
-                pixel_id = extract_pixel_id_from_data(data_text)
-                issue_pixel_value = pixel_id or pixel_name
-
-                sheet_update_raw(
-                    SHEET_PIXELS,
-                    f"D{row_index}:G{row_index}",
-                    [[
-                        "taken",
-                        pixel_for_whom,
-                        today,
-                        who_took_text
-                    ]]
-                )
-
-                row[3] = "taken"
-                row[4] = pixel_for_whom
-                row[5] = today
-                row[6] = who_took_text
-
-                issue_rows.append([
-                    issue_pixel_value,
-                    "PIXEL",
-                    row[0],
-                    normalize_numeric_for_sheet(row[1]),
-                    today,
-                    row[2],
-                    pixel_for_whom,
-                    "",
-                    "",
-                    get_payment_hash_from_pixel_row(row)
-                ])
-
-                issued_messages.append({
-                    "pixel_name": pixel_name,
-                    "pixel_id": pixel_id,
-                    "price": row[1],
-                    "data_text": data_text,
-                    "sync_id": sync_id
-                })
-
-            if issue_rows:
-                append_issue_rows_fixed(issue_rows)
-
-            with table_cache_lock:
-                table_cache[SHEET_PIXELS]["rows"] = current_rows
-                table_cache[SHEET_PIXELS]["updated_at"] = time.time()
-
-            invalidate_stats_cache()
-
+            grist_atomic_batch_issue(entries)
         clear_state(user_id)
 
-        tg_send_message(
-            chat_id,
-            f"Готово ✅\n\n"
-            f"🔢Выдано Пикселей: {len(issued_messages)}\n"
-            f"{build_issue_prices_line(issued_messages)}\n"
-            f"👨‍💻Для кого: {pixel_for_whom}"
-        )
-
-        for i, item in enumerate(issued_messages, start=1):
-            text_to_send = (
-                f"Пиксель {i}: {item['pixel_name']}\n"
-                f"🔥id Пикселя: {item['pixel_id']}\n"
-                f"💵Цена: {format_issue_price(item.get('price', ''))}\n\n"
-                f"{item['data_text']}"
-            )
-            tg_send_long_message(chat_id, text_to_send)
-
-        send_pixels_menu(chat_id, "Выбери следующее действие:")
-
+        tg_send_message(chat_id,f"Готово ✅\n\n🔢Выдано Пикселей: {len(items)}\n{build_issue_prices_line(items)}\n👨‍💻Для кого: {for_whom}")
+        for i,item in enumerate(items,1):
+            tg_send_long_message(chat_id,f"Пиксель {i}: {item['pixel_name']}\n🔥id Пикселя: {item['pixel_id']}\n💵Цена: {format_issue_price(item['price'])}\n\n{item['data_text']}")
+        send_pixels_menu(chat_id,"Выбери следующее действие:")
     except Exception as e:
         logging.exception("issue_pixels_bulk crashed")
-        tg_send_message(chat_id, f"Ошибка выдачи Пикселей.\n\n{e}")
-        send_pixels_menu(chat_id, "Меню Пикселей:")
+        tg_send_message(chat_id,"❌ "+humanize_storage_error(e))
+        send_pixels_menu(chat_id,"Меню Пикселей:")
 
 def extract_pixel_id_from_data(data_text):
     text = str(data_text or "").strip()
@@ -8735,40 +8471,22 @@ def process_farm_kings_bulk_proxy_step_background(chat_id, user_id, username):
         logging.exception("process_farm_kings_bulk_proxy_step_background cookies failed")
         cookies_msg = str(e)
 
-    sheet_update_raw(
-        SHEET_FARM_KINGS,
-        f"A{king_row}:L{king_row}",
-        [[
-            king_name,
-            row[1],
-            row[2],
-            row[3],
-            "taken",
-            "farm",
-            today,
-            geo_value,
-            who_took_text,
-            row[9],
-            row[10],
-            row[11]
-        ]]
-    )
-    mark_sheet_cache_stale(SHEET_FARM_KINGS)
+    grist_atomic_batch_issue([{
+        "sheet_name": SHEET_FARM_KINGS,
+        "row_index": king_row,
+        "status_pos": 4,
+        "fields_by_pos": {
+            0: king_name, 4: "taken", 5: "farm",
+            6: today, 7: geo_value, 8: who_took_text,
+        },
+        "issue_row": [
+            king_name, "KING", row[1], normalize_numeric_for_sheet(row[2]),
+            today, row[3], "farm", "", "",
+            get_payment_hash_from_king_row(row)
+        ],
+    }])
 
     sync_id = current_item.get("sync_id")
-
-    pending_issue_rows.append([
-        king_name,
-        "KING",
-        row[1],
-        normalize_numeric_for_sheet(row[2]),
-        today,
-        row[3],
-        "farm",
-        "",
-        "",
-        get_payment_hash_from_king_row(row)
-    ])
 
     results.append({
         "king_name": king_name,
@@ -8785,7 +8503,7 @@ def process_farm_kings_bulk_proxy_step_background(chat_id, user_id, username):
 
     state["farm_kings_bulk_results"] = results
     state["farm_kings_bulk_current_index"] = current_index + 1
-    state["farm_kings_bulk_issue_rows"] = pending_issue_rows
+    state["farm_kings_bulk_issue_rows"] = []
 
     set_state_with_custom_ttl(user_id, state, FARM_KING_BULK_PROXY_TTL)
 
@@ -8913,9 +8631,6 @@ def finish_farm_kings_bulk(chat_id, user_id):
     if progress_message_id:
         tg_delete_message(chat_id, progress_message_id)
 
-    pending_issue_rows = state.get("farm_kings_bulk_issue_rows", [])
-    if pending_issue_rows:
-        append_issue_rows_fixed(pending_issue_rows)
 
     results = state.get("farm_kings_bulk_results", [])
 
@@ -9103,194 +8818,51 @@ def return_farm_king_to_free(king_name):
     return True, f"Farm king '{king_name}' возвращён в free."
 
 
-def issue_farm_kings(chat_id, user_id, username, king_names):
-    state = get_state(user_id)
-    selected_rows = state.get("farm_king_rows", [])
-    selected_geo = str(state.get("farm_king_geo", "")).strip()
-
-    if not selected_rows or len(selected_rows) != len(king_names):
-        clear_state(user_id)
-        send_farm_kings_menu(chat_id, "Ошибка выдачи фарм кингов. Начни заново.")
-        return
-
-    count_needed = state.get("farm_kings_count", 0)
-    if not count_needed or count_needed != len(king_names):
-        clear_state(user_id)
-        send_farm_kings_menu(chat_id, "Ошибка количества farm кингов. Начни заново.")
-        return
-
-    # защита от дублей названий
-    duplicate_names = []
-    for name in king_names:
-        if farm_king_name_exists(name):
-            duplicate_names.append(name)
-
-    if duplicate_names:
-        clear_state(user_id)
-        tg_send_message(
-            chat_id,
-            "Эти названия уже существуют:\n" + "\n".join(duplicate_names[:20])
-        )
-        send_farm_kings_menu(chat_id, "Выдача отменена. Начни заново.")
-        return
-
-    today = datetime.now(MOSCOW_TZ).strftime("%d/%m/%Y")
-    who_took_text = f"@{username}" if username else "без username"
-
-    issue_rows = []
-    issued_items = []
-
-    with issue_lock:
-        current_rows = get_sheet_rows_cached(SHEET_FARM_KINGS, force=True)
-
-        # 1. Полная проверка перед записью
-        for item, king_name in zip(selected_rows, king_names):
-            row_index = item["row_index"]
-
-            if row_index - 1 >= len(current_rows):
-                clear_state(user_id)
-                send_farm_kings_menu(chat_id, "Ошибка: один из кингов пропал из таблицы.")
-                return
-
-            row = ensure_row_len(current_rows[row_index - 1], 13)
-
-            if str(row[4]).strip().lower() != "free":
-                clear_state(user_id)
-                send_farm_kings_menu(chat_id, f"Кинг '{row[0] or king_name}' уже не свободен.")
-                return
-
-            current_geo = str(row[7]).strip()
-            if selected_geo and current_geo != selected_geo:
-                clear_state(user_id)
-                send_farm_kings_menu(
-                    chat_id,
-                    f"Ошибка GEO: ожидался {selected_geo}, но в строке найден {current_geo}.\nНачни заново."
-                )
-                return
-
-        # 2. Обновление строк
-        for item, king_name in zip(selected_rows, king_names):
-            row_index = item["row_index"]
-            row = ensure_row_len(current_rows[row_index - 1], 13)
-            sync_id = row[12]
-
-            current_geo = str(row[7]).strip()
-            if selected_geo and current_geo != selected_geo:
-                clear_state(user_id)
-                send_farm_kings_menu(
-                    chat_id,
-                    f"Ошибка GEO перед записью: ожидался {selected_geo}, но найден {current_geo}.\nВыдача отменена."
-                )
-                return
-
-            sheet_update_raw(
-                SHEET_FARM_KINGS,
-                f"A{row_index}:L{row_index}",
-                [[
-                    king_name,       # A название
-                    row[1],          # B дата покупки
-                    row[2],          # C цена
-                    row[3],          # D supplier
-                    "taken",         # E статус
-                    "farm",          # F кому выдали
-                    today,           # G дата выдачи
-                    row[7],          # H geo
-                    who_took_text,   # I кто выдал / кто взял
-                    row[9],          # J data1
-                    row[10],         # K data2
-                    row[11]          # L data3
-                ]]
-            )
-
-            issue_rows.append([
-                king_name,
-                "KING",
-                row[1],
-                normalize_numeric_for_sheet(row[2]),
-                today,
-                row[3],
-                "farm",
-                "",
-                "",
-                get_payment_hash_from_king_row(row)
-            ])
-
-            issued_items.append({
-                "king_name": king_name,
-                "purchase_date": row[1],
-                "price": row[2],
-                "supplier": row[3],
-                "geo": row[7],
-                "data_text": get_full_king_data_from_row(row),
-                "sync_id": sync_id
-            })
-
-        refresh_sheet_cache(SHEET_FARM_KINGS)
-
-        # 3. Запись в issues
-        if issue_rows:
-            sheet_append_rows_and_refresh(
-                SHEET_ISSUES,
-                issue_rows,
-                value_input_option="USER_ENTERED"
-            )
-
-        invalidate_stats_cache()
-
-    clear_state(user_id)
-
+def issue_farm_kings(chat_id,user_id,username,king_names):
     try:
-        tg_send_message(
-            chat_id,
-            f"Готово ✅\n\n"
-            f"Выдано кингов: {len(issued_items)}"
-        )
-    except Exception:
-        logging.exception("issue_farm_kings summary send failed")
+        state=get_state(user_id)
+        selected_rows=state.get("farm_king_rows",[])
+        selected_geo=str(state.get("farm_king_geo","")).strip()
+        if not selected_rows or len(selected_rows)!=len(king_names):
+            clear_state(user_id);send_farm_kings_menu(chat_id,"Ошибка выдачи farm king. Начни заново.");return
 
-    # 5. Отправка txt / zip
-    if len(issued_items) > 5:
-        try:
-            archive_name = f"farm_kings_{datetime.now(MOSCOW_TZ).strftime('%Y%m%d_%H%M%S')}.zip"
-            tg_send_kings_as_zip(
-                chat_id=chat_id,
-                issued_items=issued_items,
-                archive_name=archive_name
-            )
-        except Exception:
-            logging.exception("issue_farm_kings zip send failed")
-            tg_send_message(chat_id, "Фарм кинги выданы, но zip-архив не удалось отправить.")
-    else:
-        txt_failed = []
+        duplicate=[name for name in king_names if farm_king_name_exists(name)]
+        if duplicate:
+            clear_state(user_id);tg_send_message(chat_id,"Эти названия уже существуют:\n"+"\n".join(duplicate[:20]));return
 
-        for item in issued_items:
-            try:
-                tg_send_message(
-                    chat_id,
-                    f"Готово ✅\n\n"
-                    f"Кинг выдан.\n"
-                    f"Название: {item['king_name']}\n"
-                    f"Цена: {item['price']}\n"
-                    f"Гео: {item['geo']}"
-                )
+        today=datetime.now(MOSCOW_TZ).strftime("%d/%m/%Y")
+        who=f"@{username}" if username else "без username"
+        entries=[];items=[]
 
-                tg_send_king_data_as_txt(
-                    chat_id=chat_id,
-                    king_name=item["king_name"],
-                    data_text=item["data_text"]
-                )
-            except Exception:
-                logging.exception(f"issue_farm_kings send failed for {item['king_name']}")
-                txt_failed.append(item["king_name"])
+        for item,king_name in zip(selected_rows,king_names):
+            row_index=item["row_index"]
+            row=ensure_row_len(get_sheet_row_live(SHEET_FARM_KINGS,row_index,13),13)
+            if selected_geo and str(row[7]).strip()!=selected_geo:
+                raise RuntimeError(f"У farm king изменился GEO: {row[7]}")
+            entries.append({
+                "sheet_name":SHEET_FARM_KINGS,"row_index":row_index,"status_pos":4,
+                "fields_by_pos":{0:king_name,4:"taken",5:"farm",6:today,8:who},
+                "validators":[lambda r,g=selected_geo: (f"Изменился GEO: {r[7]}" if g and str(r[7]).strip()!=g else None)],
+                "issue_row":[king_name,"KING",row[1],normalize_numeric_for_sheet(row[2]),today,row[3],"farm","","",get_payment_hash_from_king_row(row)]
+            })
+            items.append({"king_name":king_name,"price":row[2],"geo":row[7],"supplier":row[3],"data_text":get_full_king_data_from_row(row)})
 
-        if txt_failed:
-            tg_send_message(
-                chat_id,
-                "Эти фарм кинги выданы, но txt не удалось отправить:\n" + "\n".join(txt_failed[:20])
-            )
+        with issue_lock:
+            grist_atomic_batch_issue(entries)
+        clear_state(user_id)
 
-    send_farm_kings_menu(chat_id, "Выбери следующее действие:")
-
+        tg_send_message(chat_id,f"Готово ✅\n\nВыдано кингов: {len(items)}")
+        if len(items)>5:
+            tg_send_kings_as_zip(chat_id=chat_id,issued_items=items,archive_name=f"farm_kings_{datetime.now(MOSCOW_TZ).strftime('%Y%m%d_%H%M%S')}.zip")
+        else:
+            for item in items:
+                tg_send_message(chat_id,f"Готово ✅\n\nКинг выдан.\nНазвание: {item['king_name']}\nЦена: {item['price']}\nГео: {item['geo']}")
+                tg_send_king_data_as_txt(chat_id=chat_id,king_name=item["king_name"],data_text=item["data_text"])
+        send_farm_kings_menu(chat_id,"Выбери следующее действие:")
+    except Exception as e:
+        logging.exception("issue_farm_kings crashed")
+        tg_send_message(chat_id,"❌ "+humanize_storage_error(e))
+        send_farm_kings_menu(chat_id,"Меню Farm King:")
 
 def extract_bm_id_from_data_text(data_text):
     text = str(data_text or "")
@@ -9470,60 +9042,31 @@ def return_farm_bm_to_free(bm_id):
     invalidate_stats_cache()
     return True, f"Farm BM '{effective_bm_id}' возвращён в free."
 
-def issue_farm_bm(chat_id, user_id, username):
-    today = datetime.now(MOSCOW_TZ).strftime("%d/%m/%Y")
-    who_took_text = f"@{username}" if username else "без username"
+def issue_farm_bm(chat_id,user_id,username):
+    try:
+        today=datetime.now(MOSCOW_TZ).strftime("%d/%m/%Y")
+        who=f"@{username}" if username else "без username"
+        records=grist_free_records_by_status_pos(SHEET_FARM_BMS,4,limit=1)
+        if not records:
+            send_farm_bms_menu(chat_id,"Свободных фарм BMов сейчас нет.");return
+        rec=records[0]
+        row=ensure_row_len(grist_record_to_sheet_row(SHEET_FARM_BMS,rec),10)
+        bm_id=get_bm_effective_id_from_row(row)
 
-    with issue_lock:
-        found = find_free_farm_bm()
-        if not found:
-            send_farm_bms_menu(chat_id, "Свободных фарм BMов сейчас нет.")
-            return
+        with issue_lock:
+            grist_atomic_batch_issue([{
+                "sheet_name":SHEET_FARM_BMS,"record_id":int(rec["id"]),"status_pos":4,
+                "fields_by_pos":{4:"taken",5:"farm",6:who,7:today},
+                "issue_row":[bm_id,"БМ",row[1],normalize_numeric_for_sheet(row[2]),today,row[3],"farm","","",get_payment_hash_from_bm_row(row)]
+            }])
 
-        row_index = found["row_index"]
-        rows = get_sheet_rows_cached(SHEET_FARM_BMS)
-        if row_index - 1 >= len(rows):
-            send_farm_bms_menu(chat_id, "BM не найден в таблице.")
-            return
-
-        row = ensure_row_len(rows[row_index - 1], 10)
-        sync_id = row[9]
-
-        if str(row[4]).strip().lower() != "free":
-            send_farm_bms_menu(chat_id, "Этот BM уже занят.")
-            return
-
-        effective_bm_id = get_bm_effective_id_from_row(row)
-
-        sheet_update_and_refresh(
-            SHEET_FARM_BMS,
-            f"E{row_index}:H{row_index}",
-            [["taken", "farm", who_took_text, today]]
-        )
-
-        append_issue_row_fixed([
-            effective_bm_id,
-            "БМ",
-            row[1],
-            normalize_numeric_for_sheet(row[2]),
-            today,
-            row[3],
-            "farm",
-            "",
-            "",
-            get_payment_hash_from_bm_row(row)
-        ])
-
-        invalidate_stats_cache()
-
-    tg_send_message(chat_id, f"Готово ✅\n\nBM выдан.\n🔥ID BM: {effective_bm_id or 'не найден'}")
-
-    if len(row) > 8 and row[8]:
-        tg_send_message(chat_id, row[8])
-    else:
-        tg_send_message(chat_id, "Данные BM не найдены.")
-
-    send_farm_bms_menu(chat_id, "Выбери следующее действие:")
+        tg_send_message(chat_id,f"Готово ✅\n\nBM выдан.\n🔥ID BM: {bm_id or 'не найден'}")
+        tg_send_message(chat_id,row[8] if len(row)>8 and row[8] else "Данные BM не найдены.")
+        send_farm_bms_menu(chat_id,"Выбери следующее действие:")
+    except Exception as e:
+        logging.exception("issue_farm_bm crashed")
+        tg_send_message(chat_id,"❌ "+humanize_storage_error(e))
+        send_farm_bms_menu(chat_id,"Меню Farm BM:")
 
 def find_free_farm_fps(count_needed, user_id=None):
     rows = get_sheet_rows_cached(SHEET_FARM_FPS)
@@ -9646,149 +9189,42 @@ def return_farm_fp_to_free(fp_link):
     invalidate_stats_cache()
     return True, "Farm FP возвращено в free."
 
-def issue_farm_fps(chat_id, user_id, username, count_needed):
+def issue_farm_fps(chat_id,user_id,username,count_needed):
     try:
-        logging.info(
-            f"issue_farm_fps START user_id={user_id} username={username} "
-            f"count_needed={count_needed}"
-        )
+        warehouse,free_counts,busy=choose_fp_warehouse_for_issue(
+            SHEET_FARM_FPS,count_needed=count_needed,user_id=user_id,farm=True)
+        if not warehouse:
+            send_farm_fps_menu(chat_id,"Свободного farm FP склада сейчас нет.");return
+        maybe_open_fp_warehouse_in_octo(warehouse,farm=True)
 
-        current_warehouse, free_counts, busy_warehouses = choose_fp_warehouse_for_issue(
-            SHEET_FARM_FPS,
-            count_needed=count_needed,
-            user_id=user_id,
-            farm=True
-        )
+        records=grist_free_records_by_status_pos(SHEET_FARM_FPS,5,limit=count_needed,extra_filters_by_pos={4:warehouse})
+        if len(records)<count_needed:
+            send_farm_fps_menu(chat_id,f"Недостаточно свободных FP. Доступно: {len(records)}");return
 
-        logging.info(f"issue_farm_fps current_warehouse={current_warehouse}")
-
-        if not current_warehouse:
-            if busy_warehouses:
-                send_farm_fps_menu(chat_id, "Склады farm FP сейчас заняты. Попробуй позже.")
-            else:
-                send_farm_fps_menu(chat_id, "Свободных FP сейчас нет.")
-            return
-
-        available_in_current = int(free_counts.get(current_warehouse, 0) or 0)
-        logging.info(f"issue_farm_fps available_in_current={available_in_current}")
-
-        if available_in_current < count_needed:
-            send_farm_fps_menu(
-                chat_id,
-                f"Недостаточно свободных FP на доступном складе {current_warehouse}. Доступно: {available_in_current}"
-            )
-            return
-
-        maybe_open_fp_warehouse_in_octo(current_warehouse, farm=True)
-
-        found = find_free_farm_fps(count_needed, user_id=user_id)
-        logging.info(f"issue_farm_fps selected_count={len(found)}")
-
-        if len(found) < count_needed:
-            send_farm_fps_menu(chat_id, f"Недостаточно свободных FP на складе {current_warehouse}. Доступно: {len(found)}")
-            return
-
-        today = datetime.now(MOSCOW_TZ).strftime("%d/%m/%Y")
-        who_took_text = f"@{username}" if username else "без username"
-
-        issue_rows = []
-        messages = []
+        today=datetime.now(MOSCOW_TZ).strftime("%d/%m/%Y")
+        who=f"@{username}" if username else "без username"
+        entries=[];messages=[]
+        for rec in records[:count_needed]:
+            row=ensure_row_len(grist_record_to_sheet_row(SHEET_FARM_FPS,rec),9)
+            entries.append({
+                "sheet_name":SHEET_FARM_FPS,"record_id":int(rec["id"]),"status_pos":5,
+                "fields_by_pos":{5:"taken",6:"farm",7:who,8:today},
+                "issue_row":[row[0],"FP",row[1],normalize_numeric_for_sheet(row[2]),today,row[3],"farm","","",get_payment_hash_from_fp_row(row)]
+            })
+            messages.append(f"Ссылка: {row[0]}")
 
         with issue_lock:
-            logging.info("issue_farm_fps before get_sheet_rows_cached(force=True)")
-            current_rows = get_sheet_rows_cached(SHEET_FARM_FPS, force=True)
-            logging.info(f"issue_farm_fps current_rows_count={len(current_rows)}")
-
-            for item in found:
-                row_index = item["row_index"]
-
-                if row_index - 1 >= len(current_rows):
-                    send_farm_fps_menu(chat_id, "Ошибка: одна из FP пропала из таблицы.")
-                    return
-
-                row = current_rows[row_index - 1]
-                if len(row) < 9:
-                    row = row + [''] * (9 - len(row))
-
-                if str(row[5]).strip().lower() != "free":
-                    send_farm_fps_menu(chat_id, "Одна из FP уже не свободна.")
-                    return
-
-                if str(row[4]).strip() != current_warehouse:
-                    send_farm_fps_menu(chat_id, "Одна из FP уже не из доступного склада.")
-                    return
-
-            for item in found:
-                row_index = item["row_index"]
-                row = current_rows[row_index - 1]
-                if len(row) < 9:
-                    row = row + [''] * (9 - len(row))
-
-                sheet_update_raw(
-                    SHEET_FARM_FPS,
-                    f"F{row_index}:I{row_index}",
-                    [[
-                        "taken",
-                        "farm",
-                        who_took_text,
-                        today
-                    ]]
-                )
-
-                issue_rows.append([
-                    row[0],
-                    "FP",
-                    row[1],
-                    normalize_numeric_for_sheet(row[2]),
-                    today,
-                    row[3],
-                    "farm",
-                    "",
-                    "",
-                    get_payment_hash_from_fp_row(row)
-                ])
-
-                messages.append(f"Ссылка: {row[0]}")
-
-            refresh_sheet_cache(SHEET_FARM_FPS)
-
-            if issue_rows:
-                append_issue_rows_fixed(issue_rows)
-
-            invalidate_stats_cache()
-
-        set_fp_warehouse_time_lock(current_warehouse, user_id, count_needed, farm=True)
-
-        remaining_in_warehouse = count_free_farm_fp_in_warehouse(current_warehouse)
-
-        if remaining_in_warehouse == 0:
-            try:
-                notify_admin_farm_fp_warehouse_finished(current_warehouse)
-            except Exception:
-                logging.exception("notify_admin_farm_fp_warehouse_finished crashed")
-
+            grist_atomic_batch_issue(entries)
+        set_fp_warehouse_time_lock(warehouse,user_id,count_needed,farm=True)
         clear_state(user_id)
 
-        tg_send_message(
-            chat_id,
-            f"Готово ✅\n\n"
-            f"🔢Выдано FP: {len(messages)}\n"
-            f"🗃Склад: {current_warehouse}"
-        )
-
-        for msg_text in messages:
-            tg_send_message(chat_id, msg_text)
-
-        send_farm_fps_menu(chat_id, "Выбери следующее действие:")
-
+        tg_send_message(chat_id,f"Готово ✅\n\n🔢Выдано FP: {len(messages)}\n🗃Склад: {warehouse}")
+        for msg in messages:tg_send_message(chat_id,msg)
+        send_farm_fps_menu(chat_id,"Выбери следующее действие:")
     except Exception as e:
         logging.exception("issue_farm_fps crashed")
-        notify_admin_about_error(
-            "issue_farm_fps",
-            str(e),
-            extra_text=f"user_id={user_id}, count_needed={count_needed}"
-        )
-        raise
+        tg_send_message(chat_id,"❌ "+humanize_storage_error(e))
+        send_farm_fps_menu(chat_id,"Меню Farm FP:")
 
 def normalize_multiline_text_block(text):
     return str(text or "").replace("\r\n", "\n").replace("\r", "\n").strip()
@@ -13274,102 +12710,81 @@ def append_issue_row(account_number, purchase_date, price, transfer_date, suppli
     ])
 
 def issue_accounts_bulk(account_numbers, for_whom, username):
-    today = datetime.now(MOSCOW_TZ).strftime("%d/%m/%Y")
-    who_took_text = f"@{username}" if username else "без username"
+    today=datetime.now(MOSCOW_TZ).strftime("%d/%m/%Y")
+    who_took_text=f"@{username}" if username else "без username"
 
-    unique_numbers = []
-    seen = set()
-    for x in account_numbers:
-        acc = str(x).strip()
+    unique=[]
+    seen=set()
+    for value in account_numbers:
+        acc=str(value).strip()
         if acc and acc not in seen:
-            seen.add(acc)
-            unique_numbers.append(acc)
+            seen.add(acc);unique.append(acc)
 
-    issued = []
-    not_found = []
-    not_available = []
+    issued=[]
+    not_found=[]
+    not_available=[]
+    atomic_entries=[]
 
     with issue_lock, accounts_lock:
-        rows = get_sheet_rows_cached(SHEET_ACCOUNTS)
+        if storage_is_grist():
+            cols=grist_columns_for_sheet(SHEET_ACCOUNTS)
+            account_col=cols[0]["id"]
 
-        indexed = {}
-        for idx, row in enumerate(rows[1:], start=2):
-            if len(row) < 14:
-                row = row + [''] * (14 - len(row))
-                rows[idx - 1] = row
+            for account_number in unique:
+                data=_grist_request(
+                    "GET",
+                    f"/api/docs/{GRIST_DOC_ID}/tables/{grist_table_id_for_sheet(SHEET_ACCOUNTS)}/records",
+                    params={"filter":json.dumps({account_col:[account_number]},ensure_ascii=False),"limit":1}
+                )
+                records=data.get("records",[]) if isinstance(data,dict) else []
+                if not records:
+                    not_found.append(account_number)
+                    continue
 
-            acc = str(row[0]).strip()
-            if acc:
-                indexed[acc] = (idx, row)
+                rec=records[0]
+                row=ensure_row_len(grist_record_to_sheet_row(SHEET_ACCOUNTS,rec),14)
+                status=str(row[8]).strip().lower()
+                if status!="free":
+                    not_available.append(account_number)
+                    continue
 
-        issue_rows = []
+                issue_row=[
+                    account_number,"РК",row[1],normalize_numeric_for_sheet(row[2]),
+                    today,row[3],for_whom,"","",get_payment_hash_from_accounts_row(row)
+                ]
+                atomic_entries.append({
+                    "sheet_name":SHEET_ACCOUNTS,
+                    "record_id":int(rec["id"]),
+                    "status_pos":8,
+                    "fields_by_pos":{8:"taken",9:for_whom,10:today,11:who_took_text},
+                    "issue_row":issue_row,
+                })
+                issued.append({
+                    "account_number":account_number,
+                    "warehouses":row[7],
+                    "purchase_date":row[1],
+                    "price":row[2],
+                    "supplier":row[3],
+                    "currency":row[12] if len(row)>12 else "",
+                    "account_url":row[13] if len(row)>13 else ""
+                })
 
-        for account_number in unique_numbers:
-            item = indexed.get(account_number)
-            if not item:
-                not_found.append(account_number)
-                continue
+            if atomic_entries:
+                try:
+                    grist_atomic_batch_issue(atomic_entries)
+                except Exception:
+                    # Ничего не применилось: весь /apply атомарный.
+                    raise
 
-            row_index, row = item
-            status = str(row[8]).strip().lower()
-
-            if status != "free":
-                not_available.append(account_number)
-                continue
-
-            sheet_update_raw(
-                SHEET_ACCOUNTS,
-                f"I{row_index}:L{row_index}",
-                [["taken", for_whom, today, who_took_text]]
-            )
-
-            row[8] = "taken"
-            row[9] = for_whom
-            row[10] = today
-            row[11] = who_took_text
-
-            issue_rows.append([
-                account_number,
-                "РК",
-                row[1],
-                normalize_numeric_for_sheet(row[2]),
-                today,
-                row[3],
-                for_whom,
-                "",
-                "",
-                get_payment_hash_from_accounts_row(row)
-            ])
-
-            issued.append({
-                "account_number": account_number,
-                "warehouses": row[7],
-                "purchase_date": row[1],
-                "price": row[2],
-                "supplier": row[3],
-                "currency": row[12] if len(row) > 12 else "",
-                "account_url": row[13] if len(row) > 13 else ""
-            })
-
-        with table_cache_lock:
-            table_cache[SHEET_ACCOUNTS]["rows"] = rows
-            table_cache[SHEET_ACCOUNTS]["updated_at"] = time.time()
-
-        if issue_rows:
-            sheet_append_rows_and_refresh(
-                SHEET_ISSUES,
-                issue_rows,
-                value_input_option="USER_ENTERED"
-            )
-
-        invalidate_stats_cache()
+        else:
+            raise RuntimeError("Выдача личек настроена на Grist.")
 
     return {
-        "issued": issued,
-        "not_found": not_found,
-        "not_available": not_available,
-        "who_took_text": who_took_text,
-        "for_whom": for_whom
+        "issued":issued,
+        "not_found":not_found,
+        "not_available":not_available,
+        "who_took_text":who_took_text,
+        "for_whom":for_whom
     }
 
 def issue_next_quick_account_for_person(for_whom, username):
@@ -14352,9 +13767,9 @@ def process_farm_kings_bulk_proxy_step(chat_id, user_id, username, proxy_text):
             )
             return
 
-    rows = get_sheet_rows_cached(SHEET_FARM_KINGS, force=True)
+    row = get_sheet_row_live(SHEET_FARM_KINGS, king_row, 13)
 
-    if king_row - 1 >= len(rows):
+    if not row or not any(str(x).strip() for x in row):
         results.append({
             "king_name": king_name,
             "price": price_value,
@@ -14362,7 +13777,7 @@ def process_farm_kings_bulk_proxy_step(chat_id, user_id, username, proxy_text):
             "supplier": supplier_value,
             "data_text": data_text,
             "octo_ok": False,
-            "error_text": "строка пропала из таблицы"
+            "error_text": "запись пропала из Grist"
         })
 
         state["farm_kings_bulk_results"] = results
@@ -14376,7 +13791,7 @@ def process_farm_kings_bulk_proxy_step(chat_id, user_id, username, proxy_text):
             start_farm_kings_bulk_proxy_step(chat_id, user_id)
         return
 
-    row = ensure_row_len(rows[king_row - 1], 13)
+    row = ensure_row_len(row, 13)
     status = str(row[4]).strip().lower()
 
     if status != "free":
@@ -14470,34 +13885,20 @@ def process_farm_kings_bulk_proxy_step(chat_id, user_id, username, proxy_text):
         who_took_text = f"@{username}" if username else "без username"
         sync_id = row[12] if len(row) > 12 else ""
 
-        sheet_update_and_refresh(
-            SHEET_FARM_KINGS,
-            f"A{king_row}:L{king_row}",
-            [[
-                king_name,
-                row[1],
-                row[2],
-                row[3],
-                "taken",
-                "farm",
-                today,
-                geo_value,
-                who_took_text,
-                row[9],
-                row[10],
-                row[11]
-            ]]
-        )
-
-        append_king_to_issues_sheet(
-            king_name=king_name,
-            purchase_date=row[1],
-            price=row[2],
-            transfer_date=today,
-            supplier=row[3],
-            for_whom="farm",
-            payment_hash=get_payment_hash_from_king_row(row)
-        )
+        grist_atomic_batch_issue([{
+            "sheet_name": SHEET_FARM_KINGS,
+            "row_index": king_row,
+            "status_pos": 4,
+            "fields_by_pos": {
+                0: king_name, 4: "taken", 5: "farm",
+                6: today, 7: geo_value, 8: who_took_text,
+            },
+            "issue_row": [
+                king_name, "KING", row[1], normalize_numeric_for_sheet(row[2]),
+                today, row[3], "farm", "", "",
+                get_payment_hash_from_king_row(row)
+            ],
+        }])
 
         results.append({
             "king_name": king_name,
@@ -14860,165 +14261,75 @@ def show_found_bm(chat_id, user_id, found):
 
     tg_send_message(chat_id, text, keyboard)
 
-def confirm_bm_issue(chat_id, user_id, username):
+def confirm_bm_issue(chat_id,user_id,username):
     try:
         with issue_lock:
-            state = get_state(user_id)
+            state=get_state(user_id)
+            if state.get("mode")!="bm_found":
+                send_bms_menu(chat_id,"Сначала выбери БМ заново.");return
+            for_whom=str(state.get("bm_for_whom","")).strip()
+            row_index=state.get("bm_row")
+            if not for_whom or not row_index:
+                clear_state(user_id);send_bms_menu(chat_id,"Потеряны данные БМ.");return
 
-            if state.get("mode") != "bm_found":
-                send_bms_menu(chat_id, "Сначала выбери БМ заново.")
-                return
+            row=ensure_row_len(get_sheet_row_live(SHEET_BMS,row_index,10),10)
+            if str(row[4]).strip().lower()!="free":
+                clear_state(user_id);send_bms_menu(chat_id,"Этот БМ уже недоступен.");return
 
-            bm_for_whom = state.get("bm_for_whom", "").strip()
-            if not bm_for_whom:
-                clear_state(user_id)
-                send_bms_menu(chat_id, "Не найдено для кого выдавать БМ. Начни заново.")
-                return
+            bm_id=get_bm_effective_id_from_row(row)
+            today=datetime.now(MOSCOW_TZ).strftime("%d/%m/%Y")
+            who=f"@{username}" if username else "без username"
 
-            row_index = state.get("bm_row")
-            if not row_index:
-                clear_state(user_id)
-                send_bms_menu(chat_id, "Не найден выбранный БМ. Начни заново.")
-                return
-
-            rows = get_sheet_rows_cached(SHEET_BMS, force=True)
-            if row_index - 1 >= len(rows):
-                clear_state(user_id)
-                send_bms_menu(chat_id, "БМ не найден в таблице. Начни заново.")
-                return
-
-            row = ensure_row_len(rows[row_index - 1], 10)
-            sync_id = row[9]
-            status = str(row[4]).strip().lower()
-
-            if status == "taken":
-                clear_state(user_id)
-                send_bms_menu(chat_id, "Этот БМ уже занят.")
-                return
-            if status == "ban":
-                clear_state(user_id)
-                send_bms_menu(chat_id, "Этот БМ уже в ban.")
-                return
-            if status != "free":
-                clear_state(user_id)
-                send_bms_menu(chat_id, "Этот БМ недоступен.")
-                return
-
-            bm_id = get_bm_effective_id_from_row(row)
-            purchase_date = row[1]
-            price = row[2]
-            data_text = row[8]
-
-            today = datetime.now(MOSCOW_TZ).strftime("%d/%m/%Y")
-            who_took_text = f"@{username}" if username else "без username"
-
-            sheet_update_and_refresh(SHEET_BMS, f"E{row_index}:H{row_index}", [["taken", bm_for_whom, who_took_text, today]])
-
-            append_issue_row_fixed([bm_id, "БМ", purchase_date, normalize_numeric_for_sheet(price), today, row[3], bm_for_whom, "", "", get_payment_hash_from_bm_row(row)])
-
-            invalidate_stats_cache()
+            grist_atomic_batch_issue([{
+                "sheet_name":SHEET_BMS,"row_index":row_index,"status_pos":4,
+                "fields_by_pos":{4:"taken",5:for_whom,6:who,7:today},
+                "issue_row":[bm_id,"БМ",row[1],normalize_numeric_for_sheet(row[2]),today,row[3],for_whom,"","",get_payment_hash_from_bm_row(row)]
+            }])
             clear_state(user_id)
 
-        tg_send_message(chat_id, f"Готово ✅\n\nБМ выдан.\n🔥ID БМа: {bm_id or 'не найден'}\n💵Цена: {format_issue_price(price)}\n👨‍💻Для кого: {bm_for_whom}")
-
-        if data_text:
-            tg_send_message(chat_id, data_text)
-        else:
-            tg_send_message(chat_id, "Данные БМа не найдены.")
-
-        send_bms_menu(chat_id, "Выбери следующее действие:")
-
-    except Exception:
+        tg_send_message(chat_id,f"Готово ✅\n\nБМ выдан.\n🔥ID БМа: {bm_id or 'не найден'}\n💵Цена: {format_issue_price(row[2])}\n👨‍💻Для кого: {for_whom}")
+        tg_send_message(chat_id,row[8] if row[8] else "Данные БМа не найдены.")
+        send_bms_menu(chat_id,"Выбери следующее действие:")
+    except Exception as e:
         logging.exception("confirm_bm_issue crashed")
-        tg_send_message(chat_id, "Ошибка выдачи БМ. Попробуй ещё раз.")
-        send_bms_menu(chat_id, "Меню БМов:")
+        tg_send_message(chat_id,"❌ "+humanize_storage_error(e))
+        send_bms_menu(chat_id,"Меню БМов:")
 
-def issue_bms_bulk(chat_id, user_id, username, count_needed):
+def issue_bms_bulk(chat_id,user_id,username,count_needed):
     try:
-        state = get_state(user_id)
+        state=get_state(user_id)
+        if state.get("mode")!="awaiting_bm_count":
+            send_bms_menu(chat_id,"Сначала начни выдачу БМ заново.");return
+        for_whom=str(state.get("bm_for_whom","")).strip()
+        records=grist_free_records_by_status_pos(SHEET_BMS,4,limit=count_needed)
+        if len(records)<count_needed:
+            clear_state(user_id);send_bms_menu(chat_id,f"Недостаточно свободных БМов. Доступно: {len(records)}");return
 
-        if state.get("mode") != "awaiting_bm_count":
-            send_bms_menu(chat_id, "Сначала начни выдачу БМ заново.")
-            return
-
-        bm_for_whom = state.get("bm_for_whom", "").strip()
-        if not bm_for_whom:
-            clear_state(user_id)
-            send_bms_menu(chat_id, "Не найдено для кого выдавать БМы. Начни заново.")
-            return
-
-        rows = get_sheet_rows_cached(SHEET_BMS)
-        candidates = []
-
-        for idx, row in enumerate(rows[1:], start=2):
-            row = ensure_row_len(row, 9)
-            if str(row[4]).strip().lower() != "free":
-                continue
-            purchase_date = parse_date(row[1]) or datetime.max
-            candidates.append((idx, purchase_date, row))
-
-        candidates.sort(key=lambda x: x[1])
-        selected = candidates[:count_needed]
-
-        if len(selected) < count_needed:
-            clear_state(user_id)
-            send_bms_menu(chat_id, f"Недостаточно свободных БМов. Доступно: {len(selected)}")
-            return
-
-        today = datetime.now(MOSCOW_TZ).strftime("%d/%m/%Y")
-        who_took_text = f"@{username}" if username else "без username"
-
-        issue_rows = []
-        issued_items = []
+        today=datetime.now(MOSCOW_TZ).strftime("%d/%m/%Y")
+        who=f"@{username}" if username else "без username"
+        entries=[];items=[]
+        for rec in records[:count_needed]:
+            row=ensure_row_len(grist_record_to_sheet_row(SHEET_BMS,rec),10)
+            bm_id=get_bm_effective_id_from_row(row)
+            entries.append({
+                "sheet_name":SHEET_BMS,"record_id":int(rec["id"]),"status_pos":4,
+                "fields_by_pos":{4:"taken",5:for_whom,6:who,7:today},
+                "issue_row":[bm_id,"БМ",row[1],normalize_numeric_for_sheet(row[2]),today,row[3],for_whom,"","",get_payment_hash_from_bm_row(row)]
+            })
+            items.append({"bm_id":bm_id,"price":row[2],"data_text":row[8] if len(row)>8 else ""})
 
         with issue_lock:
-            current_rows = get_sheet_rows_cached(SHEET_BMS, force=True)
-
-            for row_index, _, _ in selected:
-                if row_index - 1 >= len(current_rows):
-                    clear_state(user_id)
-                    send_bms_menu(chat_id, "Один из БМов пропал из таблицы. Начни заново.")
-                    return
-
-                row = ensure_row_len(current_rows[row_index - 1], 10)
-                if str(row[4]).strip().lower() != "free":
-                    clear_state(user_id)
-                    send_bms_menu(chat_id, "Один из БМов уже не свободен. Начни заново.")
-                    return
-
-            for row_index, _, _ in selected:
-                row = ensure_row_len(current_rows[row_index - 1], 10)
-                sync_id = row[9]
-                effective_bm_id = get_bm_effective_id_from_row(row)
-
-                sheet_update_raw(SHEET_BMS, f"E{row_index}:H{row_index}", [["taken", bm_for_whom, who_took_text, today]])
-
-                issue_rows.append([effective_bm_id, "БМ", row[1], normalize_numeric_for_sheet(row[2]), today, row[3], bm_for_whom, "", "", get_payment_hash_from_bm_row(row)])
-
-                issued_items.append({"bm_id": effective_bm_id, "price": row[2], "data_text": row[8] if len(row) > 8 else "", "sync_id": sync_id})
-
-            refresh_sheet_cache(SHEET_BMS)
-
-            if issue_rows:
-                sheet_append_rows_and_refresh(SHEET_ISSUES, issue_rows, value_input_option="USER_ENTERED")
-
-            invalidate_stats_cache()
-
+            grist_atomic_batch_issue(entries)
         clear_state(user_id)
 
-        for item in issued_items:
-            tg_send_message(chat_id, f"Готово ✅\n\nБМ выдан.\nID БМа: {item['bm_id'] or 'не найден'}\nЦена: {format_issue_price(item.get('price', ''))}\nДля кого: {bm_for_whom}\nКто взял в боте: {who_took_text}")
-            if item["data_text"]:
-                tg_send_message(chat_id, item["data_text"])
-            else:
-                tg_send_message(chat_id, "Данные БМа не найдены.")
-
-        send_accounts_main_menu(chat_id, "Меню Accounts:")
-
-    except Exception:
+        for item in items:
+            tg_send_message(chat_id,f"Готово ✅\n\nБМ выдан.\nID БМа: {item['bm_id'] or 'не найден'}\nЦена: {format_issue_price(item['price'])}\nДля кого: {for_whom}")
+            tg_send_message(chat_id,item["data_text"] or "Данные БМа не найдены.")
+        send_accounts_main_menu(chat_id,"Меню Accounts:")
+    except Exception as e:
         logging.exception("issue_bms_bulk crashed")
-        tg_send_message(chat_id, "Ошибка массовой выдачи БМов. Попробуй ещё раз.")
-        send_accounts_main_menu(chat_id, "Меню Accounts:")
+        tg_send_message(chat_id,"❌ "+humanize_storage_error(e))
+        send_accounts_main_menu(chat_id,"Меню Accounts:")
 
 def show_found_king(chat_id, user_id, found):
     state = get_state(user_id)
@@ -15043,350 +14354,139 @@ def show_found_king(chat_id, user_id, found):
 
     tg_send_message(chat_id, text, keyboard)
     
-def confirm_king_issue(chat_id, user_id, username):
+def confirm_king_issue(chat_id,user_id,username):
     try:
         with issue_lock:
-            state = get_state(user_id)
+            state=get_state(user_id)
+            if state.get("mode")!="king_found":
+                send_kings_menu(chat_id,"Сначала выбери кинга заново.");return
 
-            if state.get("mode") != "king_found":
-                send_kings_menu(chat_id, "Сначала выбери кинга заново.")
-                return
-
-            king_for_whom = state.get("king_for_whom", "").strip()
-            if not king_for_whom:
+            king_for_whom=str(state.get("king_for_whom","")).strip()
+            row_index=state.get("king_row")
+            king_name=str(state.get("king_name","")).strip()
+            if not king_for_whom or not row_index or not king_name:
                 clear_state(user_id)
-                send_kings_menu(chat_id, "Не найдено для кого выдавать кинга. Начни заново.")
-                return
+                send_kings_menu(chat_id,"Потеряны данные выдачи. Начни заново.");return
 
-            row_index = state.get("king_row")
-            if not row_index:
+            row=ensure_row_len(get_sheet_row_live(SHEET_KINGS,row_index,26),26)
+            if not row or str(row[4]).strip().lower()!="free":
                 clear_state(user_id)
-                send_kings_menu(chat_id, "Не найден выбранный кинг. Начни заново.")
-                return
+                send_kings_menu(chat_id,"Этот кинг уже недоступен.");return
 
-            rows = get_sheet_rows_cached(SHEET_KINGS, force=True)
+            if not str(row[0]).strip() and king_name_exists(king_name):
+                tg_send_message(chat_id,f"Название '{king_name}' уже существует. Напиши другое название.")
+                state["mode"]="awaiting_king_name";set_state(user_id,state);return
 
-            if row_index - 1 >= len(rows):
-                clear_state(user_id)
-                send_kings_menu(chat_id, "Кинг не найден в таблице. Начни заново.")
-                return
+            today=datetime.now(MOSCOW_TZ).strftime("%d/%m/%Y")
+            who=f"@{username}" if username else "без username"
+            geo=str(row[7]).strip()
+            data_text=get_full_king_data_from_row(row)
 
-            row = rows[row_index - 1]
-            row = ensure_row_len(row, 26)
-            sync_id = row[12]
+            issue_row=[
+                king_name,"KING",row[1],normalize_numeric_for_sheet(row[2]),
+                today,row[3],king_for_whom,"","",get_payment_hash_from_king_row(row)
+            ]
 
-            status = str(row[4]).strip().lower()
-
-            if status == "taken":
-                clear_state(user_id)
-                send_kings_menu(chat_id, "Этот кинг уже занят.")
-                return
-
-            if status == "ban":
-                clear_state(user_id)
-                send_kings_menu(chat_id, "Этот кинг уже в ban.")
-                return
-
-            if status != "free":
-                clear_state(user_id)
-                send_kings_menu(chat_id, "Этот кинг недоступен.")
-                return
-
-            king_name = str(state.get("king_name", "")).strip()
-            if not king_name:
-                clear_state(user_id)
-                send_kings_menu(chat_id, "Не найдено название кинга. Начни заново.")
-                return
-
-            current_name_in_row = str(row[0]).strip()
-            if not current_name_in_row and king_name_exists(king_name):
-                tg_send_message(chat_id, f"Название '{king_name}' уже существует. Напиши другое название.")
-                state["mode"] = "awaiting_king_name"
-                set_state(user_id, state)
-                return
-
-            today = datetime.now(MOSCOW_TZ).strftime("%d/%m/%Y")
-            who_took_text = f"@{username}" if username else "без username"
-
-            geo_value = str(row[7]).strip()
-            data_text = get_full_king_data_from_row(row)
-
-            sheet_update_and_refresh(
-                SHEET_KINGS,
-                f"A{row_index}:L{row_index}",
-                [[
-                    king_name,
-                    row[1],
-                    row[2],
-                    row[3],
-                    "taken",
-                    king_for_whom,
-                    today,
-                    geo_value,
-                    who_took_text,
-                    row[9],
-                    row[10],
-                    row[11]
-                ]]
-            )
-
-            append_king_to_issues_sheet(
-                king_name=king_name,
-                purchase_date=row[1],
-                price=row[2],
-                transfer_date=today,
-                supplier=row[3],
-                for_whom=king_for_whom,
-                payment_hash=get_payment_hash_from_king_row(row)
-            )
-
-            invalidate_stats_cache()
+            grist_atomic_batch_issue([{
+                "sheet_name":SHEET_KINGS,
+                "row_index":row_index,
+                "status_pos":4,
+                "fields_by_pos":{
+                    0:king_name,4:"taken",5:king_for_whom,6:today,7:geo,8:who
+                },
+                "issue_row":issue_row,
+            }])
             clear_state(user_id)
 
-        tg_send_message(
-            chat_id,
-            f"Готово ✅\n\n"
-            f"Кинг выдан.\n"
-            f"Название: {king_name}\n"
-            f"Для кого: {king_for_whom}\n"
-            f"Цена: {row[2]}\n"
-            f"Гео: {geo_value}"
-        )
-
-        tg_send_king_data_as_txt(
-            chat_id=chat_id,
-            king_name=king_name,
-            data_text=data_text
-        )
-
-        send_accounts_main_menu(chat_id, "Меню Accounts:")
-
+        tg_send_message(chat_id,
+            f"Готово ✅\n\nКинг выдан.\nНазвание: {king_name}\n"
+            f"Для кого: {king_for_whom}\nЦена: {row[2]}\nГео: {geo}")
+        tg_send_king_data_as_txt(chat_id=chat_id,king_name=king_name,data_text=data_text)
+        send_accounts_main_menu(chat_id,"Меню Accounts:")
     except Exception as e:
         logging.exception("confirm_king_issue crashed")
-        tg_send_message(chat_id, "Ошибка выдачи кинга. Попробуй ещё раз.")
-        send_accounts_main_menu(chat_id, "Меню Accounts:")
+        tg_send_message(chat_id,"❌ "+humanize_storage_error(e))
+        send_accounts_main_menu(chat_id,"Меню Accounts:")
 
-def issue_kings_bulk(chat_id, user_id, username, king_names):
+def issue_kings_bulk(chat_id,user_id,username,king_names):
     try:
         with issue_lock:
-            state = get_state(user_id)
+            state=get_state(user_id)
+            for_whom=str(state.get("king_for_whom","")).strip()
+            selected_geo=str(state.get("king_geo","")).strip()
+            if not for_whom:
+                clear_state(user_id);send_kings_menu(chat_id,"Не найдено для кого выдавать кинги.");return
 
-            king_for_whom = str(state.get("king_for_whom", "")).strip()
-            selected_geo = str(state.get("king_geo", "")).strip()
-
-            if not king_for_whom:
+            duplicate=[name for name in king_names if king_name_exists(name)]
+            if duplicate:
                 clear_state(user_id)
-                send_kings_menu(chat_id, "Не найдено для кого выдавать кинги. Начни заново.")
-                return
+                tg_send_message(chat_id,"Эти названия уже существуют:\n"+"\n".join(duplicate[:20]))
+                send_kings_menu(chat_id,"Выдача отменена.");return
 
-            count_needed = len(king_names)
-            if count_needed <= 0:
+            extra={7:selected_geo} if selected_geo else {}
+            records=grist_free_records_by_status_pos(SHEET_KINGS,4,limit=max(len(king_names)*4,20),extra_filters_by_pos=extra)
+
+            selected=[]
+            for rec in records:
+                row=ensure_row_len(grist_record_to_sheet_row(SHEET_KINGS,rec),13)
+                if str(row[0]).strip():
+                    continue
+                selected.append((rec,row))
+                if len(selected)>=len(king_names):break
+
+            if len(selected)<len(king_names):
                 clear_state(user_id)
-                send_kings_menu(chat_id, "Количество кингов должно быть больше нуля.")
-                return
+                send_kings_menu(chat_id,f"Недостаточно свободных king. Доступно: {len(selected)}");return
 
-            duplicate_names = []
-            for name in king_names:
-                if king_name_exists(name):
-                    duplicate_names.append(name)
+            today=datetime.now(MOSCOW_TZ).strftime("%d/%m/%Y")
+            who=f"@{username}" if username else "без username"
+            entries=[];issued=[]
 
-            if duplicate_names:
-                clear_state(user_id)
-                tg_send_message(
-                    chat_id,
-                    "Эти названия уже существуют:\n" + "\n".join(duplicate_names[:20])
-                )
-                send_kings_menu(chat_id, "Выдача отменена. Начни заново.")
-                return
-
-            current_rows = get_sheet_rows_cached(SHEET_KINGS, force=True)
-
-            selected_rows = []
-            for idx, row in enumerate(current_rows[1:], start=2):
-                row = ensure_row_len(row, 13)
-
-                status = str(row[4]).strip().lower()
-                current_name = str(row[0]).strip()
-                current_geo = str(row[7]).strip()
-
-                if status == "free" and not current_name:
-                    if selected_geo and current_geo != selected_geo:
-                        continue
-
-                    selected_rows.append({
-                        "row_index": idx,
-                        "row": row
-                    })
-
-                    if len(selected_rows) >= count_needed:
-                        break
-
-            if len(selected_rows) < count_needed:
-                clear_state(user_id)
-                if selected_geo:
-                    send_kings_menu(
-                        chat_id,
-                        f"Недостаточно свободных king по GEO {selected_geo}. Нужно: {count_needed}, доступно: {len(selected_rows)}"
-                    )
-                else:
-                    send_kings_menu(
-                        chat_id,
-                        f"Недостаточно свободных king. Нужно: {count_needed}, доступно: {len(selected_rows)}"
-                    )
-                return
-
-            today = datetime.now(MOSCOW_TZ).strftime("%d/%m/%Y")
-            who_took_text = f"@{username}" if username else "без username"
-
-            issued_items = []
-
-            # Перепроверка перед записью
-            for item, king_name in zip(selected_rows, king_names):
-                row_index = item["row_index"]
-
-                if row_index - 1 >= len(current_rows):
-                    clear_state(user_id)
-                    send_kings_menu(chat_id, "Ошибка: один из кингов пропал из таблицы.")
-                    return
-
-                row = ensure_row_len(current_rows[row_index - 1], 13)
-
-                if str(row[4]).strip().lower() != "free":
-                    clear_state(user_id)
-                    send_kings_menu(chat_id, f"Кинг '{row[0] or king_name}' уже не свободен.")
-                    return
-
-                current_geo = str(row[7]).strip()
-                if selected_geo and current_geo != selected_geo:
-                    clear_state(user_id)
-                    send_kings_menu(
-                        chat_id,
-                        f"Ошибка GEO: ожидался {selected_geo}, но найден {current_geo}. Начни заново."
-                    )
-                    return
-
-            # Обновляем строки
-            for item, king_name in zip(selected_rows, king_names):
-                row_index = item["row_index"]
-                row = ensure_row_len(current_rows[row_index - 1], 13)
-                sync_id = row[12]
-
-                current_geo = str(row[7]).strip()
-                if selected_geo and current_geo != selected_geo:
-                    clear_state(user_id)
-                    send_kings_menu(
-                        chat_id,
-                        f"Ошибка GEO перед записью: ожидался {selected_geo}, но найден {current_geo}. Выдача отменена."
-                    )
-                    return
-
-                sheet_update_raw(
-                    SHEET_KINGS,
-                    f"A{row_index}:L{row_index}",
-                    [[
-                        king_name,
-                        row[1],
-                        row[2],
-                        row[3],
-                        "taken",
-                        king_for_whom,
-                        today,
-                        row[7],
-                        who_took_text,
-                        row[9],
-                        row[10],
-                        row[11]
-                    ]]
-                )
-
-                issued_items.append({
-                    "king_name": king_name,
-                    "purchase_date": row[1],
-                    "price": row[2],
-                    "supplier": row[3],
-                    "geo": row[7],
-                    "data_text": get_full_king_data_from_row(row),
-                    "sync_id": sync_id,
-                    "payment_hash": get_payment_hash_from_king_row(row)
+            for (rec,row),king_name in zip(selected,king_names):
+                issue_row=[
+                    king_name,"KING",row[1],normalize_numeric_for_sheet(row[2]),
+                    today,row[3],for_whom,"","",get_payment_hash_from_king_row(row)
+                ]
+                entries.append({
+                    "sheet_name":SHEET_KINGS,
+                    "record_id":int(rec["id"]),
+                    "status_pos":4,
+                    "fields_by_pos":{0:king_name,4:"taken",5:for_whom,6:today,8:who},
+                    "issue_row":issue_row,
+                })
+                issued.append({
+                    "king_name":king_name,"purchase_date":row[1],"price":row[2],
+                    "supplier":row[3],"geo":row[7],"data_text":get_full_king_data_from_row(row),
+                    "payment_hash":get_payment_hash_from_king_row(row)
                 })
 
-            logging.info(f"issue_kings_bulk updated {len(issued_items)} kings for user_id={user_id}")
-
-            for item in issued_items:
-                append_king_to_issues_sheet(
-                    king_name=item["king_name"],
-                    purchase_date=item["purchase_date"],
-                    price=item["price"],
-                    transfer_date=today,
-                    supplier=item["supplier"],
-                    for_whom=king_for_whom,
-                    payment_hash=item.get("payment_hash", "")
-                )
-
-            invalidate_stats_cache()
+            grist_atomic_batch_issue(entries)
             clear_state(user_id)
 
-        try:
-            tg_send_message(
-                chat_id,
-                f"Готово ✅\n\n"
-                f"Выдано кингов: {len(issued_items)}\n"
-                f"{build_issue_prices_line(issued_items)}\n"
-                f"Для кого: {king_for_whom}"
-            )
-        except Exception:
-            logging.exception("issue_kings_bulk summary send failed")
+        tg_send_message(chat_id,
+            f"Готово ✅\n\nВыдано кингов: {len(issued)}\n"
+            f"{build_issue_prices_line(issued)}\nДля кого: {for_whom}")
 
-        if len(issued_items) > 5:
+        if len(issued)>5:
             try:
-                archive_name = f"kings_{king_for_whom}_{datetime.now(MOSCOW_TZ).strftime('%Y%m%d_%H%M%S')}.zip"
                 tg_send_kings_as_zip(
-                    chat_id=chat_id,
-                    issued_items=issued_items,
-                    archive_name=archive_name
+                    chat_id=chat_id,issued_items=issued,
+                    archive_name=f"kings_{for_whom}_{datetime.now(MOSCOW_TZ).strftime('%Y%m%d_%H%M%S')}.zip"
                 )
             except Exception:
-                logging.exception("issue_kings_bulk zip send failed")
-                tg_send_message(
-                    chat_id,
-                    "Кинги выданы, но zip-архив не удалось отправить."
-                )
+                logging.exception("issue_kings_bulk zip failed")
         else:
-            txt_failed = []
+            for item in issued:
+                tg_send_message(chat_id,
+                    f"Готово ✅\n\nКинг выдан.\nНазвание: {item['king_name']}\n"
+                    f"Для кого: {for_whom}\nЦена: {item['price']}\nГео: {item['geo']}")
+                tg_send_king_data_as_txt(chat_id=chat_id,king_name=item["king_name"],data_text=item["data_text"])
 
-            for item in issued_items:
-                try:
-                    tg_send_message(
-                        chat_id,
-                        f"Готово ✅\n\n"
-                        f"Кинг выдан.\n"
-                        f"Название: {item['king_name']}\n"
-                        f"Для кого: {king_for_whom}\n"
-                        f"Цена: {item['price']}\n"
-                        f"Гео: {item['geo']}"
-                    )
-
-                    tg_send_king_data_as_txt(
-                        chat_id=chat_id,
-                        king_name=item["king_name"],
-                        data_text=item["data_text"]
-                    )
-                except Exception:
-                    logging.exception(f"issue_kings_bulk send failed for {item['king_name']}")
-                    txt_failed.append(item["king_name"])
-
-            if txt_failed:
-                tg_send_message(
-                    chat_id,
-                    "Эти кинги выданы, но txt не удалось отправить:\n" + "\n".join(txt_failed[:20])
-                )
-
-        send_kings_menu(chat_id, "Выбери следующее действие:")
-
+        send_kings_menu(chat_id,"Выбери следующее действие:")
     except Exception as e:
         logging.exception("issue_kings_bulk crashed")
-        tg_send_message(chat_id, "Ошибка массовой выдачи king. Попробуй ещё раз.")
-        send_kings_menu(chat_id, "Меню кингов:")
+        tg_send_message(chat_id,"❌ "+humanize_storage_error(e))
+        send_kings_menu(chat_id,"Меню кингов:")
 
 def confirm_crypto_king_issue(chat_id, user_id, username):
     try:
@@ -15530,7 +14630,7 @@ def process_crypto_bulk_proxy_step(chat_id, user_id, username, proxy_text):
 
                 state["crypto_bulk_results"] = results
                 state["crypto_bulk_current_index"] = current_index + 1
-                state["crypto_bulk_issue_rows"] = pending_issue_rows
+                state["crypto_bulk_issue_rows"] = []
                 set_state_with_custom_ttl(user_id, state, CRYPTO_BULK_PROXY_TTL)
 
                 start_crypto_kings_bulk_proxy_step(chat_id, user_id)
@@ -15555,7 +14655,7 @@ def process_crypto_bulk_proxy_step(chat_id, user_id, username, proxy_text):
 
         state["crypto_bulk_results"] = results
         state["crypto_bulk_current_index"] = current_index + 1
-        state["crypto_bulk_issue_rows"] = pending_issue_rows
+        state["crypto_bulk_issue_rows"] = []
         set_state_with_custom_ttl(user_id, state, CRYPTO_BULK_PROXY_TTL)
 
         start_crypto_kings_bulk_proxy_step(chat_id, user_id)
@@ -15576,7 +14676,7 @@ def process_crypto_bulk_proxy_step(chat_id, user_id, username, proxy_text):
 
         state["crypto_bulk_results"] = results
         state["crypto_bulk_current_index"] = current_index + 1
-        state["crypto_bulk_issue_rows"] = pending_issue_rows
+        state["crypto_bulk_issue_rows"] = []
         set_state_with_custom_ttl(user_id, state, CRYPTO_BULK_PROXY_TTL)
 
         start_crypto_kings_bulk_proxy_step(chat_id, user_id)
@@ -15597,7 +14697,7 @@ def process_crypto_bulk_proxy_step(chat_id, user_id, username, proxy_text):
 
         state["crypto_bulk_results"] = results
         state["crypto_bulk_current_index"] = current_index + 1
-        state["crypto_bulk_issue_rows"] = pending_issue_rows
+        state["crypto_bulk_issue_rows"] = []
         set_state_with_custom_ttl(user_id, state, CRYPTO_BULK_PROXY_TTL)
 
         start_crypto_kings_bulk_proxy_step(chat_id, user_id)
@@ -15616,7 +14716,7 @@ def process_crypto_bulk_proxy_step(chat_id, user_id, username, proxy_text):
 
         state["crypto_bulk_results"] = results
         state["crypto_bulk_current_index"] = current_index + 1
-        state["crypto_bulk_issue_rows"] = pending_issue_rows
+        state["crypto_bulk_issue_rows"] = []
         set_state_with_custom_ttl(user_id, state, CRYPTO_BULK_PROXY_TTL)
 
         start_crypto_kings_bulk_proxy_step(chat_id, user_id)
@@ -15635,7 +14735,7 @@ def process_crypto_bulk_proxy_step(chat_id, user_id, username, proxy_text):
 
         state["crypto_bulk_results"] = results
         state["crypto_bulk_current_index"] = current_index + 1
-        state["crypto_bulk_issue_rows"] = pending_issue_rows
+        state["crypto_bulk_issue_rows"] = []
         set_state_with_custom_ttl(user_id, state, CRYPTO_BULK_PROXY_TTL)
 
         start_crypto_kings_bulk_proxy_step(chat_id, user_id)
@@ -15674,7 +14774,7 @@ def process_crypto_bulk_proxy_step(chat_id, user_id, username, proxy_text):
 
         state["crypto_bulk_results"] = results
         state["crypto_bulk_current_index"] = current_index + 1
-        state["crypto_bulk_issue_rows"] = pending_issue_rows
+        state["crypto_bulk_issue_rows"] = []
         set_state_with_custom_ttl(user_id, state, CRYPTO_BULK_PROXY_TTL)
 
         start_crypto_kings_bulk_proxy_step(chat_id, user_id)
@@ -15699,40 +14799,22 @@ def process_crypto_bulk_proxy_step(chat_id, user_id, username, proxy_text):
         logging.exception("process_crypto_bulk_proxy_step cookies failed")
         cookies_msg = str(e)
 
-    sheet_update_raw(
-        SHEET_CRYPTO_KINGS,
-        f"A{king_row}:L{king_row}",
-        [[
-            king_name,
-            row[1],
-            row[2],
-            row[3],
-            "taken",
-            king_for_whom,
-            today,
-            geo_value,
-            who_took_text,
-            row[9],
-            row[10],
-            row[11]
-        ]]
-    )
-    mark_sheet_cache_stale(SHEET_CRYPTO_KINGS)
+    grist_atomic_batch_issue([{
+        "sheet_name": SHEET_CRYPTO_KINGS,
+        "row_index": king_row,
+        "status_pos": 4,
+        "fields_by_pos": {
+            0: king_name, 4: "taken", 5: king_for_whom,
+            6: today, 7: geo_value, 8: who_took_text,
+        },
+        "issue_row": [
+            king_name, "KING", row[1], normalize_numeric_for_sheet(row[2]),
+            today, row[3], king_for_whom, "", "",
+            get_payment_hash_from_king_row(row)
+        ],
+    }])
 
     sync_id = current_item.get("sync_id")
-
-    pending_issue_rows.append([
-        king_name,
-        "KING",
-        row[1],
-        normalize_numeric_for_sheet(row[2]),
-        today,
-        row[3],
-        king_for_whom,
-        "",
-        "",
-        get_payment_hash_from_king_row(row)
-    ])
 
     results.append({
         "king_name": king_name,
@@ -15749,7 +14831,7 @@ def process_crypto_bulk_proxy_step(chat_id, user_id, username, proxy_text):
 
     state["crypto_bulk_results"] = results
     state["crypto_bulk_current_index"] = current_index + 1
-    state["crypto_bulk_issue_rows"] = pending_issue_rows
+    state["crypto_bulk_issue_rows"] = []
     set_state_with_custom_ttl(user_id, state, CRYPTO_BULK_PROXY_TTL)
 
     start_crypto_kings_bulk_proxy_step(chat_id, user_id)
@@ -16297,6 +15379,9 @@ def send_free_kings(chat_id):
     tg_send_message(chat_id, text)
     
 def backup_tables():
+    if storage_is_grist():
+        logging.info("backup_tables skipped: Grist backend")
+        return True
     global last_backup_date
 
     with backup_lock:
@@ -16451,6 +15536,8 @@ def cache_warmer_loop():
             time.sleep(5)
 
 def run_bot_diagnostics():
+    if storage_is_grist():
+        return {"storage": "grist", "ok": True}
     report = []
     ok_count = 0
     fail_count = 0
@@ -22703,36 +21790,20 @@ def handle_message(msg):
                     logging.exception("FARM_KING_PROXY_STEP: cookies import crashed")
                     cookies_msg = str(cookies_error)
 
-                sheet_update_raw(
-                    SHEET_FARM_KINGS,
-                    f"A{king_row}:L{king_row}",
-                    [[
-                        king_name,
-                        row[1],
-                        row[2],
-                        row[3],
-                        "taken",
-                        "farm",
-                        today,
-                        geo_value,
-                        who_took_text,
-                        row[9],
-                        row[10],
-                        row[11]
-                    ]]
-                )
-                mark_sheet_cache_stale(SHEET_FARM_KINGS)
-
-                append_king_to_issues_sheet(
-                    king_name=king_name,
-                    purchase_date=row[1],
-                    price=row[2],
-                    transfer_date=today,
-                    supplier=row[3],
-                    for_whom="farm",
-                    payment_hash=get_payment_hash_from_king_row(row)
-                )
-
+                grist_atomic_batch_issue([{
+                    "sheet_name": SHEET_FARM_KINGS,
+                    "row_index": king_row,
+                    "status_pos": 4,
+                    "fields_by_pos": {
+                        0: king_name, 4: "taken", 5: "farm",
+                        6: today, 7: geo_value, 8: who_took_text,
+                    },
+                    "issue_row": [
+                        king_name, "KING", row[1], normalize_numeric_for_sheet(row[2]),
+                        today, row[3], "farm", "", "",
+                        get_payment_hash_from_king_row(row)
+                    ],
+                }])
                 invalidate_stats_cache()
 
                 preview_message_id = state.get("farm_king_preview_message_id")
@@ -23602,36 +22673,20 @@ def handle_message(msg):
                     logging.exception("CRYPTO_PROXY_STEP: cookies import crashed")
                     cookies_msg = str(cookies_error)
 
-                sheet_update_raw(
-                    SHEET_CRYPTO_KINGS,
-                    f"A{king_row}:L{king_row}",
-                    [[
-                        king_name,
-                        row[1],
-                        row[2],
-                        row[3],
-                        "taken",
-                        king_for_whom,
-                        today,
-                        geo_value,
-                        who_took_text,
-                        row[9],
-                        row[10],
-                        row[11]
-                    ]]
-                )
-                mark_sheet_cache_stale(SHEET_CRYPTO_KINGS)
-
-                append_king_to_issues_sheet(
-                    king_name=king_name,
-                    purchase_date=row[1],
-                    price=row[2],
-                    transfer_date=today,
-                    supplier=row[3],
-                    for_whom=king_for_whom,
-                    payment_hash=get_payment_hash_from_king_row(row)
-                )
-
+                grist_atomic_batch_issue([{
+                    "sheet_name": SHEET_CRYPTO_KINGS,
+                    "row_index": king_row,
+                    "status_pos": 4,
+                    "fields_by_pos": {
+                        0: king_name, 4: "taken", 5: king_for_whom,
+                        6: today, 7: geo_value, 8: who_took_text,
+                    },
+                    "issue_row": [
+                        king_name, "KING", row[1], normalize_numeric_for_sheet(row[2]),
+                        today, row[3], king_for_whom, "", "",
+                        get_payment_hash_from_king_row(row)
+                    ],
+                }])
                 invalidate_stats_cache()
 
                 preview_message_id = state.get("crypto_preview_message_id")
@@ -25881,16 +24936,15 @@ def auto_healthcheck_loop():
             time.sleep(300)
 
 def startup_google_maintenance_loop():
+    if storage_is_grist():
+        logging.info("startup_google_maintenance_loop skipped: Grist backend")
+        return
     logging.info("startup_google_maintenance_loop started")
     time.sleep(20)
     try:
         ensure_payment_hash_columns_ready()
-        logging.info("startup_google_maintenance_loop finished")
-    except Exception as e:
-        if is_google_temporarily_unavailable_error(e):
-            logging.warning(f"startup_google_maintenance_loop skipped: Google Sheets limit/slowdown: {e}")
-        else:
-            logging.exception("startup_google_maintenance_loop crashed")
+    except Exception:
+        logging.exception("startup_google_maintenance_loop crashed")
 
 def start_background_threads_once():
     global background_threads_started
