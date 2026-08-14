@@ -792,38 +792,104 @@ def grist_update_record_id(sheet_name,record_id,fields_by_pos):
     return ["UpdateRecord",grist_table_id_for_sheet(sheet_name),int(record_id),fields]
 
 
-def grist_atomic_take_with_issue(source_sheet,record_id,source_fields_by_pos,issue_row=None,status_pos=4):
-    # Читаем только конкретную запись, а не всю таблицу.
-    table_id=grist_table_id_for_sheet(source_sheet)
-    data=_grist_request("GET",f"/api/docs/{GRIST_DOC_ID}/tables/{table_id}/records/{int(record_id)}")
-    row=grist_record_to_sheet_row(source_sheet,data)
-    if len(row)<=status_pos:
-        raise RuntimeError("У расходника нет колонки статуса.")
-    status=str(row[status_pos] or "").strip().lower()
-    if status!="free":
-        raise RuntimeError(f"Расходник уже недоступен: статус {status or 'пусто'}.")
+def grist_atomic_take_with_issue(
+    source_sheet,
+    record_id,
+    source_fields_by_pos,
+    issue_row=None,
+    status_pos=4
+):
+    record = grist_get_record_by_id(
+        source_sheet,
+        record_id,
+        status_pos=status_pos,
+        expected_status="free"
+    )
 
-    actions=[grist_update_record_id(source_sheet,record_id,source_fields_by_pos)]
+    if not record:
+        raise RuntimeError(
+            "Расходник уже недоступен: его статус изменился "
+            "или запись была удалена."
+        )
+
+    row = grist_record_to_sheet_row(source_sheet, record)
+
+    if len(row) <= status_pos:
+        raise RuntimeError("У расходника нет колонки статуса.")
+
+    status = str(row[status_pos] or "").strip().lower()
+    if status != "free":
+        raise RuntimeError(
+            f"Расходник уже недоступен: статус {status or 'пусто'}."
+        )
+
+    actions = [
+        grist_update_record_id(
+            source_sheet,
+            record_id,
+            source_fields_by_pos
+        )
+    ]
+
     if issue_row is not None:
-        actions.append(grist_add_action(SHEET_ISSUES,normalize_issue_row_for_append(issue_row)))
+        actions.append(
+            grist_add_action(
+                SHEET_ISSUES,
+                normalize_issue_row_for_append(issue_row)
+            )
+        )
+
     grist_apply(actions)
     grist_all_mark_stale(source_sheet)
+
     if issue_row is not None:
         grist_all_mark_stale(SHEET_ISSUES)
         invalidate_stats_cache()
+
     return True
 
+def grist_get_record_by_id(sheet_name, record_id, status_pos=None, expected_status=None):
+    """Получает Grist record по id через поддерживаемый GET /records.
 
+    В REST API Grist нет GET /records/{record_id}, поэтому:
+    - при known status фильтруем только нужный статус;
+    - затем выбираем запись по постоянному record id.
+    """
+    record_id = int(record_id)
 
+    params = {"limit": 0}
 
-def grist_get_record_by_id(sheet_name, record_id):
-    table_id=grist_table_id_for_sheet(sheet_name)
-    data=_grist_request(
+    if status_pos is not None and expected_status is not None:
+        cols = grist_columns_for_sheet(sheet_name)
+        status_pos = int(status_pos)
+
+        if status_pos < 0 or status_pos >= len(cols):
+            raise RuntimeError(
+                f"Grist: колонка статуса {status_pos + 1} вне таблицы {sheet_name}."
+            )
+
+        status_col_id = cols[status_pos]["id"]
+        params["filter"] = json.dumps(
+            {status_col_id: [expected_status]},
+            ensure_ascii=False
+        )
+
+    data = _grist_request(
         "GET",
-        f"/api/docs/{GRIST_DOC_ID}/tables/{table_id}/records/{int(record_id)}"
+        f"/api/docs/{GRIST_DOC_ID}/tables/{grist_table_id_for_sheet(sheet_name)}/records",
+        params=params
     )
-    return data if isinstance(data,dict) else None
 
+    records = data.get("records", []) if isinstance(data, dict) else []
+
+    for record in records:
+        try:
+            if int((record or {}).get("id")) == record_id:
+                return record
+        except Exception:
+            continue
+
+    return None
 
 def grist_resolve_record_id(sheet_name, row_index=None, record_id=None):
     if record_id:
@@ -834,45 +900,58 @@ def grist_resolve_record_id(sheet_name, row_index=None, record_id=None):
 
 
 def grist_atomic_batch_issue(entries):
-    """Проверяет выбранные records и одним /apply выполняет всю выдачу.
+    """Атомарная выдача расходников в Grist.
 
-    entries:
-      sheet_name, row_index|record_id, status_pos, fields_by_pos, issue_row(optional),
-      validators(optional list of callables(row)->error text or None)
+    Перед записью повторно проверяет, что каждый выбранный record всё ещё free.
+    Source update + запись в Простые лички 26 отправляются одним /apply.
     """
-    entries=[dict(x or {}) for x in (entries or []) if x]
+    entries = [dict(x or {}) for x in (entries or []) if x]
     if not entries:
         return []
 
-    prepared=[]
-    actions=[]
+    prepared = []
+    actions = []
 
-    # issue_lock снаружи/внутри сериализует выдачи в одном worker.
     for entry in entries:
-        sheet=entry["sheet_name"]
-        rid=grist_resolve_record_id(
+        sheet = entry["sheet_name"]
+        status_pos = int(entry.get("status_pos", 4))
+
+        rid = grist_resolve_record_id(
             sheet,
             row_index=entry.get("row_index"),
             record_id=entry.get("record_id")
         )
-        record=grist_get_record_by_id(sheet,rid)
+
+        record = grist_get_record_by_id(
+            sheet,
+            rid,
+            status_pos=status_pos,
+            expected_status="free"
+        )
+
         if not record:
-            raise RuntimeError("Расходник уже удалён или недоступен.")
-
-        row=grist_record_to_sheet_row(sheet,record)
-        status_pos=int(entry.get("status_pos",4))
-        if len(row)<=status_pos:
-            raise RuntimeError(f"В {sheet} отсутствует колонка статуса.")
-
-        status=str(row[status_pos] or "").strip().lower()
-        if status!="free":
-            name=str(row[0] if row else "").strip()
             raise RuntimeError(
-                f"{name or 'Расходник'} уже недоступен: статус {status or 'пусто'}."
+                "Расходник уже недоступен: его статус изменился "
+                "или запись была удалена."
+            )
+
+        row = grist_record_to_sheet_row(sheet, record)
+
+        if len(row) <= status_pos:
+            raise RuntimeError(
+                f"В {sheet} отсутствует колонка статуса."
+            )
+
+        current_status = str(row[status_pos] or "").strip().lower()
+        if current_status != "free":
+            name = str(row[0] if row else "").strip()
+            raise RuntimeError(
+                f"{name or 'Расходник'} уже недоступен: "
+                f"статус {current_status or 'пусто'}."
             )
 
         for validator in entry.get("validators") or []:
-            error_text=validator(row)
+            error_text = validator(row)
             if error_text:
                 raise RuntimeError(str(error_text))
 
@@ -884,7 +963,7 @@ def grist_atomic_batch_issue(entries):
             )
         )
 
-        issue_row=entry.get("issue_row")
+        issue_row = entry.get("issue_row")
         if issue_row is not None:
             actions.append(
                 grist_add_action(
@@ -894,20 +973,21 @@ def grist_atomic_batch_issue(entries):
             )
 
         prepared.append({
-            "record_id":rid,
-            "row":row,
-            "sheet_name":sheet,
+            "record_id": rid,
+            "row": row,
+            "sheet_name": sheet,
         })
 
-    # Один атомарный пакет на все source updates + all issue rows.
+    # Один apply: либо применяется всё, либо ничего.
     grist_apply(actions)
 
-    touched=set()
-    has_issue=False
+    touched = set()
+    has_issue = False
+
     for entry in entries:
         touched.add(entry["sheet_name"])
         if entry.get("issue_row") is not None:
-            has_issue=True
+            has_issue = True
 
     for sheet in touched:
         grist_all_mark_stale(sheet)
@@ -917,7 +997,6 @@ def grist_atomic_batch_issue(entries):
         invalidate_stats_cache()
 
     return prepared
-
 
 def grist_free_records_by_status_pos(sheet_name,status_pos,limit=None,extra_filters_by_pos=None):
     """Точечный Grist filter по позициям колонок без чтения всей таблицы."""
@@ -945,186 +1024,38 @@ def grist_free_records_by_status_pos(sheet_name,status_pos,limit=None,extra_filt
     )
     return data.get("records",[]) if isinstance(data,dict) else []
 def humanize_storage_error(error):
-    raw=str(error or "").strip()
-    low=raw.lower()
-    if "401" in low or "403" in low:
+    raw = str(error or "").strip()
+    low = raw.lower()
+
+    if "уже недоступен" in low or "статус изменился" in low:
+        return (
+            "Расходник уже забрал другой пользователь "
+            "или его статус изменился. Начни выдачу заново."
+        )
+
+    if "grist api error 401" in low or "grist api error 403" in low:
         return "Нет доступа к Grist. Проверь API-ключ и права."
-    if "404" in low:
-        return "Запись Grist уже удалена или не найдена."
-    if "429" in low:
-        return "Grist временно ограничил запросы. Попробуй ещё раз через несколько секунд."
-    if "timeout" in low or "timed out" in low or "grist недоступен" in low:
-        return "Grist временно недоступен. Изменения не подтверждены."
-    if "уже недоступен" in low:
-        return raw
+
+    if "grist api error 404" in low:
+        return "Таблица или документ Grist не найдены."
+
+    if "grist api error 429" in low:
+        return (
+            "Grist временно ограничил запросы. "
+            "Попробуй ещё раз через несколько секунд."
+        )
+
+    if (
+        "timeout" in low
+        or "timed out" in low
+        or "grist недоступен" in low
+    ):
+        return (
+            "Grist временно недоступен. "
+            "Изменения не были подтверждены."
+        )
+
     return raw or "Неизвестная ошибка."
-
-ADMIN_POLL = "Опрос"
-
-POLL_SCOPE_ACCOUNTS = "👥Аккаунтерам"
-POLL_SCOPE_FARMERS = "🌾Фармерам"
-POLL_SCOPE_ALL = "Всем"
-
-POLL_MODE_SCOPE = "awaiting_poll_scope"
-POLL_MODE_TEXT = "awaiting_poll_text"
-
-ADMIN_MESSAGE = "Сообщение"
-
-MSG_MODE_SCOPE = "awaiting_msg_scope"
-MSG_MODE_TEXT = "awaiting_msg_text"
-MSG_MODE_REPLY = "awaiting_msg_reply"
-
-ADMIN_ADD_STICKERS = 'Добавить стикер'
-ADMIN_SEND_STICKER = 'Отправить стикер'
-
-STICKER_BROADCAST_USERS = [
-    7573650707,
-    7681133609,
-    7953116439,
-    8334712952,
-    8035275476,
-    8482380951,
-    8389730381,
-    8503147017,
-    7172090459,
-    7389698288,
-]
-
-STICKER_SEND_HOURS = {6, 8, 10, 12, 14, 16}
-
-SYNC_COL_KINGS = 12
-SYNC_COL_BMS = 9
-SYNC_COL_CRYPTO_KINGS = 12
-SYNC_COL_PIXELS = 8
-SYNC_COL_FARM_KINGS = 12
-SYNC_COL_FARM_BMS = 9
-
-
-LIMIT_OPTIONS = ['-250', '250-500', '500-1200', '1200-1500', 'unlim']
-THRESHOLD_OPTIONS = ['0-49', '50-99', '100-199', '200-499', '500+']
-GMT_OPTIONS = ['-10', '-9', '-8', '-7', '-6', '-5', '-4', '-3', '-2', '-1', '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', '10']
-ACCOUNT_CURRENCY_COL = 12  # M колонка в База_личек
-PAYMENT_HASH_COL_NAME = "Хэш оплаты"
-REQUEST_COL_NAME = PAYMENT_HASH_COL_NAME
-ISSUES_REQUEST_COL_NUM = 12
-
-ISSUE_HEADERS = [
-    "Месяц",
-    "Имя",
-    "Тип",
-    "Дата покупки",
-    "Цена",
-    "Дата передачи",
-    "Поставщик",
-    "Кому передали",
-    "Статус",
-    "Момент бана",
-    "Комментарий",
-    "Хэш",
-]
-
-ISSUE_COL_MONTH = 0
-ISSUE_COL_NAME = 1
-ISSUE_COL_TYPE = 2
-ISSUE_COL_PURCHASE_DATE = 3
-ISSUE_COL_PRICE = 4
-ISSUE_COL_TRANSFER_DATE = 5
-ISSUE_COL_SUPPLIER = 6
-ISSUE_COL_BUYER = 7
-ISSUE_COL_STATUS = 8
-ISSUE_COL_BAN_MOMENT = 9
-ISSUE_COL_COMMENT = 10
-ISSUE_COL_HASH = 11
-
-issues_schema_lock = threading.Lock()
-issues_schema_ready = False
-KINGS_REQUEST_COL_NUM = 14
-BMS_REQUEST_COL_NUM = 11
-FPS_REQUEST_COL_NUM = 10
-PIXELS_REQUEST_COL_NUM = 10
-ACCOUNTS_REQUEST_COL_NUM = 15
-
-MENU_ACCOUNTS = 'Accounts'
-MENU_PIXELS = 'Пиксели'
-MENU_FARMERS = 'Farmers'
-FARM_MENU_KING = 'King'
-FARM_MENU_BM = 'BM'
-FARM_MENU_FP = 'FP'
-FARM_MENU_ASSEMBLIES = '🧩 Сборки'
-FARM_ASSEMBLY_CREATE = '➕ Создать сборку'
-FARM_ASSEMBLY_ISSUE = '➡️ Выдать сборку'
-FARM_ASSEMBLY_EDIT = '✏️ Редактировать сборки'
-FARM_ASSEMBLY_VIEW = '👀 Посмотреть сборки'
-BTN_BACK_FROM_ASSEMBLIES = 'Назад в Farmers'
-
-FARM_SUBMENU_GET_KINGS = '➡️Взять кинги'
-FARM_SUBMENU_FREE_KINGS = '🆓Cвободныe кинги'
-FARM_SUBMENU_RETURN_KING = '↩️Beрнуть кинг'
-FARM_SUBMENU_SEARCH_KING = '🔎Пoиск кингa'
-
-BTN_FARM_KINGS_PARTIAL_CONFIRM = 'Выдать'
-BTN_FARM_KINGS_PARTIAL_CANCEL = 'Отмена'
-
-FARM_SUBMENU_GET_BM = '➡️Получить BM'
-FARM_SUBMENU_FREE_BMS = '🆓Свободные BMы'
-FARM_SUBMENU_SEARCH_BM = '🔎Поиск BMа'
-FARM_SUBMENU_RETURN_BM = '↩️Вернуть BM'
-
-FARM_SUBMENU_GET_FP = '➡️Выдать FP'
-FARM_SUBMENU_SEARCH_FP = '🔎Поиск FP'
-
-BTN_BACK_TO_FARMERS = 'Назад в Farmers'
-MENU_KINGS = 'Кинги'
-MENU_BMS = 'БМ'
-MENU_FPS = 'ФП'
-MENU_STATS = 'Статистика'
-MENU_MANAGER_STATS = 'Статистика менеджера'
-MENU_ISSUED_TO_BUYER = 'Выдано байеру'
-MENU_FARMER_STATS = 'Статистика фармера'
-MENU_ADMIN = 'Admin'
-MENU_CANCEL = 'Отмена'
-
-MENU_MISC = 'Прочее'
-BTN_BACK_FROM_MISC = 'Назад из Прочее'
-MISC_FREE_RESOURCES = '📊 Остатки расходников'
-MISC_FREE_RESOURCES_DAILY = '📦 Остатки по дням'
-SHEET_FREE_RESOURCES_HISTORY = 'История_остатков'
-FREE_RESOURCES_HISTORY_DAYS_PER_PAGE = 5
-FREE_RESOURCES_HISTORY_MODE_MONTH = 'awaiting_free_resources_history_month'
-FREE_RESOURCES_HISTORY_MODE_DATE = 'awaiting_free_resources_history_date'
-
-SUBMENU_GET_PIXELS = '➡️Получить Пиксели'
-SUBMENU_SEARCH_PIXEL = '🔎Найти Пиксель'
-SUBMENU_RETURN_PIXEL = '↩️Вернуть Пиксель'
-SUBMENU_ACCOUNTS_MAIN = 'Лички'
-SUBMENU_BACK_MAIN = 'В меню'
-
-DEPT_CRYPTO = '🪙Крипта'
-DEPT_GAMBLA = '🎰Гембла'
-DEPT_OTHER = '📦Прочее'
-
-CRYPTO_NAMES = [
-    '№3 DS78', '№5 MCH79', '№20 MS77',
-    '№32 alex', '№34 AK81', '№37 VK82',
-    '№4 NH25', '№57 VD22', '№60 MSH5', '№62 IA14', '№68 MK136', '№70 AI140',
-    '№71 AL146'
-]
-
-GAMBLA_NAMES = [
-    '№8 AK91', '№13 IJ90', '№16 SV89', '№19 IK92', '№26 MD94',
-    '№27 DD93', '№29 ISH95', '№14 ES86', '№777 AM87',
-    '№30 MG88', '№39 AA96', '№47 DK99', '№49 IE97',
-    '№51 VG98', '№21 VK84', '№22 AU85', '№53 DR100', '№54 VP101',
-    '№000 richard', '№55 AL102', '№56 IC1', '№58 KM2', '№59 AH6', '№43 MD9', '№45 AA8', '№61 SN11',
-    '№63 ED123', '№64 SA122', '№65 BS125', '№66 AD129', '№67 AG135', '№69 sasha', '№72 AP147', '№111 DG83', '№73 NR152'
-]
-
-OTHER_NAMES = [
-    'ACC DEP', 'TEST ACC DEP'
-]
-
-BTN_RETURN_FP_BAN_ALL = '🚫В бан всю ФП'
-
 
 def get_supported_departments():
     return [DEPT_CRYPTO, DEPT_GAMBLA, DEPT_OTHER]
