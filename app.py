@@ -199,6 +199,7 @@ PAYMENT_HASH_COL_NAME = "Хэш оплаты"
 REQUEST_COL_NAME = PAYMENT_HASH_COL_NAME
 ISSUES_REQUEST_COL_NUM = 12
 ISSUE_HEADERS = [
+    "Отдел",
     "Месяц",
     "Имя",
     "Тип",
@@ -212,18 +213,19 @@ ISSUE_HEADERS = [
     "Комментарий",
     "Хэш",
 ]
-ISSUE_COL_MONTH = 0
-ISSUE_COL_NAME = 1
-ISSUE_COL_TYPE = 2
-ISSUE_COL_PURCHASE_DATE = 3
-ISSUE_COL_PRICE = 4
-ISSUE_COL_TRANSFER_DATE = 5
-ISSUE_COL_SUPPLIER = 6
-ISSUE_COL_BUYER = 7
-ISSUE_COL_STATUS = 8
-ISSUE_COL_BAN_MOMENT = 9
-ISSUE_COL_COMMENT = 10
-ISSUE_COL_HASH = 11
+ISSUE_COL_DEPARTMENT = 0
+ISSUE_COL_MONTH = 1
+ISSUE_COL_NAME = 2
+ISSUE_COL_TYPE = 3
+ISSUE_COL_PURCHASE_DATE = 4
+ISSUE_COL_PRICE = 5
+ISSUE_COL_TRANSFER_DATE = 6
+ISSUE_COL_SUPPLIER = 7
+ISSUE_COL_BUYER = 8
+ISSUE_COL_STATUS = 9
+ISSUE_COL_BAN_MOMENT = 10
+ISSUE_COL_COMMENT = 11
+ISSUE_COL_HASH = 12
 KINGS_REQUEST_COL_NUM = 14
 BMS_REQUEST_COL_NUM = 11
 FPS_REQUEST_COL_NUM = 10
@@ -1258,6 +1260,7 @@ def issue_ready_farm_king_to_buyer(farm_stage, buyer, account_username):
         buyer=buyer,
         status="ok",
         payment_hash=get_payment_hash_from_king_row(row),
+        department="Ф",
     )
 
     update_action = farm_ready_direct_update_action(
@@ -2225,8 +2228,13 @@ def make_issue_row(
     comment="",
     payment_hash="",
     month=None,
+    department=None,
 ):
+    department = str(department or "").strip() or infer_issue_department(
+        name=name, issue_type=issue_type, buyer=buyer
+    )
     return [
+        department,
         str(month or current_issue_month()).strip(),
         str(name or "").strip(),
         str(issue_type or "").strip(),
@@ -2241,60 +2249,135 @@ def make_issue_row(
         str(payment_hash or "").strip(),
     ]
 
-
 def normalize_issue_row_for_append(row):
-    """Приводит запись к новой схеме Простые лички 26 (12 колонок).
-
-    Старый формат:
-    имя, тип, дата покупки, цена, дата передачи, поставщик,
-    кому передали/ban, кто выдал, комментарий, хэш
-
-    Новый формат:
-    месяц, имя, тип, дата покупки, цена, дата передачи, поставщик,
-    кому передали, статус, момент бана, комментарий, хэш
-    """
     values = list(row or [])
-
-    # Уже новый формат.
-    if len(values) >= 12:
-        values = values[:12]
+    if len(values) >= 13:
+        values = values[:13]
+        if not str(values[ISSUE_COL_DEPARTMENT] or "").strip():
+            values[ISSUE_COL_DEPARTMENT] = infer_issue_department(
+                values[ISSUE_COL_NAME], values[ISSUE_COL_TYPE], values[ISSUE_COL_BUYER]
+            )
         if not str(values[ISSUE_COL_MONTH] or "").strip():
             values[ISSUE_COL_MONTH] = current_issue_month()
         if not str(values[ISSUE_COL_STATUS] or "").strip():
             values[ISSUE_COL_STATUS] = "ok"
         return values
-
-    # Старый формат.
+    if len(values) >= 12:
+        values = values[:12]
+        return make_issue_row(
+            month=values[0], name=values[1], issue_type=values[2], purchase_date=values[3],
+            price=values[4], transfer_date=values[5], supplier=values[6], buyer=values[7],
+            status=values[8], ban_moment=values[9], comment=values[10], payment_hash=values[11],
+        )
     values += [""] * max(0, 10 - len(values))
     values = values[:10]
-
-    old_name = values[0]
-    old_type = values[1]
-    old_purchase = values[2]
-    old_price = values[3]
-    old_transfer = values[4]
-    old_supplier = values[5]
+    old_name, old_type, old_purchase, old_price = values[0:4]
+    old_transfer, old_supplier = values[4], values[5]
     old_target = str(values[6] or "").strip()
-    old_comment = values[8]
-    old_hash = values[9]
-
+    old_comment, old_hash = values[8], values[9]
     is_ban = old_target.lower() in {"ban", "бан"}
     buyer = _extract_buyer_from_old_ban_comment(old_comment) if is_ban else old_target
-
     return make_issue_row(
-        month=_issue_month_from_date(old_transfer),
-        name=old_name,
-        issue_type=old_type,
-        purchase_date=old_purchase,
-        price=old_price,
-        transfer_date=old_transfer,
-        supplier=old_supplier,
-        buyer=buyer,
-        status="ban" if is_ban else "ok",
+        month=_issue_month_from_date(old_transfer), name=old_name, issue_type=old_type,
+        purchase_date=old_purchase, price=old_price, transfer_date=old_transfer,
+        supplier=old_supplier, buyer=buyer, status="ban" if is_ban else "ok",
         ban_moment=_ban_moment_from_old_comment(old_comment) if is_ban else "",
         comment=_clean_old_ban_comment(old_comment) if is_ban else old_comment,
         payment_hash=old_hash,
     )
+
+def infer_issue_department(name="", issue_type="", buyer="", farm_king_names=None):
+    name = str(name or "").strip()
+    issue_type = str(issue_type or "").strip().lower()
+    buyer = str(buyer or "").strip().lower()
+    if buyer == "farm":
+        return "Ф"
+    if issue_type in {"сборка", "assembly"}:
+        return "Ф"
+    if farm_king_names is not None and name.lower() in farm_king_names:
+        return "Ф"
+    return "А"
+
+
+def _issue_raw_columns():
+    table_id = grist_table_id_for_sheet(SHEET_ISSUES)
+    data = _grist_request("GET", f"/api/docs/{GRIST_DOC_ID}/tables/{table_id}/columns")
+    result = []
+    for item in (data.get("columns", []) if isinstance(data, dict) else []):
+        item = item or {}
+        cid = str(item.get("id", "")).strip()
+        fields = item.get("fields") or {}
+        if cid and cid != "manualSort":
+            result.append({
+                "id": cid,
+                "label": str(fields.get("label") or cid).strip(),
+                "type": str(fields.get("type") or "Any").strip(),
+            })
+    return result
+
+
+def ensure_issue_department_column_and_backfill():
+    table_id = grist_table_id_for_sheet(SHEET_ISSUES)
+    raw_cols = _issue_raw_columns()
+    dep_col = next((c for c in raw_cols if _grist_normalize_name(c["label"]) == _grist_normalize_name("Отдел")), None)
+    if not dep_col:
+        _grist_request(
+            "POST",
+            f"/api/docs/{GRIST_DOC_ID}/tables/{table_id}/columns",
+            payload={"columns": [{"id": "department", "fields": {"label": "Отдел", "type": "Text"}}]},
+            timeout=60,
+        )
+        with grist_all_meta_lock:
+            grist_all_meta.pop(f"cols:{SHEET_ISSUES}", None)
+        raw_cols = _issue_raw_columns()
+        dep_col = next((c for c in raw_cols if _grist_normalize_name(c["label"]) == _grist_normalize_name("Отдел")), None)
+    if not dep_col:
+        raise RuntimeError("Не удалось создать колонку Отдел в Простые лички 26.")
+
+    farm_king_names = set()
+    try:
+        fk_records = _grist_request(
+            "GET",
+            f"/api/docs/{GRIST_DOC_ID}/tables/{grist_table_id_for_sheet(SHEET_FARM_KINGS)}/records",
+            params={"limit": 0}
+        )
+        fk_cols = grist_columns_for_sheet(SHEET_FARM_KINGS)
+        first_col_id = fk_cols[0]["id"] if fk_cols else ""
+        for rec in (fk_records.get("records", []) if isinstance(fk_records, dict) else []):
+            value = str(((rec or {}).get("fields") or {}).get(first_col_id, "")).strip().lower()
+            if value:
+                farm_king_names.add(value)
+    except Exception:
+        logging.exception("Не удалось собрать имена farm king для backfill отдела")
+
+    by_label = {_grist_normalize_name(c["label"]): c["id"] for c in raw_cols}
+    dep_id = dep_col["id"]
+    name_id = by_label.get(_grist_normalize_name("Имя"))
+    type_id = by_label.get(_grist_normalize_name("Тип"))
+    buyer_id = by_label.get(_grist_normalize_name("Кому передали"))
+    data = _grist_request(
+        "GET",
+        f"/api/docs/{GRIST_DOC_ID}/tables/{table_id}/records",
+        params={"limit": 0, "sort": "manualSort"}
+    )
+    actions = []
+    for rec in (data.get("records", []) if isinstance(data, dict) else []):
+        fields = (rec or {}).get("fields") or {}
+        if str(fields.get(dep_id, "") or "").strip():
+            continue
+        department = infer_issue_department(
+            fields.get(name_id, "") if name_id else "",
+            fields.get(type_id, "") if type_id else "",
+            fields.get(buyer_id, "") if buyer_id else "",
+            farm_king_names=farm_king_names,
+        )
+        actions.append(["UpdateRecord", table_id, int(rec["id"]), {dep_id: department}])
+    for start in range(0, len(actions), 500):
+        grist_apply(actions[start:start + 500])
+    with grist_all_meta_lock:
+        grist_all_meta.pop(f"cols:{SHEET_ISSUES}", None)
+    grist_all_mark_stale(SHEET_ISSUES)
+    return True
 
 
 def ensure_issues_sheet_schema():
@@ -2305,19 +2388,17 @@ def ensure_issues_sheet_schema():
         if issues_schema_ready:
             return True
         if storage_is_grist():
-            rows = grist_all_fetch_rows(SHEET_ISSUES, force=True)
-            header = list(rows[0] if rows else [])
-            if len(header) < len(ISSUE_HEADERS):
+            ensure_issue_department_column_and_backfill()
+            columns = grist_columns_for_sheet(SHEET_ISSUES, force=True)
+            if len(columns) < len(ISSUE_HEADERS):
                 raise RuntimeError(
-                    f"Grist {SHEET_ISSUES}: {len(header)} колонок, "
+                    f"Grist {SHEET_ISSUES}: {len(columns)} колонок, "
                     f"нужно минимум {len(ISSUE_HEADERS)}."
                 )
             issues_schema_ready = True
             return True
         issues_schema_ready = True
         return True
-
-
 
 def get_payment_hash_value_by_index(row, index_0_based):
     row = list(row or [])
@@ -2359,7 +2440,7 @@ def append_issue_row_fixed(row):
     next_row = len(rows) + 1
     sheet_update_and_refresh(
         SHEET_ISSUES,
-        f"A{next_row}:L{next_row}",
+        f"A{next_row}:M{next_row}",
         [values]
     )
     invalidate_stats_cache()
@@ -2392,7 +2473,7 @@ def append_issue_rows_fixed(rows_to_add):
     end_row = start_row + len(rows) - 1
     sheet_update_and_refresh(
         SHEET_ISSUES,
-        f"A{start_row}:L{end_row}",
+        f"A{start_row}:M{end_row}",
         rows
     )
     invalidate_stats_cache()
@@ -5642,7 +5723,7 @@ def rename_searched_king(session_token, new_name):
     if issue_info:
         sheet_update_and_refresh(
             SHEET_ISSUES,
-            f"B{issue_info['row_index']}:B{issue_info['row_index']}",
+            f"C{issue_info['row_index']}:C{issue_info['row_index']}",
             [[new_name]]
         )
         issue_updated = True
@@ -5705,7 +5786,7 @@ def change_searched_king_buyer(session_token, new_for_whom):
     if issue_info:
         sheet_update_and_refresh(
             SHEET_ISSUES,
-            f"H{issue_info['row_index']}:H{issue_info['row_index']}",
+            f"I{issue_info['row_index']}:I{issue_info['row_index']}",
             [[new_for_whom]]
         )
         issue_updated = True
@@ -7895,7 +7976,7 @@ def change_searched_pixel_buyer(session_token, new_for_whom):
     if issue_info:
         sheet_update_and_refresh(
             SHEET_ISSUES,
-            f"H{issue_info['row_index']}:H{issue_info['row_index']}",
+            f"I{issue_info['row_index']}:I{issue_info['row_index']}",
             [[new_for_whom]]
         )
         issue_updated = True
@@ -11275,6 +11356,18 @@ def grist_columns_for_sheet(sheet_name, force=False):
     if not cols:
         raise RuntimeError(f"Grist: у '{sheet_name}' нет колонок.")
 
+    if sheet_name == SHEET_ISSUES:
+        by_label = {_grist_normalize_name(c.get("label", "")): c for c in cols}
+        ordered = []
+        used = set()
+        for label in ISSUE_HEADERS:
+            col = by_label.get(_grist_normalize_name(label))
+            if col:
+                ordered.append(col)
+                used.add(col["id"])
+        ordered.extend(c for c in cols if c["id"] not in used)
+        cols = ordered
+
     with grist_all_meta_lock:
         grist_all_meta[key] = {"value": cols, "at": now}
     return cols
@@ -12678,11 +12771,11 @@ def mark_issue_row_as_ban(issue_row_index, comment_text="", ban_timing="", buyer
     # Комментарий теперь хранит только сам комментарий.
     final_comment = str(comment_text or "").strip()
 
-    # I = статус, J = момент бана, K = комментарий.
-    # H = кому передали НЕ трогаем.
+    # J = статус, K = момент бана, L = комментарий.
+    # I = кому передали НЕ трогаем.
     sheet_update_and_refresh(
         SHEET_ISSUES,
-        f"I{issue_row_index}:K{issue_row_index}",
+        f"J{issue_row_index}:L{issue_row_index}",
         [["ban", ban_moment, final_comment]]
     )
 
@@ -12694,7 +12787,7 @@ def set_issue_comment(issue_row_index, comment_text):
     ensure_issues_sheet_schema()
     sheet_update_and_refresh(
         SHEET_ISSUES,
-        f"K{issue_row_index}",
+        f"L{issue_row_index}",
         [[str(comment_text or "").strip()]]
     )
 
@@ -16288,7 +16381,7 @@ def run_sheet_structure_checks():
 
     checks = [
         (SHEET_ACCOUNTS, 14, "Лички"),
-        (SHEET_ISSUES, 9, "Простые лички 26"),
+        (SHEET_ISSUES, 13, "Простые лички 26"),
         (SHEET_KINGS, 12, "Кинги"),
         (SHEET_CRYPTO_KINGS, 12, "Крипта кинги"),
         (SHEET_BMS, 9, "БМы"),
@@ -18013,7 +18106,7 @@ def apply_assembly_replacement(row_index, field, new_active_text, expense_party=
                 grist_update_action(
                     SHEET_ISSUES,
                     issue_row_index,
-                    {4: normalize_numeric_for_sheet(new_price)}
+                    {5: normalize_numeric_for_sheet(new_price)}
                 )
             )
         grist_apply(actions)
@@ -25522,7 +25615,7 @@ def run_auto_healthcheck_once():
 
         health_sheets = [
             (SHEET_ACCOUNTS, 14),
-            (SHEET_ISSUES, 12),
+            (SHEET_ISSUES, 13),
             (SHEET_KINGS, 12),
             (SHEET_CRYPTO_KINGS, 12),
             (SHEET_BMS, 9),
