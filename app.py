@@ -292,6 +292,7 @@ FARM_READY_COL_FARMER_USERNAME = 'FarmFarmerUsername'
 FARM_READY_COL_BUYER = 'FarmBuyer'
 FARM_READY_COL_BUYER_ISSUED_AT = 'FarmBuyerIssuedAt'
 FARM_READY_COL_ACCOUNT_ISSUER = 'FarmAccountIssuer'
+FARM_READY_COL_OCTO_COMMENT = 'FarmOctoComment'
 SHEET_FREE_RESOURCES_HISTORY = 'История_остатков'
 FREE_RESOURCES_HISTORY_DAYS_PER_PAGE = 5
 FREE_RESOURCES_HISTORY_MODE_MONTH = 'awaiting_free_resources_history_month'
@@ -956,11 +957,13 @@ def ensure_farm_ready_columns():
         (FARM_READY_COL_BUYER, "Байер Farm King"),
         (FARM_READY_COL_BUYER_ISSUED_AT, "Дата выдачи байеру"),
         (FARM_READY_COL_ACCOUNT_ISSUER, "Кто выдал байеру"),
+        (FARM_READY_COL_OCTO_COMMENT, "Комментарий фармера / актуальное название в Octo"),
     ]
 
     missing = [
         {"id": cid, "fields": {"label": label, "type": "Text"}}
-        for cid, label in specs if cid not in existing
+        for cid, label in specs
+        if cid not in existing
     ]
 
     if missing:
@@ -976,7 +979,6 @@ def ensure_farm_ready_columns():
 
     cols = grist_columns_for_sheet(SHEET_FARM_KINGS, force=True)
     return {str(c.get("id", "")): c for c in cols}
-
 
 def farm_ready_direct_update_action(record_id, field_values, base_fields_by_pos=None):
     cols = grist_columns_for_sheet(SHEET_FARM_KINGS)
@@ -1036,23 +1038,32 @@ def farmer_can_transfer_farm_king(found, user_id, username):
     return True, ""
 
 
-def transfer_farm_king_to_accounts(king_name, farm_stage, user_id, username):
+def transfer_farm_king_to_accounts(
+    king_name,
+    farm_stage,
+    octo_comment,
+    user_id,
+    username
+):
     found = find_farm_ready_source_by_name(king_name)
     ok, reason = farmer_can_transfer_farm_king(found, user_id, username)
+
     if not ok:
         return False, reason
 
-    # Сначала переводим Octo-профиль из Farmers в AccountManagers.
-    if OCTO_API_TOKEN:
-        octo_ok, octo_msg = octo_update_profile_tags_by_title(
-            profile_title=king_name,
-            tags_to_add=[OCTO_TAG_CORBY, OCTO_TAG_ACCOUNT_MANAGERS],
+    octo_comment = str(octo_comment or "").strip()
+
+    if not octo_comment:
+        return False, (
+            "Комментарий пустой. Укажи актуальное название профиля в Octo."
         )
-        if not octo_ok:
-            return False, f"Не удалось передать Octo-профиль аккаунтерам: {octo_msg}"
 
     now_iso = datetime.now(MOSCOW_TZ).isoformat(timespec="seconds")
-    farmer_username = f"@{username}" if username else str(found["row"][8] or "")
+    farmer_username = (
+        f"@{username}"
+        if username
+        else str(found["row"][8] or "")
+    )
 
     action = farm_ready_direct_update_action(
         found["record_id"],
@@ -1065,12 +1076,20 @@ def transfer_farm_king_to_accounts(king_name, farm_stage, user_id, username):
             FARM_READY_COL_BUYER: "",
             FARM_READY_COL_BUYER_ISSUED_AT: "",
             FARM_READY_COL_ACCOUNT_ISSUER: "",
+            FARM_READY_COL_OCTO_COMMENT: octo_comment,
         },
     )
+
     grist_apply([action])
     grist_all_mark_stale(SHEET_FARM_KINGS)
-    return True, f"✅ Farm King {king_name} передан аккаунтерам.\nФарм: {farm_stage}"
 
+    return True, (
+        f"✅ Farm King {king_name} передан аккаунтерам.\n"
+        f"🌱 Фарм: {farm_stage}\n"
+        f"💬 Комментарий для аккаунтера: {octo_comment}\n\n"
+        "⚠️ ВАЖНО: зайди в Octo и вручную поставь этому профилю "
+        "тег AccountManagers."
+    )
 
 def get_farmer_transferred_farm_kings(user_id):
     ensure_farm_ready_columns()
@@ -1083,21 +1102,43 @@ def get_farmer_transferred_farm_kings(user_id):
 
 def show_farmer_transferred_farm_kings(chat_id, user_id):
     records = get_farmer_transferred_farm_kings(user_id)
+
     if not records:
         tg_send_message(chat_id, "У тебя пока нет переданных Farm Kings.")
         return
 
     lines = ["🌱 Твои переданные Farm Kings", ""]
+
     for rec in records:
-        row = ensure_row_len(grist_record_to_sheet_row(SHEET_FARM_KINGS, rec), 13)
+        row = ensure_row_len(
+            grist_record_to_sheet_row(SHEET_FARM_KINGS, rec),
+            13
+        )
         fields = rec.get("fields") or {}
+
         status = str(fields.get(FARM_READY_COL_STATUS, ""))
-        buyer = str(fields.get(FARM_READY_COL_BUYER, "") or "").strip()
-        status_text = "свободен у Accounts" if status == "ready" else f"выдан: {buyer or 'байер не указан'}"
-        lines.append(f"• {row[0]} — {fields.get(FARM_READY_COL_STAGE, 'тип не указан')} — {status_text}")
+        buyer = str(
+            fields.get(FARM_READY_COL_BUYER, "") or ""
+        ).strip()
+        farm_stage = str(
+            fields.get(FARM_READY_COL_STAGE, "") or "тип не указан"
+        ).strip()
+        octo_comment = str(
+            fields.get(FARM_READY_COL_OCTO_COMMENT, "") or ""
+        ).strip()
+
+        status_text = (
+            "свободен у Accounts"
+            if status == "ready"
+            else f"выдан: {buyer or 'байер не указан'}"
+        )
+
+        lines.append(
+            f"• {row[0]} — {farm_stage} — {status_text}\n"
+            f"  💬 Octo: {octo_comment or 'комментарий не указан'}"
+        )
 
     tg_send_long_message(chat_id, "\n".join(lines))
-
 
 def get_ready_farm_king_counts():
     ensure_farm_ready_columns()
@@ -1200,12 +1241,17 @@ def issue_ready_farm_king_to_buyer(farm_stage, buyer, account_username):
 
     rec = records[0]
     record_id = int(rec["id"])
+
     row = ensure_row_len(
         grist_record_to_sheet_row(SHEET_FARM_KINGS, rec),
         13
     )
+    fields = rec.get("fields") or {}
 
     king_name = str(row[0] or "").strip()
+    octo_comment = str(
+        fields.get(FARM_READY_COL_OCTO_COMMENT, "") or ""
+    ).strip()
 
     # Повторная live-проверка перед атомарной выдачей.
     current = grist_query_records(
@@ -1231,9 +1277,6 @@ def issue_ready_farm_king_to_buyer(farm_stage, buyer, account_username):
             "Попробуй ещё раз."
         ), None
 
-    # ВАЖНО:
-    # Farm King ранее уже был записан в Простые лички 26 как выдача на farm.
-    # Перед выдачей конечному байеру эту старую строку ОБЯЗАТЕЛЬНО находим.
     previous_farm_issue = find_previous_farm_issue_record_for_king(
         king_name
     )
@@ -1247,9 +1290,12 @@ def issue_ready_farm_king_to_buyer(farm_stage, buyer, account_username):
 
     today = datetime.now(MOSCOW_TZ).strftime("%d/%m/%Y")
     now_iso = datetime.now(MOSCOW_TZ).isoformat(timespec="seconds")
-    who = f"@{account_username}" if account_username else "без username"
+    who = (
+        f"@{account_username}"
+        if account_username
+        else "без username"
+    )
 
-    # Новая запись — уже конечная выдача KING на байера.
     issue_row = make_issue_row(
         name=king_name,
         issue_type="KING",
@@ -1277,12 +1323,10 @@ def issue_ready_farm_king_to_buyer(farm_stage, buyer, account_username):
         },
     )
 
-    # ОДИН Grist /apply:
-    # 1. Farm King -> issued / buyer.
-    # 2. Удаляем старую выдачу этого же KING на farm.
-    # 3. Создаём новую выдачу этого KING на конечного байера.
-    #
-    # Либо применится всё, либо ничего.
+    # Одним apply:
+    # 1) Farm King -> issued;
+    # 2) удалить старую выдачу на farm;
+    # 3) добавить новую выдачу на конечного байера.
     actions = [
         update_action,
         grist_remove_record_action(
@@ -1303,11 +1347,12 @@ def issue_ready_farm_king_to_buyer(farm_stage, buyer, account_username):
 
     return True, (
         f"✅ Farm King выдан.\n"
-        f"👑 Название: {king_name}\n"
+        f"👑 Название в боте: {king_name}\n"
         f"🌱 Фарм: {farm_stage}\n"
         f"👨‍💻 Байер: {buyer}\n"
-        f"♻️ Старая выдача на farm удалена\n"
-        f"🧩 В Octo профиль уже заведен под названием: {king_name}"
+        f"♻️ Старая выдача на farm удалена\n\n"
+        f"💬 Комментарий от фармера:\n"
+        f"{octo_comment or 'Актуальное название в Octo не указано.'}"
     ), king_name
 
 def grist_record_to_sheet_row(sheet_name,record):
@@ -19512,7 +19557,7 @@ def handle_message(msg):
                 return
             clear_state(user_id)
             set_state(user_id, {"mode": "farm_ready_farmer_name"})
-            tg_send_message(chat_id, "Напиши точное название Farm King, который ты уже брал и профармил.")
+            tg_send_message(chat_id, "Напиши ПЕРВОЕ название Farm King — то название, под которым ты брал его в боте.\n\nАктуальное название в Octo бот спросит следующим шагом.")
             return
 
         if text == FARM_READY_FARMER_VIEW:
@@ -19559,16 +19604,61 @@ def handle_message(msg):
 
         if state.get("mode") == "farm_ready_farmer_stage":
             farm_stage = farm_ready_stage_from_button(text)
+
             if not farm_stage:
-                send_farm_ready_stage_menu(chat_id, "Выбери вариант фарма кнопкой:")
+                send_farm_ready_stage_menu(
+                    chat_id,
+                    "Выбери вариант фарма кнопкой:"
+                )
                 return
 
-            king_name = str(state.get("farm_ready_king_name", "")).strip()
-            ok, message = transfer_farm_king_to_accounts(
-                king_name, farm_stage, user_id, username
+            state["mode"] = "farm_ready_farmer_octo_comment"
+            state["farm_ready_stage"] = farm_stage
+            set_state(user_id, state)
+
+            tg_send_message(
+                chat_id,
+                "Теперь напиши комментарий с АКТУАЛЬНЫМ названием "
+                "этого профиля в Octo.\n\n"
+                "Например:\n"
+                "[G] Farm_UA26_new\n\n"
+                "После этого бот передаст Farm King аккаунтерам.\n"
+                "⚠️ И не забудь вручную поставить профилю в Octo "
+                "тег AccountManagers."
             )
+            return
+
+        if state.get("mode") == "farm_ready_farmer_octo_comment":
+            octo_comment = str(text or "").strip()
+
+            if not octo_comment:
+                tg_send_message(
+                    chat_id,
+                    "Комментарий пустой. Напиши актуальное название "
+                    "профиля в Octo."
+                )
+                return
+
+            king_name = str(
+                state.get("farm_ready_king_name", "")
+            ).strip()
+            farm_stage = str(
+                state.get("farm_ready_stage", "")
+            ).strip()
+
+            ok, message = transfer_farm_king_to_accounts(
+                king_name,
+                farm_stage,
+                octo_comment,
+                user_id,
+                username
+            )
+
             clear_state(user_id)
-            tg_send_message(chat_id, message if ok else f"❌ {message}")
+            tg_send_message(
+                chat_id,
+                message if ok else f"❌ {message}"
+            )
             send_farm_ready_farmer_menu(chat_id)
             return
 
