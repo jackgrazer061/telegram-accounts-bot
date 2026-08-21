@@ -4044,8 +4044,62 @@ def save_free_resources_snapshot(snapshot_dt=None):
     snapshot_date = snapshot_dt.strftime("%d.%m.%Y")
 
     with free_resources_history_lock:
+        row_values = snapshot_to_history_row(
+            build_free_resources_snapshot(),
+            snapshot_dt
+        )
+
+        if storage_is_grist():
+            # Читаем существующую историю.
+            rows = grist_all_fetch_rows(
+                SHEET_FREE_RESOURCES_HISTORY,
+                force=True
+            )
+
+            target_row = None
+            for idx, row in enumerate(rows[1:], start=2):
+                if row and str(row[0]).strip() == snapshot_date:
+                    target_row = idx
+                    break
+
+            if target_row:
+                # Дата уже существует — обновляем именно существующий record.
+                cols = grist_columns_for_sheet(
+                    SHEET_FREE_RESOURCES_HISTORY
+                )
+                record_id = grist_record_id(
+                    SHEET_FREE_RESOURCES_HISTORY,
+                    target_row,
+                    force=False
+                )
+
+                fields = {}
+                for i, value in enumerate(row_values[:len(cols)]):
+                    fields[cols[i]["id"]] = value
+
+                grist_apply([[
+                    "UpdateRecord",
+                    grist_table_id_for_sheet(
+                        SHEET_FREE_RESOURCES_HISTORY
+                    ),
+                    int(record_id),
+                    fields
+                ]])
+            else:
+                # ВАЖНО: новой строки ещё нет.
+                # В Grist её нужно СОЗДАТЬ через AddRecord.
+                grist_append_all(
+                    SHEET_FREE_RESOURCES_HISTORY,
+                    [row_values]
+                )
+
+            grist_all_mark_stale(
+                SHEET_FREE_RESOURCES_HISTORY
+            )
+            return True
+
+        # Google fallback.
         sheet = get_or_create_free_resources_history_sheet()
-        row_values = snapshot_to_history_row(build_free_resources_snapshot(), snapshot_dt)
 
         def _read_dates():
             with google_lock:
@@ -4064,15 +4118,21 @@ def save_free_resources_snapshot(snapshot_dt=None):
         def _write_snapshot():
             with google_lock:
                 if target_row:
-                    sheet.update(f"A{target_row}:{end_col}{target_row}", [row_values])
+                    sheet.update(
+                        f"A{target_row}:{end_col}{target_row}",
+                        [row_values]
+                    )
                 else:
+                    # Для Google сохраняем старое поведение.
                     next_row = len(dates) + 1 if dates else 2
-                    sheet.update(f"A{next_row}:{end_col}{next_row}", [row_values])
+                    sheet.update(
+                        f"A{next_row}:{end_col}{next_row}",
+                        [row_values]
+                    )
 
         google_write_with_retry(_write_snapshot)
 
     return True
-
 
 def parse_free_resources_history_row(row):
     row = ensure_row_len(row, len(FREE_RESOURCES_HISTORY_HEADERS))
@@ -4216,17 +4276,33 @@ def maybe_save_daily_free_resources_snapshot():
 
 def free_resources_history_scheduler_loop():
     logging.info("free_resources_history_scheduler_loop started")
+
     while True:
         try:
             touch_background_heartbeat()
             maybe_save_daily_free_resources_snapshot()
             time.sleep(FREE_RESOURCES_HISTORY_CHECK_INTERVAL)
+
         except Exception as e:
+            if storage_is_grist():
+                logging.exception(
+                    "free_resources_history_scheduler_loop crashed on Grist"
+                )
+                time.sleep(300)
+                continue
+
             if is_google_temporarily_unavailable_error(e):
-                logging.warning(f"free_resources_history_scheduler_loop paused: Google Sheets limit/slowdown: {e}")
-                sleep_for_google_cooldown(GOOGLE_QUOTA_BACKGROUND_SLEEP)
+                logging.warning(
+                    "free_resources_history_scheduler_loop paused: "
+                    f"Google Sheets limit/slowdown: {e}"
+                )
+                sleep_for_google_cooldown(
+                    GOOGLE_QUOTA_BACKGROUND_SLEEP
+                )
             else:
-                logging.exception("free_resources_history_scheduler_loop crashed")
+                logging.exception(
+                    "free_resources_history_scheduler_loop crashed"
+                )
                 time.sleep(300)
 
 def send_admin_farmers_menu(chat_id, text="Admin / Фармеры:"):
@@ -25781,29 +25857,41 @@ def start_background_threads_once():
         if background_threads_started:
             return
 
-        backup_thread = threading.Thread(target=backup_scheduler_loop, daemon=True)
+        backup_thread = threading.Thread(
+            target=backup_scheduler_loop,
+            daemon=True
+        )
         backup_thread.start()
 
-        watchdog_thread = threading.Thread(target=watchdog_loop, daemon=True)
+        watchdog_thread = threading.Thread(
+            target=watchdog_loop,
+            daemon=True
+        )
         watchdog_thread.start()
 
-        startup_google_maintenance_thread = threading.Thread(target=startup_google_maintenance_loop, daemon=True)
+        startup_google_maintenance_thread = threading.Thread(
+            target=startup_google_maintenance_loop,
+            daemon=True
+        )
         startup_google_maintenance_thread.start()
 
-        auto_health_thread = threading.Thread(target=auto_healthcheck_loop, daemon=True)
+        auto_health_thread = threading.Thread(
+            target=auto_healthcheck_loop,
+            daemon=True
+        )
         auto_health_thread.start()
 
-        ban_storm_thread = threading.Thread(target=ban_storm_monitor_loop, daemon=True)
+        ban_storm_thread = threading.Thread(
+            target=ban_storm_monitor_loop,
+            daemon=True
+        )
         ban_storm_thread.start()
 
-        free_resources_history_thread = threading.Thread(target=free_resources_history_scheduler_loop, daemon=True)
+        free_resources_history_thread = threading.Thread(
+            target=free_resources_history_scheduler_loop,
+            daemon=True
+        )
         free_resources_history_thread.start()
-background_threads_started = True
 
+        background_threads_started = True
 
-start_background_threads_once()
-
-
-if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 8080))
-    app.run(host="0.0.0.0", port=port)
