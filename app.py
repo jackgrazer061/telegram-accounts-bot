@@ -1140,6 +1140,94 @@ def show_farmer_transferred_farm_kings(chat_id, user_id):
 
     tg_send_long_message(chat_id, "\n".join(lines))
 
+
+def normalize_farm_ready_price(value):
+    parsed = parse_price(value)
+    if parsed is None:
+        return None
+    try:
+        num = float(parsed)
+    except Exception:
+        return None
+    return int(num) if num.is_integer() else round(num, 2)
+
+
+def get_ready_farm_king_prices(farm_stage):
+    ensure_farm_ready_columns()
+    records = grist_query_records(
+        SHEET_FARM_KINGS,
+        filters={
+            FARM_READY_COL_STATUS: "ready",
+            FARM_READY_COL_STAGE: farm_stage,
+        },
+        limit=0,
+        sort="manualSort",
+    )
+    counts = {}
+    for rec in records:
+        row = ensure_row_len(
+            grist_record_to_sheet_row(SHEET_FARM_KINGS, rec),
+            13
+        )
+        price = normalize_farm_ready_price(row[2])
+        if price is None:
+            continue
+        counts[price] = counts.get(price, 0) + 1
+    return counts
+
+
+def farm_ready_price_button_text(price, count=None):
+    price_text = format_issue_price(price)
+    if count is None:
+        return f"💵 {price_text}"
+    return f"💵 {price_text} — {count} шт."
+
+
+def send_farm_ready_price_menu(chat_id, farm_stage):
+    prices = get_ready_farm_king_prices(farm_stage)
+    if not prices:
+        tg_send_message(
+            chat_id,
+            f"❌ Для «{farm_stage}» сейчас нет Farm Kings с корректно указанной ценой."
+        )
+        return False
+
+    keyboard = [
+        [{"text": farm_ready_price_button_text(price, prices[price])}]
+        for price in sorted(prices.keys(), key=lambda x: float(x))
+    ]
+    keyboard.append([{"text": MENU_CANCEL}])
+
+    tg_send_message(
+        chat_id,
+        "💵 Выбери цену Farm King.\n\n"
+        f"🌱 Тип фарма: {farm_stage}\n"
+        "Показываю только цены, которые сейчас реально есть в наличии:",
+        keyboard
+    )
+    return True
+
+
+def farm_ready_price_from_button(text, farm_stage):
+    value = str(text or "").strip()
+    if not value.startswith("💵"):
+        return None
+
+    body = value[1:].strip()
+    if "—" in body:
+        body = body.split("—", 1)[0].strip()
+
+    selected = normalize_farm_ready_price(body)
+    if selected is None:
+        return None
+
+    available = get_ready_farm_king_prices(farm_stage)
+    for price in available:
+        if float(price) == float(selected):
+            return price
+    return None
+
+
 def get_ready_farm_king_counts():
     ensure_farm_ready_columns()
     records = grist_query_records(SHEET_FARM_KINGS, filters={FARM_READY_COL_STATUS: "ready"})
@@ -1221,39 +1309,60 @@ def grist_remove_record_action(sheet_name, record_id):
     ]
 
 
-def issue_ready_farm_king_to_buyer(farm_stage, buyer, account_username):
+def issue_ready_farm_king_to_buyer(
+    farm_stage,
+    selected_price,
+    buyer,
+    account_username
+):
     ensure_farm_ready_columns()
 
-    records = grist_query_records(
+    selected_price = normalize_farm_ready_price(selected_price)
+    if selected_price is None:
+        return False, "Цена Farm King указана неверно.", None
+
+    candidates = grist_query_records(
         SHEET_FARM_KINGS,
         filters={
             FARM_READY_COL_STATUS: "ready",
             FARM_READY_COL_STAGE: farm_stage
         },
-        limit=1,
+        limit=0,
         sort="manualSort",
     )
 
-    if not records:
+    rec = None
+    row = None
+
+    for candidate in candidates:
+        candidate_row = ensure_row_len(
+            grist_record_to_sheet_row(SHEET_FARM_KINGS, candidate),
+            13
+        )
+        candidate_price = normalize_farm_ready_price(candidate_row[2])
+
+        if (
+            candidate_price is not None
+            and float(candidate_price) == float(selected_price)
+        ):
+            rec = candidate
+            row = candidate_row
+            break
+
+    if not rec:
         return False, (
-            f"Свободных Farm Kings с фармом «{farm_stage}» сейчас нет."
+            f"Farm King «{farm_stage}» по цене "
+            f"{format_issue_price(selected_price)} уже закончились. "
+            "Выбери цену заново."
         ), None
 
-    rec = records[0]
     record_id = int(rec["id"])
-
-    row = ensure_row_len(
-        grist_record_to_sheet_row(SHEET_FARM_KINGS, rec),
-        13
-    )
     fields = rec.get("fields") or {}
-
     king_name = str(row[0] or "").strip()
     octo_comment = str(
         fields.get(FARM_READY_COL_OCTO_COMMENT, "") or ""
     ).strip()
 
-    # Повторная live-проверка перед атомарной выдачей.
     current = grist_query_records(
         SHEET_FARM_KINGS,
         filters={
@@ -1263,18 +1372,30 @@ def issue_ready_farm_king_to_buyer(farm_stage, buyer, account_username):
         limit=0,
     )
 
-    live = next(
-        (
-            x for x in current
-            if int(x.get("id")) == record_id
-        ),
-        None
-    )
+    live = None
+    for candidate in current:
+        if int(candidate.get("id")) != record_id:
+            continue
+
+        live_row = ensure_row_len(
+            grist_record_to_sheet_row(SHEET_FARM_KINGS, candidate),
+            13
+        )
+        live_price = normalize_farm_ready_price(live_row[2])
+
+        if (
+            live_price is not None
+            and float(live_price) == float(selected_price)
+        ):
+            live = candidate
+            row = live_row
+            break
 
     if not live:
         return False, (
-            "Этот Farm King только что забрал другой аккаунтер. "
-            "Попробуй ещё раз."
+            "Этот Farm King только что забрал другой аккаунтер "
+            "или Farm King по выбранной цене закончились. "
+            "Выбери цену заново."
         ), None
 
     previous_farm_issue = find_previous_farm_issue_record_for_king(
@@ -1283,18 +1404,14 @@ def issue_ready_farm_king_to_buyer(farm_stage, buyer, account_username):
 
     if not previous_farm_issue:
         return False, (
-            f"Не найдена старая выдача Farm King «{king_name}» на farm "
-            f"в {SHEET_ISSUES}.\n\n"
+            f"Не найдена старая выдача Farm King «{king_name}» "
+            f"на farm в {SHEET_ISSUES}.\n\n"
             "Новая выдача на байера НЕ выполнена, чтобы не сломать учёт."
         ), None
 
     today = datetime.now(MOSCOW_TZ).strftime("%d/%m/%Y")
     now_iso = datetime.now(MOSCOW_TZ).isoformat(timespec="seconds")
-    who = (
-        f"@{account_username}"
-        if account_username
-        else "без username"
-    )
+    who = f"@{account_username}" if account_username else "без username"
 
     issue_row = make_issue_row(
         name=king_name,
@@ -1323,10 +1440,6 @@ def issue_ready_farm_king_to_buyer(farm_stage, buyer, account_username):
         },
     )
 
-    # Одним apply:
-    # 1) Farm King -> issued;
-    # 2) удалить старую выдачу на farm;
-    # 3) добавить новую выдачу на конечного байера.
     actions = [
         update_action,
         grist_remove_record_action(
@@ -1349,6 +1462,7 @@ def issue_ready_farm_king_to_buyer(farm_stage, buyer, account_username):
         f"✅ Farm King выдан.\n"
         f"👑 Название в боте: {king_name}\n"
         f"🌱 Фарм: {farm_stage}\n"
+        f"💵 Цена: {format_issue_price(row[2])}\n"
         f"👨‍💻 Байер: {buyer}\n"
         f"♻️ Старая выдача на farm удалена\n\n"
         f"💬 Комментарий от фармера:\n"
@@ -19740,15 +19854,54 @@ def handle_message(msg):
 
         if state.get("mode") == "farm_ready_accounts_stage":
             farm_stage = farm_ready_stage_from_button(text)
+
             if not farm_stage:
-                send_farm_ready_stage_menu(chat_id, "Выбери нужный тип Farm King кнопкой:")
+                send_farm_ready_stage_menu(
+                    chat_id,
+                    "Выбери нужный тип Farm King кнопкой:"
+                )
                 return
 
             set_state(user_id, {
-                "mode": "farm_ready_accounts_department",
+                "mode": "farm_ready_accounts_price",
                 "farm_ready_stage": farm_stage,
             })
-            send_department_menu(chat_id, "На какого байера выдать Farm King? Сначала выбери отдел:")
+
+            if not send_farm_ready_price_menu(chat_id, farm_stage):
+                clear_state(user_id)
+                send_farm_ready_accounts_menu(chat_id)
+            return
+
+        if state.get("mode") == "farm_ready_accounts_price":
+            farm_stage = str(
+                state.get("farm_ready_stage", "")
+            ).strip()
+
+            selected_price = farm_ready_price_from_button(
+                text,
+                farm_stage
+            )
+
+            if selected_price is None:
+                if not send_farm_ready_price_menu(
+                    chat_id,
+                    farm_stage
+                ):
+                    clear_state(user_id)
+                    send_farm_ready_accounts_menu(chat_id)
+                return
+
+            state["mode"] = "farm_ready_accounts_department"
+            state["farm_ready_price"] = selected_price
+            set_state(user_id, state)
+
+            send_department_menu(
+                chat_id,
+                "На какого байера выдать Farm King?\n\n"
+                f"🌱 {farm_stage}\n"
+                f"💵 Цена: {format_issue_price(selected_price)}\n\n"
+                "Сначала выбери отдел:"
+            )
             return
 
         if state.get("mode") == "farm_ready_accounts_department":
@@ -19769,9 +19922,16 @@ def handle_message(msg):
                 return
 
             buyer = normalize_person_name(text)
-            farm_stage = str(state.get("farm_ready_stage", "")).strip()
+            farm_stage = str(
+                state.get("farm_ready_stage", "")
+            ).strip()
+            selected_price = state.get("farm_ready_price")
+
             ok, message, _ = issue_ready_farm_king_to_buyer(
-                farm_stage, buyer, username
+                farm_stage,
+                selected_price,
+                buyer,
+                username
             )
             clear_state(user_id)
             tg_send_message(chat_id, message if ok else f"❌ {message}")
