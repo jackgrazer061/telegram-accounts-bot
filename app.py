@@ -275,6 +275,7 @@ FARM_READY_FARMER_MENU = '🌱 Farm Kings — Фармер'
 FARM_READY_ACCOUNTS_MENU = '📦 Farm Kings — Accounts'
 FARM_READY_FARMER_SEND = '📤 Передать готовый Farm King'
 FARM_READY_FARMER_VIEW = '👀 Мои переданные Farm Kings'
+FARM_READY_FARMER_EDIT = '✏️ Редактировать переданные Farm Kings'
 FARM_READY_ACCOUNTS_ISSUE = '➡️ Выдать готовый Farm King'
 FARM_READY_ACCOUNTS_FREE = '📊 Свободные готовые Farm Kings'
 FARM_READY_BACK_FARMERS = '⬅️ Назад в Farmers'
@@ -1038,6 +1039,163 @@ def farmer_can_transfer_farm_king(found, user_id, username):
     return True, ""
 
 
+
+def parse_farm_ready_king_list(text):
+    """Список названий: одна непустая строка = один Farm King."""
+    return [
+        str(line).strip()
+        for line in str(text or "").splitlines()
+        if str(line).strip()
+    ]
+
+
+def validate_farm_kings_for_bulk_transfer(king_names, user_id, username):
+    """Проверяет ВСЮ пачку до изменения Grist."""
+    king_names = [
+        str(x or "").strip()
+        for x in (king_names or [])
+        if str(x or "").strip()
+    ]
+
+    if not king_names:
+        return False, "Список Farm Kings пустой.", []
+
+    # Одинаковое старое название дважды в одной пачке — почти наверняка ошибка.
+    seen = set()
+    duplicates = []
+    for name in king_names:
+        key = name.lower()
+        if key in seen:
+            duplicates.append(name)
+        seen.add(key)
+
+    if duplicates:
+        return False, (
+            "В списке есть одинаковые названия:\n"
+            + "\n".join(f"• {x}" for x in duplicates)
+        ), []
+
+    validated = []
+    errors = []
+
+    for idx, king_name in enumerate(king_names, start=1):
+        found = find_farm_ready_source_by_name(king_name)
+        ok, reason = farmer_can_transfer_farm_king(
+            found,
+            user_id,
+            username
+        )
+
+        if not ok:
+            errors.append(
+                f"{idx}. {king_name}\n   ❌ {reason}"
+            )
+            continue
+
+        validated.append(found)
+
+    if errors:
+        return False, (
+            "Не могу принять всю пачку. Исправь проблемные Farm Kings "
+            "и отправь список заново:\n\n"
+            + "\n\n".join(errors)
+        ), []
+
+    return True, "", validated
+
+
+def transfer_farm_kings_to_accounts_bulk(
+    king_names,
+    farm_stage,
+    octo_names,
+    user_id,
+    username
+):
+    """Передаёт всю пачку аккаунтерам одним Grist /apply."""
+    king_names = [
+        str(x or "").strip()
+        for x in (king_names or [])
+        if str(x or "").strip()
+    ]
+    octo_names = [
+        str(x or "").strip()
+        for x in (octo_names or [])
+        if str(x or "").strip()
+    ]
+
+    if not king_names:
+        return False, "Список Farm Kings пустой."
+
+    if len(king_names) != len(octo_names):
+        return False, (
+            f"Количество актуальных названий не совпадает.\n"
+            f"Farm Kings: {len(king_names)}\n"
+            f"Названий Octo: {len(octo_names)}"
+        )
+
+    ok, reason, validated = validate_farm_kings_for_bulk_transfer(
+        king_names,
+        user_id,
+        username
+    )
+
+    if not ok:
+        return False, reason
+
+    now_iso = datetime.now(MOSCOW_TZ).isoformat(
+        timespec="seconds"
+    )
+
+    actions = []
+    result_lines = []
+
+    for king_name, octo_name, found in zip(
+        king_names,
+        octo_names,
+        validated
+    ):
+        farmer_username = (
+            f"@{username}"
+            if username
+            else str(found["row"][8] or "")
+        )
+
+        actions.append(
+            farm_ready_direct_update_action(
+                found["record_id"],
+                {
+                    FARM_READY_COL_STAGE: farm_stage,
+                    FARM_READY_COL_STATUS: "ready",
+                    FARM_READY_COL_TRANSFERRED_AT: now_iso,
+                    FARM_READY_COL_FARMER_ID: str(user_id),
+                    FARM_READY_COL_FARMER_USERNAME: farmer_username,
+                    FARM_READY_COL_BUYER: "",
+                    FARM_READY_COL_BUYER_ISSUED_AT: "",
+                    FARM_READY_COL_ACCOUNT_ISSUER: "",
+                    FARM_READY_COL_OCTO_COMMENT: octo_name,
+                },
+            )
+        )
+
+        result_lines.append(
+            f"• {king_name}\n"
+            f"  💬 Octo: {octo_name}"
+        )
+
+    # Вся пачка одной транзакцией Grist.
+    grist_apply(actions)
+    grist_all_mark_stale(SHEET_FARM_KINGS)
+
+    return True, (
+        f"✅ Передано Farm Kings: {len(king_names)}\n"
+        f"🌱 Фарм: {farm_stage}\n\n"
+        + "\n".join(result_lines)
+        + "\n\n"
+        "⚠️ ВАЖНО: вручную поставь ВСЕМ этим профилям "
+        "в Octo тег AccountManagers."
+    )
+
+
 def transfer_farm_king_to_accounts(
     king_name,
     farm_stage,
@@ -1100,6 +1258,155 @@ def get_farmer_transferred_farm_kings(user_id):
     )
 
 
+
+
+def get_farmer_editable_ready_farm_kings(user_id, username=None):
+    """Только Farm Kings этого фармера, которые ещё не забрали Accounts."""
+    ensure_farm_ready_columns()
+
+    records = grist_query_records(
+        SHEET_FARM_KINGS,
+        filters={FARM_READY_COL_STATUS: "ready"},
+        limit=0,
+        sort="manualSort",
+    )
+
+    user_id_text = str(user_id)
+    username_text = (
+        f"@{username}".strip().lower()
+        if username
+        else ""
+    )
+
+    result = []
+
+    for rec in records:
+        fields = rec.get("fields") or {}
+        farmer_id = str(
+            fields.get(FARM_READY_COL_FARMER_ID, "") or ""
+        ).strip()
+        farmer_username = str(
+            fields.get(FARM_READY_COL_FARMER_USERNAME, "") or ""
+        ).strip().lower()
+
+        belongs = farmer_id == user_id_text
+
+        # Backward compatibility for older ready records where id might be empty.
+        if not belongs and not farmer_id and username_text:
+            belongs = farmer_username == username_text
+
+        if belongs:
+            result.append(rec)
+
+    return result
+
+
+def build_farmer_ready_edit_buttons(user_id, username=None):
+    records = get_farmer_editable_ready_farm_kings(
+        user_id,
+        username
+    )
+
+    buttons = []
+
+    for rec in records:
+        row = ensure_row_len(
+            grist_record_to_sheet_row(SHEET_FARM_KINGS, rec),
+            13
+        )
+        king_name = str(row[0] or "").strip()
+
+        if not king_name:
+            continue
+
+        buttons.append([
+            {
+                "text": king_name,
+                "callback_data": f"farm_ready_edit:{int(rec['id'])}"
+            }
+        ])
+
+    buttons.append([
+        {
+            "text": "⬅️ Назад",
+            "callback_data": "farm_ready_edit_back"
+        }
+    ])
+
+    return buttons
+
+
+def get_editable_farm_king_by_record_id(record_id, user_id, username=None):
+    record_id = int(record_id)
+
+    records = get_farmer_editable_ready_farm_kings(
+        user_id,
+        username
+    )
+
+    for rec in records:
+        if int(rec.get("id")) == record_id:
+            return rec
+
+    return None
+
+
+def update_farmer_ready_octo_comment(
+    record_id,
+    new_octo_name,
+    user_id,
+    username=None
+):
+    new_octo_name = str(new_octo_name or "").strip()
+
+    if not new_octo_name:
+        return False, "Актуальное название в Octo не может быть пустым."
+
+    rec = get_editable_farm_king_by_record_id(
+        record_id,
+        user_id,
+        username
+    )
+
+    if not rec:
+        return False, (
+            "Этот Farm King уже забрали аккаунтеры "
+            "или он принадлежит другому фармеру."
+        )
+
+    # Live re-check right before update.
+    live = get_editable_farm_king_by_record_id(
+        record_id,
+        user_id,
+        username
+    )
+
+    if not live:
+        return False, (
+            "Этот Farm King уже успели забрать аккаунтеры. "
+            "Изменение не сохранено."
+        )
+
+    action = farm_ready_direct_update_action(
+        int(record_id),
+        {
+            FARM_READY_COL_OCTO_COMMENT: new_octo_name,
+        }
+    )
+
+    grist_apply([action])
+    grist_all_mark_stale(SHEET_FARM_KINGS)
+
+    row = ensure_row_len(
+        grist_record_to_sheet_row(SHEET_FARM_KINGS, live),
+        13
+    )
+
+    return True, (
+        f"✅ Актуальное название в Octo обновлено.\n\n"
+        f"👑 Farm King: {row[0]}\n"
+        f"💬 Новое название в Octo: {new_octo_name}"
+    )
 def show_farmer_transferred_farm_kings(chat_id, user_id):
     records = get_farmer_transferred_farm_kings(user_id)
 
@@ -3808,6 +4115,7 @@ def send_farm_ready_farmer_menu(chat_id, text="Farm Kings для Farmers:"):
     keyboard = [
         [{"text": FARM_READY_FARMER_SEND}],
         [{"text": FARM_READY_FARMER_VIEW}],
+        [{"text": FARM_READY_FARMER_EDIT}],
         [{"text": FARM_READY_BACK_FARMERS}],
     ]
     tg_send_message(chat_id, text, keyboard)
@@ -18727,7 +19035,7 @@ def handle_message(msg):
             MENU_KINGS, MENU_BMS, MENU_FPS, MENU_PIXELS,
             FARM_MENU_KING, FARM_MENU_BM, FARM_MENU_FP, FARM_MENU_ASSEMBLIES,
             FARM_READY_FARMER_MENU, FARM_READY_ACCOUNTS_MENU,
-            FARM_READY_FARMER_SEND, FARM_READY_FARMER_VIEW,
+            FARM_READY_FARMER_SEND, FARM_READY_FARMER_VIEW, FARM_READY_FARMER_EDIT,
             FARM_READY_ACCOUNTS_ISSUE, FARM_READY_ACCOUNTS_FREE,
             FARM_READY_BACK_FARMERS, FARM_READY_BACK_ACCOUNTS,
             FARM_READY_STAGE_META_BTN, FARM_READY_STAGE_NO_META_BTN,
@@ -19747,7 +20055,49 @@ def handle_message(msg):
                 return
             clear_state(user_id)
             set_state(user_id, {"mode": "farm_ready_farmer_name"})
-            tg_send_message(chat_id, "Напиши ПЕРВОЕ название Farm King — то название, под которым ты брал его в боте.\n\nАктуальное название в Octo бот спросит следующим шагом.")
+            tg_send_message(
+                chat_id,
+                "Отправь Farm Kings, которые хочешь передать аккаунтерам.\n"
+                "Каждое ПЕРВОЕ название — с новой строки. Это должны быть "
+                "названия, под которыми ты изначально брал king в боте.\n\n"
+                "Можно отправить 1, 6, 20 и больше за раз.\n\n"
+                "Пример:\n"
+                "[G] Farm SP9 (55)\n"
+                "[G] Farm SP17 (55)\n"
+                "[G] Farm SP20 (55)\n"
+                "[G] Farm USA3"
+            )
+            return
+
+
+        if text == FARM_READY_FARMER_EDIT:
+            if not (is_admin(user_id) or is_farmers_role(user_id)):
+                tg_send_message(chat_id, "У вас нет доступа.")
+                return
+
+            records = get_farmer_editable_ready_farm_kings(
+                user_id,
+                username
+            )
+
+            if not records:
+                tg_send_message(
+                    chat_id,
+                    "У тебя нет переданных Farm Kings, "
+                    "которые ещё не забрали аккаунтеры."
+                )
+                send_farm_ready_farmer_menu(chat_id)
+                return
+
+            tg_send_inline_keyboard(
+                chat_id,
+                "✏️ Выбери Farm King, у которого нужно поменять "
+                "актуальное название в Octo:",
+                build_farmer_ready_edit_buttons(
+                    user_id,
+                    username
+                )
+            )
             return
 
         if text == FARM_READY_FARMER_VIEW:
@@ -19776,20 +20126,35 @@ def handle_message(msg):
             return
 
         if state.get("mode") == "farm_ready_farmer_name":
-            king_name = str(text or "").strip()
-            found = find_farm_ready_source_by_name(king_name)
-            ok, reason = farmer_can_transfer_farm_king(found, user_id, username)
+            king_names = parse_farm_ready_king_list(text)
+
+            if not king_names:
+                tg_send_message(
+                    chat_id,
+                    "Список пустой. Отправь хотя бы один Farm King."
+                )
+                return
+
+            ok, reason, _ = validate_farm_kings_for_bulk_transfer(
+                king_names,
+                user_id,
+                username
+            )
+
             if not ok:
                 tg_send_message(chat_id, f"❌ {reason}")
-                send_farm_ready_farmer_menu(chat_id)
-                clear_state(user_id)
                 return
 
             set_state(user_id, {
                 "mode": "farm_ready_farmer_stage",
-                "farm_ready_king_name": king_name,
+                "farm_ready_king_names": king_names,
             })
-            send_farm_ready_stage_menu(chat_id, f"Как был профармлен {king_name}?")
+
+            send_farm_ready_stage_menu(
+                chat_id,
+                f"Проверено Farm Kings: {len(king_names)} ✅\n\n"
+                "Как была профармлена эта пачка?"
+            )
             return
 
         if state.get("mode") == "farm_ready_farmer_stage":
@@ -19802,44 +20167,131 @@ def handle_message(msg):
                 )
                 return
 
+            king_names = list(
+                state.get("farm_ready_king_names") or []
+            )
+
+            if not king_names:
+                clear_state(user_id)
+                tg_send_message(
+                    chat_id,
+                    "Список Farm Kings потерян. Начни передачу заново."
+                )
+                send_farm_ready_farmer_menu(chat_id)
+                return
+
             state["mode"] = "farm_ready_farmer_octo_comment"
             state["farm_ready_stage"] = farm_stage
             set_state(user_id, state)
 
+            numbered = "\n".join(
+                f"{idx}. {name}"
+                for idx, name in enumerate(king_names, start=1)
+            )
+
             tg_send_message(
                 chat_id,
-                "Теперь напиши комментарий с АКТУАЛЬНЫМ названием "
-                "этого профиля в Octo.\n\n"
-                "Например:\n"
-                "[G] Farm_UA26_new\n\n"
-                "После этого бот передаст Farm King аккаунтерам.\n"
-                "⚠️ И не забудь вручную поставить профилю в Octo "
+                f"Теперь отправь АКТУАЛЬНЫЕ названия этих профилей в Octo.\n"
+                f"Каждое название — с новой строки.\n\n"
+                f"⚠️ ВАЖНО: отправляй их СТРОГО В ТОМ ЖЕ ПОРЯДКЕ, "
+                f"в котором указал Farm Kings.\n\n"
+                f"Количество строк должно быть: {len(king_names)}.\n\n"
+                f"Порядок Farm Kings:\n{numbered}\n\n"
+                "Например, если первым был [G] Farm SP9 (55), "
+                "то первой строкой пришли его актуальное название в Octo.\n\n"
+                "После передачи не забудь вручную поставить всем профилям "
                 "тег AccountManagers."
             )
             return
 
         if state.get("mode") == "farm_ready_farmer_octo_comment":
-            octo_comment = str(text or "").strip()
-
-            if not octo_comment:
-                tg_send_message(
-                    chat_id,
-                    "Комментарий пустой. Напиши актуальное название "
-                    "профиля в Octo."
-                )
-                return
-
-            king_name = str(
-                state.get("farm_ready_king_name", "")
-            ).strip()
+            octo_names = parse_farm_ready_king_list(text)
+            king_names = list(
+                state.get("farm_ready_king_names") or []
+            )
             farm_stage = str(
                 state.get("farm_ready_stage", "")
             ).strip()
 
-            ok, message = transfer_farm_king_to_accounts(
-                king_name,
+            if not king_names or not farm_stage:
+                clear_state(user_id)
+                tg_send_message(
+                    chat_id,
+                    "Данные передачи потеряны. Начни заново."
+                )
+                send_farm_ready_farmer_menu(chat_id)
+                return
+
+            if len(octo_names) != len(king_names):
+                tg_send_message(
+                    chat_id,
+                    f"❌ Количество строк не совпадает.\n\n"
+                    f"Farm Kings: {len(king_names)}\n"
+                    f"Актуальных названий Octo: {len(octo_names)}\n\n"
+                    "Ничего не передано. Отправь актуальные названия ещё раз "
+                    "в том же порядке, по одному с новой строки."
+                )
+                return
+
+            # Перед финальной записью повторно проверяем всю пачку.
+            ok, reason, _ = validate_farm_kings_for_bulk_transfer(
+                king_names,
+                user_id,
+                username
+            )
+
+            if not ok:
+                clear_state(user_id)
+                tg_send_message(
+                    chat_id,
+                    "❌ Пока ты вводил названия, состояние одного из "
+                    f"Farm Kings изменилось:\n\n{reason}\n\n"
+                    "Ничего не передано. Начни заново."
+                )
+                send_farm_ready_farmer_menu(chat_id)
+                return
+
+            ok, message = transfer_farm_kings_to_accounts_bulk(
+                king_names,
                 farm_stage,
-                octo_comment,
+                octo_names,
+                user_id,
+                username
+            )
+
+            clear_state(user_id)
+            tg_send_long_message(
+                chat_id,
+                message if ok else f"❌ {message}"
+            )
+            send_farm_ready_farmer_menu(chat_id)
+            return
+
+
+        if state.get("mode") == "farm_ready_farmer_edit_octo":
+            record_id = state.get("farm_ready_edit_record_id")
+
+            if not record_id:
+                clear_state(user_id)
+                tg_send_message(
+                    chat_id,
+                    "Данные редактирования потеряны. Начни заново."
+                )
+                send_farm_ready_farmer_menu(chat_id)
+                return
+
+            new_octo_name = str(text or "").strip()
+
+            if not new_octo_name:
+                tg_send_message(
+                    chat_id,
+                    "Название пустое. Отправь новое актуальное название в Octo."
+                )
+                return
+
+            ok, message = update_farmer_ready_octo_comment(
+                record_id,
+                new_octo_name,
                 user_id,
                 username
             )
@@ -24196,6 +24648,63 @@ def handle_callback_query(callback_query):
             tg_send_message(chat_id, f"Сборка: {rec['name']}\nДля кого: {buyer}\n\nУкажи цену сборки:")
             return jsonify({"ok": True})
 
+
+
+        if data == "farm_ready_edit_back":
+            tg_answer_callback_query(callback_id)
+            tg_edit_message_text(
+                chat_id,
+                message_id,
+                "Farm Kings для Farmers:",
+                []
+            )
+            send_farm_ready_farmer_menu(chat_id)
+            return jsonify({"ok": True})
+
+        if data.startswith("farm_ready_edit:"):
+            record_id = int(data.split(":", 1)[1])
+
+            rec = get_editable_farm_king_by_record_id(
+                record_id,
+                user_id,
+                username
+            )
+
+            if not rec:
+                tg_answer_callback_query(
+                    callback_id,
+                    "Farm King уже недоступен"
+                )
+                return jsonify({"ok": True})
+
+            row = ensure_row_len(
+                grist_record_to_sheet_row(SHEET_FARM_KINGS, rec),
+                13
+            )
+            fields = rec.get("fields") or {}
+            current_octo = str(
+                fields.get(FARM_READY_COL_OCTO_COMMENT, "") or ""
+            ).strip()
+            farm_stage = str(
+                fields.get(FARM_READY_COL_STAGE, "") or ""
+            ).strip()
+
+            set_state(user_id, {
+                "mode": "farm_ready_farmer_edit_octo",
+                "farm_ready_edit_record_id": record_id,
+            })
+
+            tg_answer_callback_query(callback_id)
+            tg_edit_message_text(
+                chat_id,
+                message_id,
+                f"✏️ Farm King: {row[0]}\n"
+                f"🌱 Фарм: {farm_stage or 'не указан'}\n"
+                f"💬 Сейчас в Octo: {current_octo or 'не указано'}\n\n"
+                "Отправь новое актуальное название профиля в Octo.",
+                []
+            )
+            return jsonify({"ok": True})
 
         if data.startswith("asm_util:"):
             row_index=int(data.split(":",1)[1])
