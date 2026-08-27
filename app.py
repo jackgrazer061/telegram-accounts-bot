@@ -381,6 +381,11 @@ SHEET_FARM_BMS = "База фарм бм"
 SHEET_FARM_FPS = "База фарм фп"
 SHEET_CRYPTO_KINGS = "База_крипта_кинги"
 SHEET_PIXELS = "База_пикселей"
+SHEET_EMAILS = "Почты"
+MENU_EMAILS = "📧 Почты"
+EMAILS_GET = "📥 Взять почту"
+EMAILS_BACK = "⬅️ Назад из почт"
+ADMIN_ADD_EMAILS = "➕ Добавить почты"
 SHEET_STICKERS = "Стикеры"
 SHEET_KING_DOWNLOADS = "Кэш_скачиваний_king"
 SHEET_ASSEMBLIES = "Сборки"
@@ -1407,6 +1412,39 @@ def update_farmer_ready_octo_comment(
         f"👑 Farm King: {row[0]}\n"
         f"💬 Новое название в Octo: {new_octo_name}"
     )
+
+
+def take_back_farm_king_from_accounts(record_id, user_id, username=None):
+    """Возвращает ready Farm King аккаунтерам -> обратно фармеру."""
+    rec=get_editable_farm_king_by_record_id(record_id,user_id,username)
+    if not rec:
+        return False,"Этот Farm King уже забрали аккаунтеры или он принадлежит другому фармеру."
+
+    row=ensure_row_len(grist_record_to_sheet_row(SHEET_FARM_KINGS,rec),13)
+    king_name=str(row[0] or "").strip()
+
+    # Повторная live-проверка: только собственный ready king можно вернуть.
+    live=get_editable_farm_king_by_record_id(record_id,user_id,username)
+    if not live:
+        return False,"Farm King уже недоступен для возврата."
+
+    action=farm_ready_direct_update_action(
+        int(record_id),
+        {
+            FARM_READY_COL_STAGE:"",
+            FARM_READY_COL_STATUS:"",
+            FARM_READY_COL_TRANSFERRED_AT:"",
+            FARM_READY_COL_FARMER_ID:"",
+            FARM_READY_COL_FARMER_USERNAME:"",
+            FARM_READY_COL_BUYER:"",
+            FARM_READY_COL_BUYER_ISSUED_AT:"",
+            FARM_READY_COL_ACCOUNT_ISSUER:"",
+            FARM_READY_COL_OCTO_COMMENT:"",
+        }
+    )
+    grist_apply([action])
+    grist_all_mark_stale(SHEET_FARM_KINGS)
+    return True,f"✅ Farm King {king_name} забран обратно у Accounts. Он снова доступен тебе для передачи."
 def show_farmer_transferred_farm_kings(chat_id, user_id):
     records = get_farmer_transferred_farm_kings(user_id)
 
@@ -4074,7 +4112,7 @@ def send_accounts_main_menu(chat_id, text="Меню Accounts:"):
     keyboard = [
         [{"text": SUBMENU_ACCOUNTS_MAIN}, {"text": MENU_KINGS}],
         [{"text": MENU_BMS}, {"text": MENU_FPS}],
-        [{"text": MENU_PIXELS}],
+        [{"text": MENU_PIXELS}, {"text": MENU_EMAILS}],
         [{"text": FARM_READY_ACCOUNTS_MENU}],
         [{"text": MENU_MANAGER_STATS}],
         [{"text": MENU_ISSUED_TO_BUYER}],
@@ -4104,12 +4142,11 @@ def send_farmers_menu(chat_id, text="Меню Farmers:"):
     keyboard = [
         [{"text": FARM_MENU_KING}, {"text": FARM_MENU_BM}],
         [{"text": FARM_MENU_FP}, {"text": FARM_MENU_ASSEMBLIES}],
-        [{"text": FARM_READY_FARMER_MENU}],
+        [{"text": FARM_READY_FARMER_MENU}, {"text": MENU_EMAILS}],
         [{"text": MENU_FARMER_STATS}],
         [{"text": BTN_BACK_TO_MENU}]
     ]
     tg_send_message(chat_id, text, keyboard)
-
 
 def send_farm_ready_farmer_menu(chat_id, text="Farm Kings для Farmers:"):
     keyboard = [
@@ -4226,6 +4263,7 @@ def send_admin_menu(chat_id, text="Меню Admin:", user_id=None):
     if user_id is not None and is_admin_farm(user_id):
         keyboard = [
             [{"text": ADMIN_FARMERS}, {"text": ADMIN_ALL_STATS}],
+            [{"text": ADMIN_ADD_EMAILS}],
             [{"text": BTN_BACK_FROM_ADMIN}]
         ]
     else:
@@ -4233,12 +4271,12 @@ def send_admin_menu(chat_id, text="Меню Admin:", user_id=None):
             [{"text": ADMIN_BACKUP}, {"text": ADMIN_UPDATE_5M}],
             [{"text": ADMIN_ACCOUNTANTS}, {"text": ADMIN_FARMERS}],
             [{"text": ADMIN_ALL_STATS}, {"text": ADMIN_BOT_CHECK}],
+            [{"text": ADMIN_ADD_EMAILS}],
             [{"text": ADMIN_SEND_STICKER}],
             [{"text": ADMIN_POLL}],
             [{"text": ADMIN_MESSAGE}],
             [{"text": BTN_BACK_FROM_ADMIN}]
         ]
-
     tg_send_message(chat_id, text, keyboard)
 
 def send_misc_menu(chat_id, text="Меню Прочее:"):
@@ -4731,6 +4769,7 @@ def send_admin_farmers_menu(chat_id, text="Admin / Фармеры:"):
     keyboard = [
         [{"text": ADMIN_ADD_FARM_KINGS}, {"text": ADMIN_ADD_FARM_BMS}],
         [{"text": ADMIN_ADD_FARM_FPS}],
+        [{"text": ADMIN_ADD_EMAILS}],
         [{"text": BTN_BACK_FROM_ADMIN_FARMERS}]
     ]
     tg_send_message(chat_id, text, keyboard)
@@ -4740,6 +4779,7 @@ def send_admin_accountants_menu(chat_id, text="Меню Акаунтеры:"):
         [{"text": ADMIN_ADD_ACCOUNTS}, {"text": ADMIN_ADD_KINGS}],
         [{"text": ADMIN_ADD_CRYPTO_KINGS}, {"text": ADMIN_ADD_BMS}],
         [{"text": ADMIN_ADD_FPS}, {"text": ADMIN_ADD_PIXELS}],
+        [{"text": ADMIN_ADD_EMAILS}],
         [{"text": BTN_BACK_FROM_ACCOUNTANTS}]
     ]
     tg_send_message(chat_id, text, keyboard)
@@ -11828,6 +11868,128 @@ def grist_all_table_ids(force=False):
     return ids
 
 
+
+def emails_table_id(force=False):
+    """Возвращает/создаёт отдельную Grist-таблицу Почты."""
+    key=f"table:{SHEET_EMAILS}"
+    now=time.time()
+    with grist_all_meta_lock:
+        cached=grist_all_meta.get(key)
+        if cached and not force and now-cached["at"]<GRIST_ALL_META_TTL:
+            return cached["value"]
+
+    ids=grist_all_table_ids(force=True)
+    for candidate in ids:
+        norm=_grist_normalize_name(candidate)
+        if norm in {_grist_normalize_name("Почты"), _grist_normalize_name("Emails")}:
+            with grist_all_meta_lock:
+                grist_all_meta[key]={"value":candidate,"at":now}
+            return candidate
+
+    columns=[
+        {"id":"Data","fields":{"label":"Данные","type":"Text"}},
+        {"id":"PurchaseDate","fields":{"label":"Дата покупки","type":"Text"}},
+        {"id":"Price","fields":{"label":"Цена","type":"Numeric"}},
+        {"id":"Supplier","fields":{"label":"У кого купили","type":"Text"}},
+        {"id":"Status","fields":{"label":"Статус","type":"Text"}},
+        {"id":"Buyer","fields":{"label":"Кому передали","type":"Text"}},
+        {"id":"TransferDate","fields":{"label":"Дата передачи","type":"Text"}},
+        {"id":"TakenBy","fields":{"label":"Кто взял","type":"Text"}},
+    ]
+
+    last_error=None
+    for candidate_id in ("Почты","Emails"):
+        try:
+            _grist_request(
+                "POST",
+                f"/api/docs/{GRIST_DOC_ID}/tables",
+                payload={"tables":[{"id":candidate_id,"columns":columns}]},
+                timeout=60,
+            )
+            ids=grist_all_table_ids(force=True)
+            if candidate_id in ids:
+                with grist_all_meta_lock:
+                    grist_all_meta[key]={"value":candidate_id,"at":time.time()}
+                    grist_all_meta.pop(f"cols:{SHEET_EMAILS}",None)
+                return candidate_id
+        except Exception as e:
+            last_error=e
+
+    raise RuntimeError(f"Не удалось создать таблицу Почты в Grist: {last_error}")
+
+
+def ensure_emails_table():
+    table_id=emails_table_id()
+    cols=grist_columns_for_sheet(SHEET_EMAILS,force=True)
+    if len(cols)<8:
+        raise RuntimeError(f"Таблица Почты сломана: колонок {len(cols)}, нужно 8.")
+    return table_id
+
+
+def send_emails_menu(chat_id, text="📧 Почты:"):
+    keyboard=[
+        [{"text":EMAILS_GET}],
+        [{"text":EMAILS_BACK}],
+    ]
+    tg_send_message(chat_id,text,keyboard)
+
+
+def add_emails_bulk(lines):
+    ensure_emails_table()
+    values=[str(x).strip() for x in (lines or []) if str(x).strip()]
+    if not values:
+        return 0
+    today=datetime.now(MOSCOW_TZ).strftime("%d/%m/%Y")
+    rows=[[value,today,0,"0","free","","",""] for value in values]
+    grist_append_all(SHEET_EMAILS,rows)
+    return len(rows)
+
+
+def issue_emails_bulk(count_needed, department, username=None):
+    ensure_emails_table()
+    try:
+        count_needed=int(count_needed)
+    except Exception:
+        raise RuntimeError("Количество почт должно быть числом.")
+    if count_needed<=0:
+        raise RuntimeError("Количество почт должно быть больше нуля.")
+
+    records=grist_free_records_by_status_pos(SHEET_EMAILS,4,limit=count_needed)
+    if len(records)<count_needed:
+        raise RuntimeError(f"Недостаточно свободных почт. Доступно: {len(records)}")
+
+    today=datetime.now(MOSCOW_TZ).strftime("%d/%m/%Y")
+    who=f"@{username}" if username else "без username"
+    entries=[]
+    issued=[]
+    for rec in records[:count_needed]:
+        row=ensure_row_len(grist_record_to_sheet_row(SHEET_EMAILS,rec),8)
+        data=str(row[0] or "").strip()
+        issue_row=make_issue_row(
+            name=data,
+            issue_type="ПОЧТА",
+            purchase_date=row[1],
+            price=normalize_numeric_for_sheet(row[2]),
+            transfer_date=today,
+            supplier=row[3],
+            buyer="TEAM",
+            status="ok",
+            department=department,
+        )
+        entries.append({
+            "sheet_name":SHEET_EMAILS,
+            "record_id":int(rec["id"]),
+            "status_pos":4,
+            "fields_by_pos":{4:"taken",5:"TEAM",6:today,7:who},
+            "issue_row":issue_row,
+        })
+        issued.append(data)
+
+    with issue_lock:
+        grist_atomic_batch_issue(entries)
+    return issued
+
+
 def grist_table_id_for_sheet(sheet_name, force=False):
     key = f"table:{sheet_name}"
     now = time.time()
@@ -11836,7 +11998,9 @@ def grist_table_id_for_sheet(sheet_name, force=False):
         if cached and not force and now - cached["at"] < GRIST_ALL_META_TTL:
             return cached["value"]
 
-    if sheet_name == SHEET_CRYPTO_KINGS:
+    if sheet_name == SHEET_EMAILS:
+        table_id = emails_table_id(force=force)
+    elif sheet_name == SHEET_CRYPTO_KINGS:
         table_id = grist_crypto_table_id(force=force)
     else:
         ids = grist_all_table_ids(force=force)
@@ -19036,6 +19200,7 @@ def handle_message(msg):
             FARM_MENU_KING, FARM_MENU_BM, FARM_MENU_FP, FARM_MENU_ASSEMBLIES,
             FARM_READY_FARMER_MENU, FARM_READY_ACCOUNTS_MENU,
             FARM_READY_FARMER_SEND, FARM_READY_FARMER_VIEW, FARM_READY_FARMER_EDIT,
+            MENU_EMAILS, EMAILS_GET, EMAILS_BACK, ADMIN_ADD_EMAILS,
             FARM_READY_ACCOUNTS_ISSUE, FARM_READY_ACCOUNTS_FREE,
             FARM_READY_BACK_FARMERS, FARM_READY_BACK_ACCOUNTS,
             FARM_READY_STAGE_META_BTN, FARM_READY_STAGE_NO_META_BTN,
@@ -19066,6 +19231,41 @@ def handle_message(msg):
             return
 
         state = get_state(user_id)
+
+
+        if state.get("mode") == "awaiting_emails_add":
+            lines=[line.strip() for line in str(text or "").splitlines() if line.strip()]
+            if not lines:
+                tg_send_message(chat_id,"Список пустой. Отправь данные почт, каждые с новой строки.")
+                return
+            count=add_emails_bulk(lines)
+            clear_state(user_id)
+            tg_send_message(chat_id,f"✅ Добавлено почт: {count}")
+            send_admin_menu(chat_id,user_id=user_id)
+            return
+
+        if state.get("mode") == "awaiting_emails_count":
+            try:
+                count_needed=int(str(text).strip())
+            except Exception:
+                tg_send_message(chat_id,"Укажи количество числом, например 5.")
+                return
+            if count_needed<=0:
+                tg_send_message(chat_id,"Количество должно быть больше нуля.")
+                return
+            origin=str(state.get("mail_origin","") or "А").strip()
+            try:
+                issued=issue_emails_bulk(count_needed,origin,username=username)
+            except Exception as e:
+                tg_send_message(chat_id,f"❌ {humanize_storage_error(e)}")
+                return
+            clear_state(user_id)
+            for data in issued:
+                tg_send_long_message(chat_id,data)
+            tg_send_message(chat_id,f"✅ Выдано почт: {len(issued)}\nКому передали: TEAM")
+            set_state(user_id,{"mail_origin":origin})
+            send_emails_menu(chat_id)
+            return
 
         # ========= БАЗОВЫЕ КОМАНДЫ =========
         if text in ["/start", "/menu"]:
@@ -19908,6 +20108,7 @@ def handle_message(msg):
                 return
 
             clear_state(user_id)
+            set_state(user_id,{"mail_origin":"А"})
             send_accounts_main_menu(chat_id)
             return
 
@@ -19917,6 +20118,7 @@ def handle_message(msg):
                 return
 
             clear_state(user_id)
+            set_state(user_id,{"mail_origin":"Ф"})
             send_farmers_menu(chat_id)
             return
 
@@ -20071,7 +20273,7 @@ def handle_message(msg):
 
 
         if text == FARM_READY_FARMER_EDIT:
-            if not (is_admin(user_id) or is_farmers_role(user_id)):
+            if not (is_admin(user_id) or is_farmers_user(user_id)):
                 tg_send_message(chat_id, "У вас нет доступа.")
                 return
 
@@ -20089,10 +20291,9 @@ def handle_message(msg):
                 send_farm_ready_farmer_menu(chat_id)
                 return
 
-            tg_send_inline_keyboard(
+            tg_send_inline_message(
                 chat_id,
-                "✏️ Выбери Farm King, у которого нужно поменять "
-                "актуальное название в Octo:",
+                "✏️ Выбери Farm King для редактирования:",
                 build_farmer_ready_edit_buttons(
                     user_id,
                     username
@@ -20481,6 +20682,54 @@ def handle_message(msg):
                 tg_send_message(chat_id, "Ошибка создания бэкапа.")
 
             send_admin_menu(chat_id, "Меню Admin:")
+            return
+
+        if text == MENU_EMAILS:
+            origin=str(state.get("mail_origin","") or "").strip()
+            if not origin:
+                if is_farmers_user(user_id) and not is_accounts_user(user_id):
+                    origin="Ф"
+                elif is_accounts_user(user_id) and not is_farmers_user(user_id):
+                    origin="А"
+                else:
+                    origin="А"
+            clear_state(user_id)
+            set_state(user_id,{"mail_origin":origin})
+            ensure_emails_table()
+            send_emails_menu(chat_id)
+            return
+
+        if text == EMAILS_GET:
+            origin=str(state.get("mail_origin","") or "").strip() or "А"
+            set_state(user_id,{"mode":"awaiting_emails_count","mail_origin":origin})
+            tg_send_message(chat_id,"Сколько почт нужно?")
+            return
+
+        if text == EMAILS_BACK:
+            origin=str(state.get("mail_origin","") or "").strip()
+            clear_state(user_id)
+            if origin=="Ф":
+                set_state(user_id,{"mail_origin":"Ф"})
+                send_farmers_menu(chat_id)
+            else:
+                set_state(user_id,{"mail_origin":"А"})
+                send_accounts_main_menu(chat_id)
+            return
+
+        if text == ADMIN_ADD_EMAILS:
+            if not is_admin(user_id):
+                tg_send_message(chat_id,"У вас нет доступа.")
+                return
+            ensure_emails_table()
+            set_state(user_id,{"mode":"awaiting_emails_add"})
+            tg_send_message(
+                chat_id,
+                "Отправь почты одним сообщением. Каждые данные почты — с новой строки.\n\n"
+                "Бот сам поставит:\n"
+                f"• дата покупки — {datetime.now(MOSCOW_TZ).strftime('%d/%m/%Y')}\n"
+                "• цена — 0\n"
+                "• у кого купили — 0"
+            )
             return
 
         if text == ADMIN_ADD_ACCOUNTS:
@@ -24662,49 +24911,58 @@ def handle_callback_query(callback_query):
             return jsonify({"ok": True})
 
         if data.startswith("farm_ready_edit:"):
-            record_id = int(data.split(":", 1)[1])
-
-            rec = get_editable_farm_king_by_record_id(
-                record_id,
-                user_id,
-                username
-            )
-
+            record_id=int(data.split(":",1)[1])
+            rec=get_editable_farm_king_by_record_id(record_id,user_id,username)
             if not rec:
-                tg_answer_callback_query(
-                    callback_id,
-                    "Farm King уже недоступен"
-                )
-                return jsonify({"ok": True})
+                tg_answer_callback_query(callback_id,"Farm King уже недоступен")
+                return jsonify({"ok":True})
 
-            row = ensure_row_len(
-                grist_record_to_sheet_row(SHEET_FARM_KINGS, rec),
-                13
-            )
-            fields = rec.get("fields") or {}
-            current_octo = str(
-                fields.get(FARM_READY_COL_OCTO_COMMENT, "") or ""
-            ).strip()
-            farm_stage = str(
-                fields.get(FARM_READY_COL_STAGE, "") or ""
-            ).strip()
+            row=ensure_row_len(grist_record_to_sheet_row(SHEET_FARM_KINGS,rec),13)
+            fields=rec.get("fields") or {}
+            current_octo=str(fields.get(FARM_READY_COL_OCTO_COMMENT,"") or "").strip()
+            farm_stage=str(fields.get(FARM_READY_COL_STAGE,"") or "").strip()
 
-            set_state(user_id, {
-                "mode": "farm_ready_farmer_edit_octo",
-                "farm_ready_edit_record_id": record_id,
-            })
-
+            buttons=[
+                [{"text":"✏️ Поменять актуальное название","callback_data":f"farm_ready_edit_name:{record_id}"}],
+                [{"text":"↩️ Забрать кинг обратно","callback_data":f"farm_ready_take_back:{record_id}"}],
+                [{"text":"⬅️ Назад","callback_data":"farm_ready_edit_back"}],
+            ]
             tg_answer_callback_query(callback_id)
             tg_edit_message_text(
-                chat_id,
-                message_id,
-                f"✏️ Farm King: {row[0]}\n"
+                chat_id,message_id,
+                f"👑 Farm King: {row[0]}\n"
                 f"🌱 Фарм: {farm_stage or 'не указан'}\n"
                 f"💬 Сейчас в Octo: {current_octo or 'не указано'}\n\n"
-                "Отправь новое актуальное название профиля в Octo.",
-                []
+                "Что изменить?",
+                buttons
             )
-            return jsonify({"ok": True})
+            return jsonify({"ok":True})
+
+        if data.startswith("farm_ready_edit_name:"):
+            record_id=int(data.split(":",1)[1])
+            rec=get_editable_farm_king_by_record_id(record_id,user_id,username)
+            if not rec:
+                tg_answer_callback_query(callback_id,"Farm King уже недоступен")
+                return jsonify({"ok":True})
+            row=ensure_row_len(grist_record_to_sheet_row(SHEET_FARM_KINGS,rec),13)
+            fields=rec.get("fields") or {}
+            current_octo=str(fields.get(FARM_READY_COL_OCTO_COMMENT,"") or "").strip()
+            set_state(user_id,{"mode":"farm_ready_farmer_edit_octo","farm_ready_edit_record_id":record_id})
+            tg_answer_callback_query(callback_id)
+            tg_edit_message_text(
+                chat_id,message_id,
+                f"✏️ Farm King: {row[0]}\n"
+                f"💬 Сейчас в Octo: {current_octo or 'не указано'}\n\n"
+                "Отправь новое актуальное название профиля в Octo.",[]
+            )
+            return jsonify({"ok":True})
+
+        if data.startswith("farm_ready_take_back:"):
+            record_id=int(data.split(":",1)[1])
+            ok,message=take_back_farm_king_from_accounts(record_id,user_id,username)
+            tg_answer_callback_query(callback_id,"Готово" if ok else "Ошибка")
+            tg_edit_message_text(chat_id,message_id,message if ok else f"❌ {message}",[])
+            return jsonify({"ok":True})
 
         if data.startswith("asm_util:"):
             row_index=int(data.split(":",1)[1])
