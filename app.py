@@ -11947,25 +11947,45 @@ def add_emails_bulk(lines):
 
 def issue_emails_bulk(count_needed, department, username=None):
     ensure_emails_table()
+
     try:
-        count_needed=int(count_needed)
+        count_needed = int(count_needed)
     except Exception:
         raise RuntimeError("Количество почт должно быть числом.")
-    if count_needed<=0:
+
+    if count_needed <= 0:
         raise RuntimeError("Количество почт должно быть больше нуля.")
 
-    records=grist_free_records_by_status_pos(SHEET_EMAILS,4,limit=count_needed)
-    if len(records)<count_needed:
-        raise RuntimeError(f"Недостаточно свободных почт. Доступно: {len(records)}")
+    records = grist_free_records_by_status_pos(
+        SHEET_EMAILS,
+        4,
+        limit=count_needed
+    )
 
-    today=datetime.now(MOSCOW_TZ).strftime("%d/%m/%Y")
-    who=f"@{username}" if username else "без username"
-    entries=[]
-    issued=[]
+    if len(records) < count_needed:
+        raise RuntimeError(
+            f"Недостаточно свободных почт. Доступно: {len(records)}"
+        )
+
+    today = datetime.now(MOSCOW_TZ).strftime("%d/%m/%Y")
+    who = f"@{username}" if username else "без username"
+
+    entries = []
+    issued = []
+
     for rec in records[:count_needed]:
-        row=ensure_row_len(grist_record_to_sheet_row(SHEET_EMAILS,rec),8)
-        data=str(row[0] or "").strip()
-        issue_row=make_issue_row(
+        row = ensure_row_len(
+            grist_record_to_sheet_row(SHEET_EMAILS, rec),
+            8
+        )
+
+        data = str(row[0] or "").strip()
+
+        # Колонка "У кого купили" в базе Почты.
+        # Например: firstmail.
+        mail_source = str(row[3] or "").strip()
+
+        issue_row = make_issue_row(
             name=data,
             issue_type="ПОЧТА",
             purchase_date=row[1],
@@ -11976,19 +11996,29 @@ def issue_emails_bulk(count_needed, department, username=None):
             status="ok",
             department=department,
         )
+
         entries.append({
-            "sheet_name":SHEET_EMAILS,
-            "record_id":int(rec["id"]),
-            "status_pos":4,
-            "fields_by_pos":{4:"taken",5:"TEAM",6:today,7:who},
-            "issue_row":issue_row,
+            "sheet_name": SHEET_EMAILS,
+            "record_id": int(rec["id"]),
+            "status_pos": 4,
+            "fields_by_pos": {
+                4: "taken",
+                5: "TEAM",
+                6: today,
+                7: who
+            },
+            "issue_row": issue_row,
         })
-        issued.append(data)
+
+        issued.append({
+            "data": data,
+            "mail_source": mail_source or "не указано",
+        })
 
     with issue_lock:
         grist_atomic_batch_issue(entries)
-    return issued
 
+    return issued
 
 def grist_table_id_for_sheet(sheet_name, force=False):
     key = f"table:{sheet_name}"
@@ -19260,9 +19290,17 @@ def handle_message(msg):
                 tg_send_message(chat_id,f"❌ {humanize_storage_error(e)}")
                 return
             clear_state(user_id)
-            for data in issued:
-                tg_send_long_message(chat_id,data)
-            tg_send_message(chat_id,f"✅ Выдано почт: {len(issued)}\nКому передали: TEAM")
+            for item in issued:
+                tg_send_long_message(
+                    chat_id,
+                    f"{item['data']}\n\n"
+                    f"📧 Почта - {item['mail_source']}"
+                )
+            tg_send_message(
+                chat_id,
+                f"✅ Выдано почт: {len(issued)}\n"
+                "Кому передали: TEAM"
+            )
             set_state(user_id,{"mail_origin":origin})
             send_emails_menu(chat_id)
             return
