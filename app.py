@@ -16296,6 +16296,175 @@ def find_king_in_base_by_name(king_name):
     return None
 
 
+
+KING_BAN_BULK_MAX = 100
+KING_BAN_BULK_MAX_CHARS = 3900
+
+
+def parse_bulk_king_names(text):
+    raw = str(text or "").strip()
+
+    if not raw:
+        return False, "Список пустой.", []
+
+    if len(raw) > KING_BAN_BULK_MAX_CHARS:
+        return False, (
+            "Сообщение слишком длинное. Разбей список на несколько сообщений. "
+            f"За одну пачку отправляй не больше {KING_BAN_BULK_MAX} king."
+        ), []
+
+    names = [
+        line.strip()
+        for line in raw.splitlines()
+        if line.strip()
+    ]
+
+    if not names:
+        return False, "Список пустой.", []
+
+    if len(names) > KING_BAN_BULK_MAX:
+        return False, (
+            f"За одну пачку можно отправить максимум "
+            f"{KING_BAN_BULK_MAX} king.\n"
+            f"Сейчас строк: {len(names)}.\n"
+            "Разбей список на несколько пачек."
+        ), []
+
+    seen = set()
+    duplicates = []
+
+    for name in names:
+        key = name.lower()
+        if key in seen:
+            duplicates.append(name)
+        seen.add(key)
+
+    if duplicates:
+        return False, (
+            "В списке есть повторяющиеся названия:\n"
+            + "\n".join(f"• {x}" for x in duplicates[:20])
+        ), []
+
+    return True, "", names
+
+
+def validate_account_kings_for_bulk_ban(king_names):
+    valid = []
+    missing = []
+
+    for king_name in king_names:
+        normal = find_king_in_base_by_name(king_name)
+        crypto = find_crypto_king_in_base_by_name(king_name)
+
+        if not normal and not crypto:
+            missing.append(king_name)
+            continue
+
+        source = "crypto" if crypto and not normal else "normal"
+        valid.append({
+            "name": king_name,
+            "source": source,
+        })
+
+    return valid, missing
+
+
+def validate_farm_kings_for_bulk_ban(king_names):
+    valid = []
+    missing = []
+
+    for king_name in king_names:
+        found = find_farm_king_in_base_by_name(king_name)
+
+        if not found:
+            missing.append(king_name)
+            continue
+
+        valid.append(king_name)
+
+    return valid, missing
+
+
+def process_account_kings_bulk_ban(items, comment_text, ban_timing):
+    success = []
+    failed = []
+
+    for item in items or []:
+        king_name = str(item.get("name", "")).strip()
+        source = str(item.get("source", "normal")).strip()
+
+        try:
+            if source == "crypto":
+                ok, message = return_crypto_king_to_ban(
+                    king_name,
+                    comment_text,
+                    ban_timing
+                )
+            else:
+                ok, message = return_king_to_ban(
+                    king_name,
+                    comment_text,
+                    ban_timing
+                )
+        except Exception as e:
+            ok = False
+            message = humanize_storage_error(e)
+
+        if ok:
+            success.append(king_name)
+        else:
+            failed.append((king_name, message))
+
+    return success, failed
+
+
+def process_farm_kings_bulk_ban(king_names, comment_text, ban_timing):
+    success = []
+    failed = []
+
+    for king_name in king_names or []:
+        try:
+            ok, message = return_farm_king_to_ban(
+                king_name,
+                comment_text,
+                ban_timing
+            )
+        except Exception as e:
+            ok = False
+            message = humanize_storage_error(e)
+
+        if ok:
+            success.append(king_name)
+        else:
+            failed.append((king_name, message))
+
+    return success, failed
+
+
+def build_bulk_king_ban_result(title, success, failed, missing=None):
+    missing = list(missing or [])
+    lines = [title, ""]
+
+    if success:
+        lines.append(f"✅ Переведено в ban: {len(success)}")
+        lines.extend(f"• {name}" for name in success)
+
+    if failed:
+        if len(lines) > 2:
+            lines.append("")
+        lines.append(f"❌ Не удалось: {len(failed)}")
+        for name, reason in failed:
+            lines.append(f"• {name} — {reason}")
+
+    if missing:
+        if len(lines) > 2:
+            lines.append("")
+        lines.append(f"🔎 Не найдено: {len(missing)}")
+        lines.extend(f"• {name}" for name in missing)
+
+    return "\n".join(lines)
+
+
 def return_king_to_ban(king_name, comment_text="", ban_timing=""):
     base_info = find_king_in_base_by_name(king_name)
     if not base_info:
@@ -21013,11 +21182,15 @@ def handle_message(msg):
                     chat_id,
                     user_id,
                     {
-                        "return_king_name": state.get("return_king_name", ""),
-                        "return_king_source": state.get("return_king_source", "normal"),
+                        "return_king_items": list(
+                            state.get("return_king_items") or []
+                        ),
+                        "return_king_missing": list(
+                            state.get("return_king_missing") or []
+                        ),
                         "ban_reason_mode": "awaiting_ban_reason_king"
                     },
-                    "Напиши причину бана для кинга."
+                    "Напиши одну причину бана для всей пачки king."
                 )
                 return
 
@@ -21098,7 +21271,7 @@ def handle_message(msg):
         if text == SUBMENU_SEARCH_KING:
             if state.get("last_farmers_section") == "kings":
                 update_state(user_id, mode="awaiting_farm_search_king_name")
-                send_text_input_prompt(chat_id, "Впиши название кинга.")
+                send_text_input_prompt(chat_id, "Отправь название farm king или список farm king — каждое название с новой строки.\n\nМаксимум 100 king за одну пачку.")
                 return
 
             update_state(user_id, mode="awaiting_search_king_name")
@@ -21205,11 +21378,15 @@ def handle_message(msg):
                 chat_id,
                 user_id,
                 {
-                    "return_king_name": state.get("return_king_name", ""),
-                    "return_king_source": state.get("return_king_source", "normal"),
+                    "return_king_items": list(
+                        state.get("return_king_items") or []
+                    ),
+                    "return_king_missing": list(
+                        state.get("return_king_missing") or []
+                    ),
                     "ban_reason_mode": "awaiting_ban_reason_king"
                 },
-                "Напиши причину бана для кинга."
+                "Напиши одну причину бана для всей пачки king."
             )
             return
 
@@ -21761,7 +21938,7 @@ def handle_message(msg):
         if state.get("mode") == "awaiting_king_return_action":
             if text == BTN_RETURN_TO_BAN:
                 update_state(user_id, mode="awaiting_return_king_name")
-                send_text_input_prompt(chat_id, "Впиши название кинга, который нужно перевести в ban.")
+                send_text_input_prompt(chat_id, "Отправь название king или список king — каждое название с новой строки.\n\nМаксимум 100 king за одну пачку.")
                 return
 
             if text == BTN_RETURN_TO_FREE:
@@ -23079,24 +23256,28 @@ def handle_message(msg):
             return
             
         if state.get("mode") == "awaiting_return_king_name":
-            king_name = text.strip()
+            ok, error_text, king_names = parse_bulk_king_names(text)
 
-            if not king_name:
-                send_text_input_prompt(chat_id, "Впиши название кинга.")
+            if not ok:
+                send_text_input_prompt(chat_id, error_text)
                 return
 
-            normal_king = find_king_in_base_by_name(king_name)
-            crypto_king = find_crypto_king_in_base_by_name(king_name)
+            valid_items, missing = validate_account_kings_for_bulk_ban(
+                king_names
+            )
 
-            if not normal_king and not crypto_king:
+            if not valid_items:
                 clear_state(user_id)
-                send_kings_menu(chat_id, "Кинг не найден.")
+                send_kings_menu(
+                    chat_id,
+                    "Ни одного king из списка не найдено."
+                )
                 return
 
             set_state(user_id, {
                 "mode": "awaiting_return_king_confirm",
-                "return_king_name": king_name,
-                "return_king_source": "crypto" if crypto_king and not normal_king else "normal"
+                "return_king_items": valid_items,
+                "return_king_missing": missing,
             })
 
             keyboard = [
@@ -23104,9 +23285,20 @@ def handle_message(msg):
                 [{"text": MENU_CANCEL}]
             ]
 
+            message = (
+                f"⚠️ Будет переведено в ban king: {len(valid_items)}."
+            )
+
+            if missing:
+                message += (
+                    f"\nНе найдено: {len(missing)} — они будут пропущены."
+                )
+
+            message += "\n\nПодтвердить?"
+
             tg_send_message(
                 chat_id,
-                f"Внимание: кинг '{king_name}' будет перемещён в ban.\nПодтвердить?",
+                message,
                 keyboard
             )
             return
@@ -24028,26 +24220,33 @@ def handle_message(msg):
             return
 
         if state.get("mode") == "awaiting_farm_return_king_name":
-            king_name = text.strip()
+            ok, error_text, king_names = parse_bulk_king_names(text)
 
-            if not king_name:
-                send_text_input_prompt(chat_id, "Впиши название кинга.")
+            if not ok:
+                send_text_input_prompt(chat_id, error_text)
                 return
 
-            found = find_farm_king_in_base_by_name(king_name)
-            if not found:
+            valid_names, missing = validate_farm_kings_for_bulk_ban(
+                king_names
+            )
+
+            if not valid_names:
                 clear_state(user_id)
-                send_farm_kings_menu(chat_id, "Кинг не найден.")
+                send_farm_kings_menu(
+                    chat_id,
+                    "Ни одного farm king из списка не найдено."
+                )
                 return
 
             start_ban_reason_flow_direct(
                 chat_id,
                 user_id,
                 {
-                    "return_king_name": king_name,
+                    "return_farm_king_names": valid_names,
+                    "return_farm_king_missing": missing,
                     "ban_reason_mode": "awaiting_ban_reason_farm_king"
                 },
-                "Напиши причину бана для farm king."
+                "Напиши одну причину бана для всей пачки farm king."
             )
             return
 
@@ -24057,13 +24256,38 @@ def handle_message(msg):
             ban_timing = state.get("ban_timing", "")
 
             if not comment_text:
-                send_text_input_prompt(chat_id, "Напиши причину бана для farm king.")
+                send_text_input_prompt(
+                    chat_id,
+                    "Напиши причину бана для farm king."
+                )
                 return
 
-            king_name = state.get("return_king_name", "")
-            ok, message = return_farm_king_to_ban(king_name, comment_text, ban_timing)
+            king_names = list(
+                state.get("return_farm_king_names") or []
+            )
+            missing = list(
+                state.get("return_farm_king_missing") or []
+            )
+
+            success, failed = process_farm_kings_bulk_ban(
+                king_names,
+                comment_text,
+                ban_timing
+            )
+
             clear_state(user_id)
-            send_farm_kings_menu(chat_id, message)
+
+            tg_send_long_message(
+                chat_id,
+                build_bulk_king_ban_result(
+                    "Перевод farm king в ban завершён.",
+                    success,
+                    failed,
+                    missing
+                )
+            )
+
+            send_farm_kings_menu(chat_id, "Меню Farm King:")
             return
 
         # ========= СОСТОЯНИЯ: FARM BM =========
@@ -24262,20 +24486,36 @@ def handle_message(msg):
         if state.get("mode") == "awaiting_ban_reason_king":
             comment_text = text.strip()
             ban_timing = state.get("ban_timing", "")
+
             if not comment_text:
-                send_text_input_prompt(chat_id, "Напиши причину бана для кинга.")
+                send_text_input_prompt(
+                    chat_id,
+                    "Напиши причину бана для king."
+                )
                 return
 
-            king_name = state.get("return_king_name", "")
-            source = state.get("return_king_source", "normal")
+            items = list(state.get("return_king_items") or [])
+            missing = list(state.get("return_king_missing") or [])
 
-            if source == "crypto":
-                ok, message = return_crypto_king_to_ban(king_name, comment_text, ban_timing)
-            else:
-                ok, message = return_king_to_ban(king_name, comment_text, ban_timing)
+            success, failed = process_account_kings_bulk_ban(
+                items,
+                comment_text,
+                ban_timing
+            )
 
             clear_state(user_id)
-            send_kings_menu(chat_id, message)
+
+            tg_send_long_message(
+                chat_id,
+                build_bulk_king_ban_result(
+                    "Перевод king в ban завершён.",
+                    success,
+                    failed,
+                    missing
+                )
+            )
+
+            send_kings_menu(chat_id, "Меню кингов:")
             return
 
 
