@@ -11808,100 +11808,6 @@ def get_manager_stats_period():
     return start_date, end_date
 
 
-
-
-def get_stats_retention_deadline(start_date=None):
-    """До какого дня статистика выбранного месяца остаётся доступной."""
-    if start_date is None:
-        start_date, _ = get_manager_stats_period()
-
-    year = int(start_date.year)
-    month = int(start_date.month)
-
-    if month == 12:
-        return datetime(year + 1, 1, 9)
-
-    return datetime(year, month + 1, 9)
-
-
-def build_stats_retention_text():
-    start_date, _ = get_manager_stats_period()
-    deadline = get_stats_retention_deadline(start_date)
-    month_name = start_date.strftime('%m.%Y')
-    return (
-        f"Статистика за {month_name} сохраняется до "
-        f"{deadline.strftime('%d.%m.%Y')} включительно."
-    )
-
-
-def parse_farm_ready_transfer_date(value):
-    raw = str(value or '').strip()
-    if not raw:
-        return None
-
-    try:
-        dt = datetime.fromisoformat(raw.replace('Z', '+00:00'))
-        if dt.tzinfo is not None:
-            dt = dt.replace(tzinfo=None)
-        return dt
-    except Exception:
-        pass
-
-    return parse_sheet_date(raw)
-
-
-def get_farmer_user_ids_by_username(username):
-    target = str(username or '').strip().lstrip('@').lower()
-    result = set()
-
-    for user_id, stored_username in (FARMERS_USERS or {}).items():
-        stored = str(stored_username or '').strip().lstrip('@').lower()
-        if stored == target:
-            result.add(str(user_id))
-
-    return result
-
-
-def count_farmer_transferred_to_accounts(username, start_date, end_date):
-    """Сколько Farm Kings этот фармер передал Accounts в выбранном стат. месяце."""
-    ensure_farm_ready_columns()
-
-    target_username = '@' + str(username or '').strip().lstrip('@').lower()
-    target_ids = get_farmer_user_ids_by_username(username)
-
-    records = grist_query_records(
-        SHEET_FARM_KINGS,
-        limit=0,
-        sort='manualSort',
-    )
-
-    count = 0
-
-    for rec in records:
-        fields = rec.get('fields') or {}
-
-        farmer_id = str(
-            fields.get(FARM_READY_COL_FARMER_ID, '') or ''
-        ).strip()
-        farmer_username = str(
-            fields.get(FARM_READY_COL_FARMER_USERNAME, '') or ''
-        ).strip().lower()
-
-        belongs = farmer_username == target_username
-        if not belongs and farmer_id and farmer_id in target_ids:
-            belongs = True
-
-        if not belongs:
-            continue
-
-        transfer_dt = parse_farm_ready_transfer_date(
-            fields.get(FARM_READY_COL_TRANSFERRED_AT, '')
-        )
-
-        if transfer_dt and start_date <= transfer_dt < end_date:
-            count += 1
-
-    return count
 BAN_STORM_TYPES_ORDER = ["KING", "PIXEL", "БМ", "FP", "РК"]
 BAN_STORM_ALERT_THRESHOLDS = [30, 40, 50, 60, 70]
 BAN_STORM_ADMIN_IDS = [7573650707, 7681133609, 7953116439]
@@ -13206,7 +13112,119 @@ def build_issued_to_buyer_report_text(buyer_name):
     return "\n".join(lines).strip()
 
 
-def build_farmer_stats_summary_text(username):
+
+def get_stats_retention_deadline(start_date=None):
+    """Статистика месяца доступна до 9 числа следующего месяца включительно."""
+    if start_date is None:
+        start_date, _ = get_manager_stats_period()
+
+    if start_date.month == 12:
+        return datetime(start_date.year + 1, 1, 9)
+
+    return datetime(start_date.year, start_date.month + 1, 9)
+
+
+def build_stats_retention_text():
+    start_date, _ = get_manager_stats_period()
+    deadline = get_stats_retention_deadline(start_date)
+
+    return (
+        f"Статистика за {start_date.strftime('%m.%Y')} сохраняется до "
+        f"{deadline.strftime('%d.%m.%Y')} включительно."
+    )
+
+
+def parse_farm_transfer_datetime(value):
+    raw = str(value or "").strip()
+    if not raw:
+        return None
+
+    try:
+        dt = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        if dt.tzinfo is not None:
+            # Сравниваем по локальной календарной дате записи.
+            dt = dt.replace(tzinfo=None)
+        return dt
+    except Exception:
+        pass
+
+    return parse_sheet_date(raw)
+
+
+def resolve_farmer_user_id(username):
+    target = str(username or "").strip().lstrip("@").lower()
+
+    for user_id, stored_username in (FARMERS_USERS or {}).items():
+        stored = str(stored_username or "").strip().lstrip("@").lower()
+        if stored == target:
+            return str(user_id)
+
+    return ""
+
+
+def count_farmer_transferred_to_accounts(
+    username,
+    start_date,
+    end_date,
+    user_id=None
+):
+    """Считает только передачи КОНКРЕТНОГО фармера в выбранном месяце."""
+    ensure_farm_ready_columns()
+
+    farmer_id = str(user_id or "").strip() or resolve_farmer_user_id(username)
+    target_username = (
+        "@" + str(username or "").strip().lstrip("@").lower()
+    )
+
+    # Основной путь — точный Telegram ID.
+    # Это физически не позволяет захватить передачи других фармеров.
+    records = grist_query_records(
+        SHEET_FARM_KINGS,
+        filters=(
+            {FARM_READY_COL_FARMER_ID: farmer_id}
+            if farmer_id
+            else {}
+        ),
+        limit=0,
+        sort="manualSort",
+    )
+
+    count = 0
+
+    for rec in records:
+        fields = rec.get("fields") or {}
+
+        rec_farmer_id = str(
+            fields.get(FARM_READY_COL_FARMER_ID, "") or ""
+        ).strip()
+
+        rec_farmer_username = str(
+            fields.get(FARM_READY_COL_FARMER_USERNAME, "") or ""
+        ).strip().lower()
+
+        # Если ID известен — считаем ТОЛЬКО точное совпадение ID.
+        if farmer_id:
+            if rec_farmer_id != farmer_id:
+                continue
+        else:
+            # Fallback только для старых записей без сохранённого ID.
+            if rec_farmer_username != target_username:
+                continue
+
+        transfer_dt = parse_farm_transfer_datetime(
+            fields.get(FARM_READY_COL_TRANSFERRED_AT, "")
+        )
+
+        if (
+            transfer_dt is not None
+            and start_date <= transfer_dt < end_date
+        ):
+            count += 1
+
+    return count
+
+
+def build_farmer_stats_summary_text(username, user_id=None):
     if not username:
         return "Не указан username."
 
@@ -13218,10 +13236,12 @@ def build_farmer_stats_summary_text(username):
     farm_kings_count = 0
     farm_bms_count = 0
     farm_fps_count = 0
+
     transferred_to_accounts_count = count_farmer_transferred_to_accounts(
         username,
         start_date,
-        end_date
+        end_date,
+        user_id=user_id
     )
 
     farm_kings_rows = get_sheet_rows_cached(SHEET_FARM_KINGS)
@@ -13256,14 +13276,15 @@ def build_farmer_stats_summary_text(username):
 
     return (
         f"Статистика farmer {target_username}\n"
-        f"Период: {start_date.strftime('%d/%m/%Y')} - {end_date.strftime('%d/%m/%Y')}\n\n"
+        f"Период: {start_date.strftime('%d/%m/%Y')} - "
+        f"{end_date.strftime('%d/%m/%Y')}\n\n"
         f"Farm kings: {farm_kings_count}\n"
         f"Передал аккам: {transferred_to_accounts_count}\n"
         f"Farm BM: {farm_bms_count}\n"
         f"Farm FP: {farm_fps_count}"
     )
 
-def build_farmer_stats_text(username):
+def build_farmer_stats_text(username, user_id=None):
     if not username:
         return "У пользователя не указан username."
 
@@ -13271,10 +13292,12 @@ def build_farmer_stats_text(username):
     target_username = f"@{username}"
 
     start_date, end_date = get_manager_stats_period()
+
     transferred_to_accounts_count = count_farmer_transferred_to_accounts(
         username,
         start_date,
-        end_date
+        end_date,
+        user_id=user_id
     )
 
     farm_kings_rows = get_sheet_rows_cached(SHEET_FARM_KINGS)
@@ -13289,7 +13312,11 @@ def build_farmer_stats_text(username):
         who_took = str(row[8]).strip().lower()
         transfer_date = parse_sheet_date(row[6])
 
-        if who_took == target_username and transfer_date and start_date <= transfer_date < end_date:
+        if (
+            who_took == target_username
+            and transfer_date
+            and start_date <= transfer_date < end_date
+        ):
             farm_kings_lines.append(
                 f"{row[0]} | {transfer_date.strftime('%d/%m/%Y')} | {row[5]}"
             )
@@ -13302,7 +13329,11 @@ def build_farmer_stats_text(username):
         who_took = str(row[6]).strip().lower()
         transfer_date = parse_sheet_date(row[7])
 
-        if who_took == target_username and transfer_date and start_date <= transfer_date < end_date:
+        if (
+            who_took == target_username
+            and transfer_date
+            and start_date <= transfer_date < end_date
+        ):
             farm_bms_lines.append(
                 f"{row[0]} | {transfer_date.strftime('%d/%m/%Y')} | {row[5]}"
             )
@@ -13315,31 +13346,43 @@ def build_farmer_stats_text(username):
         who_took = str(row[7]).strip().lower()
         transfer_date = parse_sheet_date(row[8])
 
-        if who_took == target_username and transfer_date and start_date <= transfer_date < end_date:
+        if (
+            who_took == target_username
+            and transfer_date
+            and start_date <= transfer_date < end_date
+        ):
             farm_fps_lines.append(
                 f"{row[0]} | {transfer_date.strftime('%d/%m/%Y')} | {row[6]}"
             )
 
     text_parts = [
         f"Статистика farmers {target_username}",
-        f"Период: {start_date.strftime('%d/%m/%Y')} - {end_date.strftime('%d/%m/%Y')}",
-        ""
+        f"Период: {start_date.strftime('%d/%m/%Y')} - "
+        f"{end_date.strftime('%d/%m/%Y')}",
+        "",
+        f"Передал аккам: {transferred_to_accounts_count}",
+        "",
     ]
 
     text_parts.append(f"Farm kings: {len(farm_kings_lines)}")
-    text_parts.append(f"Передал аккам: {transferred_to_accounts_count}")
-    text_parts.extend(farm_kings_lines if farm_kings_lines else ["нет выдач"])
+    text_parts.extend(
+        farm_kings_lines if farm_kings_lines else ["нет выдач"]
+    )
     text_parts.append("")
 
     text_parts.append(f"Farm BM: {len(farm_bms_lines)}")
-    text_parts.extend(farm_bms_lines if farm_bms_lines else ["нет выдач"])
+    text_parts.extend(
+        farm_bms_lines if farm_bms_lines else ["нет выдач"]
+    )
     text_parts.append("")
 
     text_parts.append(f"Farm FP: {len(farm_fps_lines)}")
-    text_parts.extend(farm_fps_lines if farm_fps_lines else ["нет выдач"])
+    text_parts.extend(
+        farm_fps_lines if farm_fps_lines else ["нет выдач"]
+    )
 
     return "\n".join(text_parts)
-    
+
 def get_state(user_id):
     with state_lock:
         state = user_states.get(str(user_id), {})
@@ -18640,9 +18683,7 @@ def safe_replace_stats_message(chat_id, message_id, full_text, back_callback_dat
 def build_all_users_stats_messages():
     messages = []
 
-    messages.append(
-        "Статистика всех\n" + build_stats_retention_text()
-    )
+    messages.append("Статистика всех\n\n" + build_stats_retention_text())
 
     if ACCOUNTS_USERS:
         messages.append("=== ACCOUNTS ===")
@@ -18655,7 +18696,7 @@ def build_all_users_stats_messages():
     if FARMERS_USERS:
         messages.append("=== FARMERS ===")
         for user_id, username in FARMERS_USERS.items():
-            messages.append(build_farmer_stats_text(username))
+            messages.append(build_farmer_stats_text(username, user_id=user_id))
     else:
         messages.append("=== FARMERS ===")
         messages.append("Нет farmers пользователей.")
@@ -18663,10 +18704,7 @@ def build_all_users_stats_messages():
     return messages
 
 def send_all_users_stats(chat_id):
-    tg_send_message(
-        chat_id,
-        "Статистика всех\n\n" + build_stats_retention_text()
-    )
+    tg_send_message(chat_id, "Статистика всех\n\n" + build_stats_retention_text())
 
     if ACCOUNTS_USERS:
         tg_send_message(chat_id, "=== ACCOUNTS ===")
@@ -18685,7 +18723,7 @@ def send_all_users_stats(chat_id):
     if FARMERS_USERS:
         tg_send_message(chat_id, "=== FARMERS ===")
         for user_id, username in FARMERS_USERS.items():
-            summary_text = build_farmer_stats_summary_text(username)
+            summary_text = build_farmer_stats_summary_text(username, user_id=user_id)
 
             tg_send_inline_message(
                 chat_id,
