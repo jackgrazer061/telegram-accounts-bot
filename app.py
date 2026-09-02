@@ -11808,6 +11808,100 @@ def get_manager_stats_period():
     return start_date, end_date
 
 
+
+
+def get_stats_retention_deadline(start_date=None):
+    """До какого дня статистика выбранного месяца остаётся доступной."""
+    if start_date is None:
+        start_date, _ = get_manager_stats_period()
+
+    year = int(start_date.year)
+    month = int(start_date.month)
+
+    if month == 12:
+        return datetime(year + 1, 1, 9)
+
+    return datetime(year, month + 1, 9)
+
+
+def build_stats_retention_text():
+    start_date, _ = get_manager_stats_period()
+    deadline = get_stats_retention_deadline(start_date)
+    month_name = start_date.strftime('%m.%Y')
+    return (
+        f"Статистика за {month_name} сохраняется до "
+        f"{deadline.strftime('%d.%m.%Y')} включительно."
+    )
+
+
+def parse_farm_ready_transfer_date(value):
+    raw = str(value or '').strip()
+    if not raw:
+        return None
+
+    try:
+        dt = datetime.fromisoformat(raw.replace('Z', '+00:00'))
+        if dt.tzinfo is not None:
+            dt = dt.replace(tzinfo=None)
+        return dt
+    except Exception:
+        pass
+
+    return parse_sheet_date(raw)
+
+
+def get_farmer_user_ids_by_username(username):
+    target = str(username or '').strip().lstrip('@').lower()
+    result = set()
+
+    for user_id, stored_username in (FARMERS_USERS or {}).items():
+        stored = str(stored_username or '').strip().lstrip('@').lower()
+        if stored == target:
+            result.add(str(user_id))
+
+    return result
+
+
+def count_farmer_transferred_to_accounts(username, start_date, end_date):
+    """Сколько Farm Kings этот фармер передал Accounts в выбранном стат. месяце."""
+    ensure_farm_ready_columns()
+
+    target_username = '@' + str(username or '').strip().lstrip('@').lower()
+    target_ids = get_farmer_user_ids_by_username(username)
+
+    records = grist_query_records(
+        SHEET_FARM_KINGS,
+        limit=0,
+        sort='manualSort',
+    )
+
+    count = 0
+
+    for rec in records:
+        fields = rec.get('fields') or {}
+
+        farmer_id = str(
+            fields.get(FARM_READY_COL_FARMER_ID, '') or ''
+        ).strip()
+        farmer_username = str(
+            fields.get(FARM_READY_COL_FARMER_USERNAME, '') or ''
+        ).strip().lower()
+
+        belongs = farmer_username == target_username
+        if not belongs and farmer_id and farmer_id in target_ids:
+            belongs = True
+
+        if not belongs:
+            continue
+
+        transfer_dt = parse_farm_ready_transfer_date(
+            fields.get(FARM_READY_COL_TRANSFERRED_AT, '')
+        )
+
+        if transfer_dt and start_date <= transfer_dt < end_date:
+            count += 1
+
+    return count
 BAN_STORM_TYPES_ORDER = ["KING", "PIXEL", "БМ", "FP", "РК"]
 BAN_STORM_ALERT_THRESHOLDS = [30, 40, 50, 60, 70]
 BAN_STORM_ADMIN_IDS = [7573650707, 7681133609, 7953116439]
@@ -13124,6 +13218,11 @@ def build_farmer_stats_summary_text(username):
     farm_kings_count = 0
     farm_bms_count = 0
     farm_fps_count = 0
+    transferred_to_accounts_count = count_farmer_transferred_to_accounts(
+        username,
+        start_date,
+        end_date
+    )
 
     farm_kings_rows = get_sheet_rows_cached(SHEET_FARM_KINGS)
     for row in farm_kings_rows[1:]:
@@ -13159,6 +13258,7 @@ def build_farmer_stats_summary_text(username):
         f"Статистика farmer {target_username}\n"
         f"Период: {start_date.strftime('%d/%m/%Y')} - {end_date.strftime('%d/%m/%Y')}\n\n"
         f"Farm kings: {farm_kings_count}\n"
+        f"Передал аккам: {transferred_to_accounts_count}\n"
         f"Farm BM: {farm_bms_count}\n"
         f"Farm FP: {farm_fps_count}"
     )
@@ -13171,6 +13271,11 @@ def build_farmer_stats_text(username):
     target_username = f"@{username}"
 
     start_date, end_date = get_manager_stats_period()
+    transferred_to_accounts_count = count_farmer_transferred_to_accounts(
+        username,
+        start_date,
+        end_date
+    )
 
     farm_kings_rows = get_sheet_rows_cached(SHEET_FARM_KINGS)
     farm_bms_rows = get_sheet_rows_cached(SHEET_FARM_BMS)
@@ -13222,6 +13327,7 @@ def build_farmer_stats_text(username):
     ]
 
     text_parts.append(f"Farm kings: {len(farm_kings_lines)}")
+    text_parts.append(f"Передал аккам: {transferred_to_accounts_count}")
     text_parts.extend(farm_kings_lines if farm_kings_lines else ["нет выдач"])
     text_parts.append("")
 
@@ -18534,7 +18640,9 @@ def safe_replace_stats_message(chat_id, message_id, full_text, back_callback_dat
 def build_all_users_stats_messages():
     messages = []
 
-    messages.append("Статистика всех")
+    messages.append(
+        "Статистика всех\n" + build_stats_retention_text()
+    )
 
     if ACCOUNTS_USERS:
         messages.append("=== ACCOUNTS ===")
@@ -18555,7 +18663,10 @@ def build_all_users_stats_messages():
     return messages
 
 def send_all_users_stats(chat_id):
-    tg_send_message(chat_id, "Статистика всех")
+    tg_send_message(
+        chat_id,
+        "Статистика всех\n\n" + build_stats_retention_text()
+    )
 
     if ACCOUNTS_USERS:
         tg_send_message(chat_id, "=== ACCOUNTS ===")
