@@ -1116,7 +1116,7 @@ def transfer_farm_kings_to_accounts_bulk(
     user_id,
     username
 ):
-    """Передаёт всю пачку аккаунтерам одним Grist /apply."""
+    """Передаёт всю пачку Accounts. Дата передачи = фактический момент передачи."""
     king_names = [
         str(x or "").strip()
         for x in (king_names or [])
@@ -1143,21 +1143,17 @@ def transfer_farm_kings_to_accounts_bulk(
         user_id,
         username
     )
-
     if not ok:
         return False, reason
 
-    now_iso = datetime.now(MOSCOW_TZ).isoformat(
-        timespec="seconds"
-    )
+    # ОДНА актуальная дата именно этого действия.
+    transferred_at = datetime.now(MOSCOW_TZ).isoformat(timespec="seconds")
 
     actions = []
     result_lines = []
 
     for king_name, octo_name, found in zip(
-        king_names,
-        octo_names,
-        validated
+        king_names, octo_names, validated
     ):
         farmer_username = (
             f"@{username}"
@@ -1171,7 +1167,7 @@ def transfer_farm_kings_to_accounts_bulk(
                 {
                     FARM_READY_COL_STAGE: farm_stage,
                     FARM_READY_COL_STATUS: "ready",
-                    FARM_READY_COL_TRANSFERRED_AT: now_iso,
+                    FARM_READY_COL_TRANSFERRED_AT: transferred_at,
                     FARM_READY_COL_FARMER_ID: str(user_id),
                     FARM_READY_COL_FARMER_USERNAME: farmer_username,
                     FARM_READY_COL_BUYER: "",
@@ -1187,19 +1183,19 @@ def transfer_farm_kings_to_accounts_bulk(
             f"  💬 Octo: {octo_name}"
         )
 
-    # Вся пачка одной транзакцией Grist.
     grist_apply(actions)
     grist_all_mark_stale(SHEET_FARM_KINGS)
 
     return True, (
         f"✅ Передано Farm Kings: {len(king_names)}\n"
-        f"🌱 Фарм: {farm_stage}\n\n"
+        f"🌱 Фарм: {farm_stage}\n"
+        f"📅 Передано Accounts: "
+        f"{datetime.now(MOSCOW_TZ).strftime('%d.%m.%Y %H:%M')}\n\n"
         + "\n".join(result_lines)
         + "\n\n"
         "⚠️ ВАЖНО: вручную поставь ВСЕМ этим профилям "
         "в Octo тег AccountManagers."
     )
-
 
 def transfer_farm_king_to_accounts(
     king_name,
@@ -1209,19 +1205,19 @@ def transfer_farm_king_to_accounts(
     username
 ):
     found = find_farm_ready_source_by_name(king_name)
-    ok, reason = farmer_can_transfer_farm_king(found, user_id, username)
-
+    ok, reason = farmer_can_transfer_farm_king(
+        found, user_id, username
+    )
     if not ok:
         return False, reason
 
     octo_comment = str(octo_comment or "").strip()
-
     if not octo_comment:
         return False, (
             "Комментарий пустой. Укажи актуальное название профиля в Octo."
         )
 
-    now_iso = datetime.now(MOSCOW_TZ).isoformat(timespec="seconds")
+    transferred_at = datetime.now(MOSCOW_TZ).isoformat(timespec="seconds")
     farmer_username = (
         f"@{username}"
         if username
@@ -1233,7 +1229,7 @@ def transfer_farm_king_to_accounts(
         {
             FARM_READY_COL_STAGE: farm_stage,
             FARM_READY_COL_STATUS: "ready",
-            FARM_READY_COL_TRANSFERRED_AT: now_iso,
+            FARM_READY_COL_TRANSFERRED_AT: transferred_at,
             FARM_READY_COL_FARMER_ID: str(user_id),
             FARM_READY_COL_FARMER_USERNAME: farmer_username,
             FARM_READY_COL_BUYER: "",
@@ -1249,6 +1245,8 @@ def transfer_farm_king_to_accounts(
     return True, (
         f"✅ Farm King {king_name} передан аккаунтерам.\n"
         f"🌱 Фарм: {farm_stage}\n"
+        f"📅 Передано Accounts: "
+        f"{datetime.now(MOSCOW_TZ).strftime('%d.%m.%Y %H:%M')}\n"
         f"💬 Комментарий для аккаунтера: {octo_comment}\n\n"
         "⚠️ ВАЖНО: зайди в Octo и вручную поставь этому профилю "
         "тег AccountManagers."
@@ -1755,7 +1753,7 @@ def issue_ready_farm_king_to_buyer(
         ), None
 
     today = datetime.now(MOSCOW_TZ).strftime("%d/%m/%Y")
-    now_iso = datetime.now(MOSCOW_TZ).isoformat(timespec="seconds")
+    buyer_issued_at = datetime.now(MOSCOW_TZ).isoformat(timespec="seconds")
     who = f"@{account_username}" if account_username else "без username"
 
     issue_row = make_issue_row(
@@ -1776,12 +1774,8 @@ def issue_ready_farm_king_to_buyer(
         {
             FARM_READY_COL_STATUS: "issued",
             FARM_READY_COL_BUYER: buyer,
-            FARM_READY_COL_BUYER_ISSUED_AT: now_iso,
+            FARM_READY_COL_BUYER_ISSUED_AT: buyer_issued_at,
             FARM_READY_COL_ACCOUNT_ISSUER: who,
-        },
-        base_fields_by_pos={
-            5: buyer,
-            6: today,
         },
     )
 
@@ -1809,6 +1803,7 @@ def issue_ready_farm_king_to_buyer(
         f"🌱 Фарм: {farm_stage}\n"
         f"💵 Цена: {format_issue_price(row[2])}\n"
         f"👨‍💻 Байер: {buyer}\n"
+        f"📅 Выдано байеру: {datetime.now(MOSCOW_TZ).strftime('%d.%m.%Y %H:%M')}\n"
         f"♻️ Старая выдача на farm удалена\n\n"
         f"💬 Комментарий от фармера:\n"
         f"{octo_comment or 'Актуальное название в Octo не указано.'}"
