@@ -13130,21 +13130,63 @@ def build_stats_retention_text():
 
 
 def parse_farm_transfer_datetime(value):
+    if value is None or value == "":
+        return None
+
+    # Grist DateTime иногда приходит числом Unix timestamp.
+    if isinstance(value, (int, float)):
+        try:
+            ts = float(value)
+
+            # На случай миллисекунд.
+            if ts > 10_000_000_000:
+                ts /= 1000.0
+
+            return datetime.fromtimestamp(
+                ts,
+                tz=MOSCOW_TZ
+            ).replace(tzinfo=None)
+        except Exception:
+            return None
+
     raw = str(value or "").strip()
     if not raw:
         return None
 
+    # Число, пришедшее строкой.
     try:
-        dt = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        if re.fullmatch(r"-?\d+(?:\.\d+)?", raw):
+            ts = float(raw)
+
+            if ts > 10_000_000_000:
+                ts /= 1000.0
+
+            return datetime.fromtimestamp(
+                ts,
+                tz=MOSCOW_TZ
+            ).replace(tzinfo=None)
+    except Exception:
+        pass
+
+    # ISO:
+    # 2026-08-22T13:45:24+03:00
+    # 2026-08-22T10:45:24Z
+    try:
+        dt = datetime.fromisoformat(
+            raw.replace("Z", "+00:00")
+        )
+
         if dt.tzinfo is not None:
-            # Сравниваем по локальной календарной дате записи.
-            dt = dt.replace(tzinfo=None)
+            dt = dt.astimezone(MOSCOW_TZ).replace(
+                tzinfo=None
+            )
+
         return dt
     except Exception:
         pass
 
+    # Обычные старые форматы.
     return parse_sheet_date(raw)
-
 
 def resolve_farmer_user_id(username):
     target = str(username or "").strip().lstrip("@").lower()
@@ -13163,23 +13205,32 @@ def count_farmer_transferred_to_accounts(
     end_date,
     user_id=None
 ):
-    """Считает только передачи КОНКРЕТНОГО фармера в выбранном месяце."""
+    """
+    Считает сколько Farm Kings передал Accounts ИМЕННО этот фармер
+    за выбранный статистический месяц.
+
+    Приоритет идентификации:
+    1) Telegram ID;
+    2) если в старой записи ID отсутствует — username;
+    3) для очень старых строк без служебного username — поле "кто взял"
+       из основной части База фарм кинги.
+    """
     ensure_farm_ready_columns()
 
-    farmer_id = str(user_id or "").strip() or resolve_farmer_user_id(username)
-    target_username = (
-        "@" + str(username or "").strip().lstrip("@").lower()
+    farmer_id = (
+        str(user_id or "").strip()
+        or resolve_farmer_user_id(username)
     )
 
-    # Основной путь — точный Telegram ID.
-    # Это физически не позволяет захватить передачи других фармеров.
+    target_username = (
+        str(username or "")
+        .strip()
+        .lstrip("@")
+        .lower()
+    )
+
     records = grist_query_records(
         SHEET_FARM_KINGS,
-        filters=(
-            {FARM_READY_COL_FARMER_ID: farmer_id}
-            if farmer_id
-            else {}
-        ),
         limit=0,
         sort="manualSort",
     )
@@ -13190,24 +13241,78 @@ def count_farmer_transferred_to_accounts(
         fields = rec.get("fields") or {}
 
         rec_farmer_id = str(
-            fields.get(FARM_READY_COL_FARMER_ID, "") or ""
+            fields.get(
+                FARM_READY_COL_FARMER_ID,
+                ""
+            ) or ""
         ).strip()
 
-        rec_farmer_username = str(
-            fields.get(FARM_READY_COL_FARMER_USERNAME, "") or ""
-        ).strip().lower()
+        rec_farmer_username = (
+            str(
+                fields.get(
+                    FARM_READY_COL_FARMER_USERNAME,
+                    ""
+                ) or ""
+            )
+            .strip()
+            .lstrip("@")
+            .lower()
+        )
 
-        # Если ID известен — считаем ТОЛЬКО точное совпадение ID.
-        if farmer_id:
-            if rec_farmer_id != farmer_id:
-                continue
-        else:
-            # Fallback только для старых записей без сохранённого ID.
-            if rec_farmer_username != target_username:
-                continue
+        # Основная строка нужна только как fallback для старых данных.
+        row = ensure_row_len(
+            grist_record_to_sheet_row(
+                SHEET_FARM_KINGS,
+                rec
+            ),
+            13
+        )
+
+        legacy_username = (
+            str(row[8] or "")
+            .strip()
+            .lstrip("@")
+            .lower()
+        )
+
+        belongs = False
+
+        # Самый надёжный вариант — точный Telegram ID.
+        if farmer_id and rec_farmer_id:
+            belongs = rec_farmer_id == farmer_id
+
+        # Старые передачи могли быть без сохранённого ID.
+        elif not rec_farmer_id:
+            if (
+                rec_farmer_username
+                and rec_farmer_username == target_username
+            ):
+                belongs = True
+            elif (
+                not rec_farmer_username
+                and legacy_username == target_username
+            ):
+                belongs = True
+
+        # Если user_id вообще невозможно определить,
+        # используем username.
+        elif not farmer_id:
+            belongs = (
+                rec_farmer_username == target_username
+                or (
+                    not rec_farmer_username
+                    and legacy_username == target_username
+                )
+            )
+
+        if not belongs:
+            continue
 
         transfer_dt = parse_farm_transfer_datetime(
-            fields.get(FARM_READY_COL_TRANSFERRED_AT, "")
+            fields.get(
+                FARM_READY_COL_TRANSFERRED_AT,
+                ""
+            )
         )
 
         if (
@@ -13217,7 +13322,6 @@ def count_farmer_transferred_to_accounts(
             count += 1
 
     return count
-
 
 def build_farmer_stats_summary_text(username, user_id=None):
     if not username:
