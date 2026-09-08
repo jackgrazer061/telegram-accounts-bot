@@ -1741,6 +1741,17 @@ def issue_ready_farm_king_to_buyer(
             "Выбери цену заново."
         ), None
 
+    live_fields = live.get("fields") or fields
+    farmer_username = str(
+        live_fields.get(FARM_READY_COL_FARMER_USERNAME, "") or ""
+    ).strip()
+
+    if farmer_username:
+        if not farmer_username.startswith("@"):
+            farmer_username = "@" + farmer_username
+    else:
+        farmer_username = "не указан"
+
     previous_farm_issue = find_previous_farm_issue_record_for_king(
         king_name
     )
@@ -1804,7 +1815,7 @@ def issue_ready_farm_king_to_buyer(
         f"💵 Цена: {format_issue_price(row[2])}\n"
         f"👨‍💻 Байер: {buyer}\n"
         f"📅 Выдано байеру: {datetime.now(MOSCOW_TZ).strftime('%d.%m.%Y %H:%M')}\n"
-        f"♻️ Старая выдача на farm удалена\n\n"
+        f"👨‍🌾 Кинг фармера: {farmer_username}\n\n"
         f"💬 Комментарий от фармера:\n"
         f"{octo_comment or 'Актуальное название в Octo не указано.'}"
     ), king_name
@@ -19679,6 +19690,102 @@ def handle_message(msg):
 
         state = get_state(user_id)
 
+        # ========= ПРИОРИТЕТНАЯ ОБРАБОТКА ПРИЧИНЫ БАНА KING =========
+        # Срабатывает до любых других меню/состояний.
+        if state.get("mode") == "awaiting_ban_reason_farm_king":
+            comment_text = str(text or "").strip()
+            ban_timing = str(state.get("ban_timing", "") or "").strip()
+
+            if not comment_text:
+                send_text_input_prompt(
+                    chat_id,
+                    "Напиши причину бана для farm king."
+                )
+                return
+
+            king_names = list(
+                state.get("return_farm_king_names") or []
+            )
+            missing = list(
+                state.get("return_farm_king_missing") or []
+            )
+
+            if not king_names:
+                clear_state(user_id)
+                send_farm_kings_menu(
+                    chat_id,
+                    "Список farm king потерян. Начни перевод в ban заново."
+                )
+                return
+
+            success, failed = process_farm_kings_bulk_ban(
+                king_names,
+                comment_text,
+                ban_timing
+            )
+
+            clear_state(user_id)
+
+            tg_send_long_message(
+                chat_id,
+                build_bulk_king_ban_result(
+                    "Перевод farm king в ban завершён.",
+                    success,
+                    failed,
+                    missing
+                )
+            )
+
+            send_farm_kings_menu(chat_id, "Меню Farm King:")
+            return
+
+        if state.get("mode") == "awaiting_ban_reason_king":
+            comment_text = str(text or "").strip()
+            ban_timing = str(state.get("ban_timing", "") or "").strip()
+
+            if not comment_text:
+                send_text_input_prompt(
+                    chat_id,
+                    "Напиши причину бана для king."
+                )
+                return
+
+            items = list(
+                state.get("return_king_items") or []
+            )
+            missing = list(
+                state.get("return_king_missing") or []
+            )
+
+            if not items:
+                clear_state(user_id)
+                send_kings_menu(
+                    chat_id,
+                    "Список king потерян. Начни перевод в ban заново."
+                )
+                return
+
+            success, failed = process_account_kings_bulk_ban(
+                items,
+                comment_text,
+                ban_timing
+            )
+
+            clear_state(user_id)
+
+            tg_send_long_message(
+                chat_id,
+                build_bulk_king_ban_result(
+                    "Перевод king в ban завершён.",
+                    success,
+                    failed,
+                    missing
+                )
+            )
+
+            send_kings_menu(chat_id, "Меню кингов:")
+            return
+
 
         if state.get("mode") == "awaiting_emails_add":
             lines=[line.strip() for line in str(text or "").splitlines() if line.strip()]
@@ -22201,7 +22308,7 @@ def handle_message(msg):
         if state.get("mode") == "awaiting_farm_king_return_action":
             if text == BTN_RETURN_TO_BAN:
                 update_state(user_id, mode="awaiting_farm_return_king_name")
-                send_text_input_prompt(chat_id, "Впиши название кинга.")
+                send_text_input_prompt(chat_id, "Отправь название farm king или список farm king — каждое название с новой строки.\n\nМаксимум 100 king за одну пачку.")
                 return
 
             if text == BTN_RETURN_TO_FREE:
@@ -25375,6 +25482,9 @@ def handle_callback_query(callback_query):
         chat_id = callback_query["message"]["chat"]["id"]
         message_id = callback_query["message"]["message_id"]
         user_id = callback_query["from"]["id"]
+        username = str(
+            callback_query.get("from", {}).get("username", "") or ""
+        ).strip()
 
         if not has_access(user_id):
             tg_answer_callback_query(callback_id, "Нет доступа")
