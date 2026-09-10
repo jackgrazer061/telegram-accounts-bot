@@ -278,6 +278,7 @@ FARM_READY_FARMER_VIEW = '👀 Мои переданные Farm Kings'
 FARM_READY_FARMER_EDIT = '✏️ Редактировать переданные Farm Kings'
 FARM_READY_ACCOUNTS_ISSUE = '➡️ Выдать готовый Farm King'
 FARM_READY_ACCOUNTS_FREE = '📊 Свободные готовые Farm Kings'
+FARM_READY_ACCOUNTS_RETURN = '↩️ Вернуть Farm King'
 FARM_READY_BACK_FARMERS = '⬅️ Назад в Farmers'
 FARM_READY_BACK_ACCOUNTS = '⬅️ Назад в Accounts'
 FARM_READY_STAGE_META_BTN = '⚡ 3 дня + Meta AI'
@@ -4164,14 +4165,128 @@ def send_farm_ready_farmer_menu(chat_id, text="Farm Kings для Farmers:"):
     tg_send_message(chat_id, text, keyboard)
 
 
+
+def find_current_issued_farm_king_issue(king_name):
+    """Текущая выдача Farm King конечному байеру в Простые лички 26."""
+    king_name = str(king_name or "").strip()
+    if not king_name:
+        return None
+
+    records = grist_query_records(
+        SHEET_ISSUES,
+        filters={"Имя": king_name},
+        limit=0,
+        sort="manualSort",
+    )
+
+    found = None
+
+    for rec in records:
+        row = ensure_row_len(
+            grist_record_to_sheet_row(SHEET_ISSUES, rec),
+            13
+        )
+
+        issue_type = str(row[ISSUE_COL_TYPE] or "").strip().lower()
+        buyer = str(row[ISSUE_COL_BUYER] or "").strip()
+        status = str(row[ISSUE_COL_STATUS] or "").strip().lower()
+        department = str(row[ISSUE_COL_DEPARTMENT] or "").strip().upper()
+
+        if issue_type not in {"king", "кинг"}:
+            continue
+
+        if department != "Ф":
+            continue
+
+        if not buyer or buyer.lower() in {"farm", "team"}:
+            continue
+
+        if status in {"ban", "бан"}:
+            continue
+
+        found = {
+            "record_id": int(rec["id"]),
+            "row": row,
+        }
+
+    return found
+
+
+def validate_ready_farm_kings_account_return(king_names):
+    valid = []
+    missing = []
+
+    for king_name in king_names:
+        issue = find_current_issued_farm_king_issue(king_name)
+
+        if not issue:
+            missing.append(king_name)
+            continue
+
+        valid.append({
+            "name": king_name,
+            "issue": issue,
+        })
+
+    return valid, missing
+
+
+def process_ready_farm_kings_account_return(
+    items,
+    reason_text
+):
+    """Переводит текущие выдачи готовых Farm Kings в бан одним Grist apply."""
+    reason_text = str(reason_text or "").strip()
+
+    if not reason_text:
+        raise RuntimeError("Причина возврата пустая.")
+
+    actions = []
+    success = []
+
+    cols = grist_columns_for_sheet(SHEET_ISSUES)
+    status_col = cols[ISSUE_COL_STATUS]["id"]
+    ban_moment_col = cols[ISSUE_COL_BAN_MOMENT]["id"]
+    comment_col = cols[ISSUE_COL_COMMENT]["id"]
+
+    for item in items or []:
+        king_name = str(item.get("name", "")).strip()
+        issue = item.get("issue") or {}
+        record_id = issue.get("record_id")
+
+        if not king_name or not record_id:
+            continue
+
+        actions.append([
+            "UpdateRecord",
+            grist_table_id_for_sheet(SHEET_ISSUES),
+            int(record_id),
+            {
+                status_col: "бан",
+                ban_moment_col: "после передачи",
+                comment_col: reason_text,
+            }
+        ])
+        success.append(king_name)
+
+    if not actions:
+        return [], []
+
+    grist_apply(actions)
+    grist_all_mark_stale(SHEET_ISSUES)
+    invalidate_stats_cache()
+
+    return success, []
+
+
 def send_farm_ready_accounts_menu(chat_id, text="Farm Kings для Accounts:"):
     keyboard = [
         [{"text": FARM_READY_ACCOUNTS_ISSUE}],
         [{"text": FARM_READY_ACCOUNTS_FREE}],
+        [{"text": FARM_READY_ACCOUNTS_RETURN}],
         [{"text": FARM_READY_BACK_ACCOUNTS}],
     ]
     tg_send_message(chat_id, text, keyboard)
-
 
 def send_farm_ready_stage_menu(chat_id, title):
     keyboard = [
@@ -19659,7 +19774,7 @@ def handle_message(msg):
             FARM_READY_FARMER_MENU, FARM_READY_ACCOUNTS_MENU,
             FARM_READY_FARMER_SEND, FARM_READY_FARMER_VIEW, FARM_READY_FARMER_EDIT,
             MENU_EMAILS, EMAILS_GET, EMAILS_BACK, ADMIN_ADD_EMAILS,
-            FARM_READY_ACCOUNTS_ISSUE, FARM_READY_ACCOUNTS_FREE,
+            FARM_READY_ACCOUNTS_ISSUE, FARM_READY_ACCOUNTS_FREE, FARM_READY_ACCOUNTS_RETURN,
             FARM_READY_BACK_FARMERS, FARM_READY_BACK_ACCOUNTS,
             FARM_READY_STAGE_META_BTN, FARM_READY_STAGE_NO_META_BTN,
             FARM_ASSEMBLY_CREATE, FARM_ASSEMBLY_ISSUE, FARM_ASSEMBLY_EDIT, FARM_ASSEMBLY_VIEW, BTN_BACK_FROM_ASSEMBLIES,
@@ -19689,6 +19804,87 @@ def handle_message(msg):
             return
 
         state = get_state(user_id)
+
+        if state.get("mode") == "farm_ready_accounts_return_names":
+            ok, error_text, king_names = parse_bulk_king_names(text)
+
+            if not ok:
+                send_text_input_prompt(chat_id, error_text)
+                return
+
+            valid_items, missing = validate_ready_farm_kings_account_return(
+                king_names
+            )
+
+            if not valid_items:
+                clear_state(user_id)
+                send_farm_ready_accounts_menu(
+                    chat_id,
+                    "Ни одного выданного Farm King из списка не найдено."
+                )
+                return
+
+            set_state(user_id, {
+                "mode": "farm_ready_accounts_return_reason",
+                "farm_ready_return_items": valid_items,
+                "farm_ready_return_missing": missing,
+            })
+
+            message = (
+                f"Найдено Farm Kings для возврата: {len(valid_items)}."
+            )
+
+            if missing:
+                message += (
+                    f"\nНе найдено: {len(missing)} — они будут пропущены."
+                )
+
+            send_text_input_prompt(
+                chat_id,
+                message
+                + "\n\nНапиши одну причину возврата для всей пачки."
+            )
+            return
+
+        if state.get("mode") == "farm_ready_accounts_return_reason":
+            reason_text = str(text or "").strip()
+
+            if not reason_text:
+                send_text_input_prompt(
+                    chat_id,
+                    "Напиши причину возврата."
+                )
+                return
+
+            items = list(
+                state.get("farm_ready_return_items") or []
+            )
+            missing = list(
+                state.get("farm_ready_return_missing") or []
+            )
+
+            success, failed = process_ready_farm_kings_account_return(
+                items,
+                reason_text
+            )
+
+            clear_state(user_id)
+
+            tg_send_long_message(
+                chat_id,
+                build_bulk_king_ban_result(
+                    "Возврат Farm Kings завершён.",
+                    success,
+                    failed,
+                    missing
+                )
+            )
+
+            send_farm_ready_accounts_menu(
+                chat_id,
+                "Farm Kings для Accounts:"
+            )
+            return
 
         # ========= ПРИОРИТЕТНАЯ ОБРАБОТКА ПРИЧИНЫ БАНА KING =========
         # Срабатывает до любых других меню/состояний.
@@ -20869,6 +21065,19 @@ def handle_message(msg):
                 return
             show_farmer_transferred_farm_kings(chat_id, user_id)
             send_farm_ready_farmer_menu(chat_id, "Farm Kings для Farmers:")
+            return
+
+        if text == FARM_READY_ACCOUNTS_RETURN:
+            set_state(user_id, {
+                "mode": "farm_ready_accounts_return_names"
+            })
+            send_text_input_prompt(
+                chat_id,
+                "Отправь название Farm King или список Farm Kings, "
+                "которые нужно вернуть.\n"
+                "Каждое название — с новой строки.\n\n"
+                "Максимум 100 king за одну пачку."
+            )
             return
 
         if text == FARM_READY_ACCOUNTS_FREE:
