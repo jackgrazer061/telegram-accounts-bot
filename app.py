@@ -8076,15 +8076,44 @@ def choose_fp_warehouse_for_issue(sheet_name, count_needed=1, user_id=None, farm
 
 def maybe_open_fp_warehouse_in_octo(warehouse_name, farm=False):
     warehouse_name = str(warehouse_name or "").strip()
-    if not warehouse_name or not OCTO_API_TOKEN:
-        return False, "OCTO disabled or warehouse empty"
 
-    tag_name = OCTO_TAG_FARMERS if farm else OCTO_TAG_ACCOUNT_MANAGERS
+    if not warehouse_name:
+        return False, "Пустое название склада"
+
+    if not OCTO_API_TOKEN:
+        return False, "OCTO_API_TOKEN не настроен"
+
+    tag_name = (
+        OCTO_TAG_FARMERS
+        if farm
+        else OCTO_TAG_ACCOUNT_MANAGERS
+    )
 
     try:
-        return tag_next_octo_fp_warehouse(warehouse_name, tag_name)
+        ok, message = tag_next_octo_fp_warehouse(
+            warehouse_name,
+            tag_name
+        )
+
+        if ok:
+            logging.info(
+                "FP warehouse Octo tag success: "
+                f"warehouse={warehouse_name}, tag={tag_name}"
+            )
+        else:
+            logging.error(
+                "FP warehouse Octo tag failed: "
+                f"warehouse={warehouse_name}, tag={tag_name}, "
+                f"reason={message}"
+            )
+
+        return ok, message
+
     except Exception as e:
-        logging.exception("maybe_open_fp_warehouse_in_octo crashed")
+        logging.exception(
+            "maybe_open_fp_warehouse_in_octo crashed: "
+            f"warehouse={warehouse_name}, tag={tag_name}"
+        )
         return False, str(e)
 
 def get_next_fp_warehouse_name(current_warehouse):
@@ -8348,7 +8377,21 @@ def confirm_fp_issue(chat_id,user_id,username):
             warehouse=row[4]
             if is_fp_warehouse_locked_for_other_user(warehouse,user_id=user_id,farm=False):
                 clear_state(user_id);send_fps_menu(chat_id,"Этот склад ФП сейчас занят.");return
-            maybe_open_fp_warehouse_in_octo(warehouse,farm=False)
+            octo_ok, octo_message = maybe_open_fp_warehouse_in_octo(
+                warehouse,
+                farm=False
+            )
+            if not octo_ok:
+                clear_state(user_id)
+                tg_send_message(
+                    chat_id,
+                    "❌ Не удалось поставить тег AccountManagers "
+                    f"на склад '{warehouse}' в Octo.\n"
+                    f"Причина: {octo_message}\n\n"
+                    "FP НЕ выдано. Попробуй ещё раз."
+                )
+                send_fps_menu(chat_id, "Меню ФП:")
+                return
 
             today=datetime.now(MOSCOW_TZ).strftime("%d/%m/%Y")
             who=f"@{username}" if username else "без username"
@@ -8379,7 +8422,21 @@ def issue_fps_bulk(chat_id,user_id,username,count_needed):
             SHEET_FPS,count_needed=count_needed,user_id=user_id,farm=False)
         if not warehouse:
             clear_state(user_id);send_fps_menu(chat_id,"Свободного склада ФП сейчас нет.");return
-        maybe_open_fp_warehouse_in_octo(warehouse,farm=False)
+        octo_ok, octo_message = maybe_open_fp_warehouse_in_octo(
+            warehouse,
+            farm=False
+        )
+        if not octo_ok:
+            clear_state(user_id)
+            tg_send_message(
+                chat_id,
+                "❌ Не удалось поставить тег AccountManagers "
+                f"на склад '{warehouse}' в Octo.\n"
+                f"Причина: {octo_message}\n\n"
+                "FP НЕ выданы. Попробуй ещё раз."
+            )
+            send_fps_menu(chat_id, "Меню ФП:")
+            return
 
         records=grist_free_records_by_status_pos(SHEET_FPS,5,limit=count_needed,extra_filters_by_pos={4:warehouse})
         if len(records)<count_needed:
@@ -10487,7 +10544,20 @@ def issue_farm_fps(chat_id,user_id,username,count_needed):
             SHEET_FARM_FPS,count_needed=count_needed,user_id=user_id,farm=True)
         if not warehouse:
             send_farm_fps_menu(chat_id,"Свободного farm FP склада сейчас нет.");return
-        maybe_open_fp_warehouse_in_octo(warehouse,farm=True)
+        octo_ok, octo_message = maybe_open_fp_warehouse_in_octo(
+            warehouse,
+            farm=True
+        )
+        if not octo_ok:
+            tg_send_message(
+                chat_id,
+                "❌ Не удалось поставить тег Farmers "
+                f"на склад '{warehouse}' в Octo.\n"
+                f"Причина: {octo_message}\n\n"
+                "FP НЕ выданы. Попробуй ещё раз."
+            )
+            send_farm_fps_menu(chat_id, "Меню Farm FP:")
+            return
 
         records=grist_free_records_by_status_pos(SHEET_FARM_FPS,5,limit=count_needed,extra_filters_by_pos={4:warehouse})
         if len(records)<count_needed:
@@ -18006,7 +18076,9 @@ def octo_extract_profile_items(data):
 
 
 def octo_find_profile_by_title(profile_title, max_pages=10):
-    logging.info("OCTO_FIND_V3_RUNNING")
+    """Ищет Octo-профиль по точному title/name и обязательно возвращает uuid/id."""
+    logging.info("OCTO_FIND_FULL_PROFILE_RUNNING")
+
     headers = {
         "X-Octo-Api-Token": OCTO_API_TOKEN,
         "Content-Type": "application/json",
@@ -18019,14 +18091,27 @@ def octo_find_profile_by_title(profile_title, max_pages=10):
     max_pages = max(1, int(max_pages or 10))
 
     for page in range(0, max_pages):
-        url = f"{OCTO_API_BASE}/profiles?page={page}&page_len=100&fields=title"
+        # ВАЖНО: раньше здесь было &fields=title.
+        # Из-за этого Octo мог вернуть профиль без uuid/id.
+        url = (
+            f"{OCTO_API_BASE}/profiles"
+            f"?page={page}&page_len=100"
+        )
+
+        resp = None
 
         for attempt in range(5):
-            resp = requests.get(url, headers=headers, timeout=60)
+            resp = requests.get(
+                url,
+                headers=headers,
+                timeout=60
+            )
+
             if resp.status_code == 429:
                 wait = 2 ** attempt
                 logging.warning(
-                    f"OCTO 429 rate limit (page={page}, attempt={attempt}), ждём {wait}s"
+                    "OCTO 429 rate limit "
+                    f"(page={page}, attempt={attempt}), ждём {wait}s"
                 )
                 time.sleep(wait)
                 continue
@@ -18034,7 +18119,9 @@ def octo_find_profile_by_title(profile_title, max_pages=10):
             resp.raise_for_status()
             break
         else:
-            resp.raise_for_status()
+            if resp is not None:
+                resp.raise_for_status()
+            return None
 
         if page > 0:
             time.sleep(0.3)
@@ -18043,17 +18130,34 @@ def octo_find_profile_by_title(profile_title, max_pages=10):
         items = octo_extract_profile_items(data)
 
         for item in items:
-            title_val = str(item.get("title", "")).strip().lower()
-            name_val = str(item.get("name", "")).strip().lower()
+            title_val = str(
+                item.get("title", "")
+            ).strip().lower()
+
+            name_val = str(
+                item.get("name", "")
+            ).strip().lower()
 
             if title_val == target or name_val == target:
+                profile_uuid = str(
+                    item.get("uuid")
+                    or item.get("id")
+                    or ""
+                ).strip()
+
+                if not profile_uuid:
+                    logging.error(
+                        "Octo profile found but uuid/id missing: "
+                        f"title={profile_title}, item={item}"
+                    )
+                    return None
+
                 return item
 
         if not items or len(items) < 100:
             break
 
     return None
-
 
 def octo_find_profile_by_title_deep(profile_title, max_pages=80, sleep_between=0.0):
     target = str(profile_title or "").strip().lower()
@@ -18204,49 +18308,49 @@ def octo_update_profile_tags_by_title(profile_title, tags_to_add):
         return False, "Не указано название Octo профиля"
 
     if not isinstance(tags_to_add, list):
-        tags_to_add = [str(tags_to_add).strip()] if str(tags_to_add).strip() else []
+        tags_to_add = (
+            [str(tags_to_add).strip()]
+            if str(tags_to_add).strip()
+            else []
+        )
 
-    tags_to_add = [str(x).strip() for x in tags_to_add if str(x).strip()]
+    tags_to_add = [
+        str(x).strip()
+        for x in tags_to_add
+        if str(x).strip()
+    ]
 
     profile = octo_find_profile_by_title(profile_title)
+
     if not profile:
-        return False, f"Octo профиль '{profile_title}' не найден"
+        return False, (
+            f"Octo профиль '{profile_title}' не найден "
+            "или у него не удалось получить UUID"
+        )
 
-    profile_uuid = str(profile.get("uuid") or profile.get("id") or "").strip()
+    profile_uuid = str(
+        profile.get("uuid")
+        or profile.get("id")
+        or ""
+    ).strip()
+
     if not profile_uuid:
-        return False, f"У профиля '{profile_title}' не найден id/uuid"
+        return False, (
+            f"У профиля '{profile_title}' не найден uuid/id"
+        )
 
-    headers = {
-        "X-Octo-Api-Token": OCTO_API_TOKEN,
-        "Content-Type": "application/json",
-    }
+    # Используем уже существующий рабочий updater по UUID.
+    ok, message = octo_update_profile_tags_by_uuid(
+        profile_uuid,
+        tags_to_add
+    )
 
-    # всегда сохраняем базовые теги
-    base_tags = [OCTO_TAG_CORBY]
-
-    merged_tags = []
-    for tag in base_tags + tags_to_add:
-        tag = str(tag).strip()
-        if tag and tag not in merged_tags:
-            merged_tags.append(tag)
-
-    url = f"{OCTO_API_BASE}/profiles/{profile_uuid}"
-    payload = {
-        "tags": merged_tags
-    }
-
-    resp = requests.patch(url, json=payload, headers=headers, timeout=60)
-
-    if resp.status_code >= 400:
-        try:
-            err = resp.json()
-        except Exception:
-            err = resp.text
-        return False, f"Octo API error {resp.status_code}: {err}"
+    if not ok:
+        return False, message
 
     return True, (
-        f"Тег(и) {', '.join(tags_to_add)} поставлены на профиль '{profile_title}'. "
-        f"Итоговые теги: {', '.join(merged_tags)}"
+        f"На Octo-профиль '{profile_title}' поставлены теги: "
+        f"{', '.join(tags_to_add)}"
     )
 
 def tag_next_octo_fp_warehouse(next_warehouse_name, tag_name):
