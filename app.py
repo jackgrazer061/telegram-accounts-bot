@@ -103,7 +103,7 @@ ADMINS = {
 }
 
 ADMIN_FARM_USERS = {
-    7172090459: "JackieChan_FarmLead",
+    8589105033: "owenwilson_farmer",
     7389698288: "andrewgarfield_farmlead",
 }
 
@@ -141,7 +141,6 @@ ACCOUNTS_USERS = {
 FARMERS_USERS = {
     8482380951: "josephgordonlevitt_farmer",
     8389730381: "JaimeMurray_farmer",
-    8589105033: "owenwilson_farmer",
     8503147017: "zendaya_farmer",
     8797795819: "markzuckerberg_farm",
     8276201410: "AmandaSeyfried_Farmer",
