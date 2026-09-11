@@ -8073,6 +8073,71 @@ def choose_fp_warehouse_for_issue(sheet_name, count_needed=1, user_id=None, farm
     return None, counts, busy
 
 
+# Cache UUID складов FP в Octo, чтобы не перелистывать тысячи профилей при каждой выдаче.
+octo_fp_profile_uuid_cache = {}
+octo_fp_profile_uuid_cache_lock = threading.Lock()
+OCTO_FP_PROFILE_UUID_CACHE_TTL = 6 * 60 * 60
+
+
+def cache_octo_fp_profile_uuid(profile_title, profile_uuid):
+    title_key = normalize_octo_title(profile_title)
+    profile_uuid = str(profile_uuid or "").strip()
+    if not title_key or not profile_uuid:
+        return
+    with octo_fp_profile_uuid_cache_lock:
+        octo_fp_profile_uuid_cache[title_key] = {
+            "uuid": profile_uuid,
+            "saved_at": time.time(),
+        }
+
+
+def get_cached_octo_fp_profile_uuid(profile_title):
+    title_key = normalize_octo_title(profile_title)
+    if not title_key:
+        return ""
+    with octo_fp_profile_uuid_cache_lock:
+        item = octo_fp_profile_uuid_cache.get(title_key)
+        if not item:
+            return ""
+        if time.time() - float(item.get("saved_at", 0) or 0) > OCTO_FP_PROFILE_UUID_CACHE_TTL:
+            octo_fp_profile_uuid_cache.pop(title_key, None)
+            return ""
+        return str(item.get("uuid") or "").strip()
+
+
+def find_octo_fp_warehouse_uuid(profile_title):
+    """Находит UUID склада FP. Сначала cache, затем до 80 страниц Octo."""
+    profile_title = str(profile_title or "").strip()
+    if not profile_title:
+        return "", "Пустое название склада"
+
+    cached = get_cached_octo_fp_profile_uuid(profile_title)
+    if cached:
+        return cached, "cache"
+
+    profile = octo_find_profile_by_title(profile_title, max_pages=10)
+
+    if not profile:
+        profile = octo_find_profile_by_title_deep(
+            profile_title,
+            max_pages=80,
+            sleep_between=0.05,
+        )
+
+    if not profile:
+        return "", (
+            f"Octo профиль '{profile_title}' не найден после глубокого поиска "
+            "по первым 8000 профилям"
+        )
+
+    profile_uuid = str(profile.get("uuid") or profile.get("id") or "").strip()
+    if not profile_uuid:
+        return "", f"У Octo профиля '{profile_title}' не найден UUID"
+
+    cache_octo_fp_profile_uuid(profile_title, profile_uuid)
+    return profile_uuid, "found"
+
+
 def maybe_open_fp_warehouse_in_octo(warehouse_name, farm=False):
     warehouse_name = str(warehouse_name or "").strip()
     if not warehouse_name or not OCTO_API_TOKEN:
@@ -8081,9 +8146,28 @@ def maybe_open_fp_warehouse_in_octo(warehouse_name, farm=False):
     tag_name = OCTO_TAG_FARMERS if farm else OCTO_TAG_ACCOUNT_MANAGERS
 
     try:
-        return tag_next_octo_fp_warehouse(warehouse_name, tag_name)
+        ok, message = tag_next_octo_fp_warehouse(
+            warehouse_name,
+            tag_name
+        )
+
+        if ok:
+            logging.info(
+                "FP warehouse tag OK: "
+                f"warehouse={warehouse_name}, tag={tag_name}, {message}"
+            )
+        else:
+            logging.error(
+                "FP warehouse tag FAILED, issuance continues: "
+                f"warehouse={warehouse_name}, tag={tag_name}, reason={message}"
+            )
+
+        return ok, message
+
     except Exception as e:
-        logging.exception("maybe_open_fp_warehouse_in_octo crashed")
+        logging.exception(
+            "maybe_open_fp_warehouse_in_octo crashed; issuance continues"
+        )
         return False, str(e)
 
 def get_next_fp_warehouse_name(current_warehouse):
@@ -18256,12 +18340,33 @@ def tag_next_octo_fp_warehouse(next_warehouse_name, tag_name):
         return False, "Не указано название склада или тег"
 
     try:
-        return octo_update_profile_tags_by_title(
-            profile_title=warehouse_name,
-            tags_to_add=[tag_name]
+        profile_uuid, source = find_octo_fp_warehouse_uuid(warehouse_name)
+        if not profile_uuid:
+            return False, source
+
+        ok, message = octo_update_profile_tags_by_uuid(
+            profile_uuid,
+            [tag_name]
         )
+
+        if not ok:
+            with octo_fp_profile_uuid_cache_lock:
+                octo_fp_profile_uuid_cache.pop(
+                    normalize_octo_title(warehouse_name),
+                    None
+                )
+            return False, message
+
+        return True, (
+            f"Склад '{warehouse_name}' найден ({source}); "
+            f"тег {tag_name} установлен"
+        )
+
     except Exception as e:
-        logging.exception("tag_next_octo_fp_warehouse crashed")
+        logging.exception(
+            "tag_next_octo_fp_warehouse crashed: "
+            f"warehouse={warehouse_name}, tag={tag_name}"
+        )
         return False, str(e)
 
 def extract_octo_profile_uuid(octo_response):
@@ -25508,6 +25613,8 @@ def handle_message(msg):
                     return
 
                 created_profiles.append(current_warehouse)
+
+                cache_octo_fp_profile_uuid(current_warehouse, profile_uuid)
 
                 set_state(user_id, {
                     "mode": "awaiting_octo_king_data",
