@@ -188,6 +188,8 @@ BUYER_USERNAME_TO_CODE = {
     'tomhardy_crypto': 'RP28',
 }
 BUYERS_USERS = {}
+buyer_king_requests = {}
+buyer_king_requests_lock = threading.RLock()
 
 MISC_HIDDEN_USERS = {
     7851493919,  # CateBlanchettAccountManager
@@ -279,6 +281,11 @@ BUYER_MENU_KINGS = '👑 Кинги байеров'
 BUYER_KINGS_GET = '➡️ Взять кинг — Buyer'
 BUYER_KINGS_FREE = '🆓 Свободные кинги — Buyer'
 BUYER_KINGS_SEARCH = '🔎 Поиск кинга — Buyer'
+BUYER_KINGS_RETURN = '↩️ Вернуть кинг — Buyer'
+BUYER_RETURN_BAN = '🚫 В бан — Buyer'
+BUYER_RETURN_FREE = '♻️ Вернуть в free — Buyer'
+BUYER_RETURN_BACK = '⬅️ Назад из возврата — Buyer'
+BUYER_REQUEST_MANAGER_IDS = {7953116439,8334712952,7426931469,8435159019,7045494795,8309499971,8005881362,7573650707}
 BUYER_BACK_MAIN = '⬅️ Назад — Buyer'
 BUYER_KINGS_BACK = '⬅️ Назад в Buyer'
 MENU_PIXELS = 'Пиксели'
@@ -4100,6 +4107,90 @@ def send_broadcast_message(msg_id):
             logging.exception(f"broadcast send failed {uid}")
 
 
+
+def send_buyer_return_menu(chat_id, text="Что сделать с king?"):
+    tg_send_message(chat_id,text,[
+        [{"text":BUYER_RETURN_BAN}],
+        [{"text":BUYER_RETURN_FREE}],
+        [{"text":BUYER_RETURN_BACK}],
+        [{"text":MENU_CANCEL}],
+    ])
+
+def tg_send_photo_file_id(chat_id,file_id,caption,buttons):
+    payload={"chat_id":chat_id,"photo":file_id,"caption":caption,
+             "reply_markup":{"inline_keyboard":buttons}}
+    r=requests.post(f"{BASE_URL}/sendPhoto",json=payload,timeout=30)
+    if r.status_code!=200:
+        raise RuntimeError(f"sendPhoto {r.status_code}: {r.text}")
+    data=r.json()
+    if not data.get("ok"): raise RuntimeError(str(data))
+    return data
+
+def tg_finish_buyer_request_photo(chat_id,message_id,caption):
+    r=requests.post(f"{BASE_URL}/editMessageCaption",json={
+        "chat_id":chat_id,"message_id":message_id,"caption":caption,
+        "reply_markup":{"inline_keyboard":[]}},timeout=20)
+    return r.status_code==200
+
+def buyer_request_caption(req,final=""):
+    uname=req.get("buyer_username","")
+    who=f"@{uname}" if uname else "без username"
+    action="🚫 В БАН" if req.get("action")=="ban" else "♻️ ВЕРНУТЬ В FREE"
+    s=(f"📨 Заявка от Buyer\n\n👤 Байер: {req.get('buyer_code')} ({who})\n"
+       f"👑 King: {req.get('king_name')}\n🔄 Действие: {action}\n"
+       f"💬 Причина: {req.get('reason')}")
+    return s+("\n\n"+final if final else "")
+
+def create_buyer_request(user_id,username,buyer_code,king_name,action,reason,file_id):
+    rid=uuid.uuid4().hex[:12]
+    req={"id":rid,"buyer_user_id":int(user_id),
+         "buyer_username":normalize_telegram_username(username),
+         "buyer_code":buyer_code,"king_name":king_name,"action":action,
+         "reason":reason,"photo_file_id":file_id,"status":"pending",
+         "resolved_by_username":"","manager_messages":[]}
+    with buyer_king_requests_lock: buyer_king_requests[rid]=req
+    return req
+
+def send_buyer_request_managers(req):
+    buttons=[[{"text":"✅ Принять","callback_data":f"bkr_accept:{req['id']}"},
+              {"text":"❌ Отклонить","callback_data":f"bkr_reject:{req['id']}"}]]
+    sent=[]
+    for mid in BUYER_REQUEST_MANAGER_IDS:
+        try:
+            data=tg_send_photo_file_id(mid,req["photo_file_id"],buyer_request_caption(req),buttons)
+            msgid=data.get("result",{}).get("message_id")
+            if msgid: sent.append({"chat_id":mid,"message_id":msgid})
+        except Exception:
+            logging.exception(f"buyer request send failed manager={mid}")
+    with buyer_king_requests_lock:
+        if req["id"] in buyer_king_requests:
+            buyer_king_requests[req["id"]]["manager_messages"]=sent
+    return len(sent)
+
+def resolve_buyer_request(rid,manager_id,manager_username,decision):
+    with buyer_king_requests_lock:
+        req=buyer_king_requests.get(rid)
+        if not req: return None,False,"Заявка не найдена или бот был перезапущен."
+        if req.get("status")!="pending":
+            who=req.get("resolved_by_username") or "другой менеджер"
+            return dict(req),False,f"На заявку уже ответил @{who}."
+        req["status"]="accepted" if decision=="accept" else "rejected"
+        req["resolved_by_id"]=manager_id
+        req["resolved_by_username"]=normalize_telegram_username(manager_username)
+        return dict(req),True,""
+
+def finish_buyer_request(req):
+    uname=req.get("resolved_by_username","")
+    manager=f"@{uname}" if uname else f"ID {req.get('resolved_by_id')}"
+    accepted=req.get("status")=="accepted"
+    final=("✅ ПРИНЯТО" if accepted else "❌ ОТКЛОНЕНО")+f"\nОтветил: {manager}"
+    for item in req.get("manager_messages",[]):
+        try: tg_finish_buyer_request_photo(item["chat_id"],item["message_id"],buyer_request_caption(req,final))
+        except Exception: logging.exception("buyer request edit failed")
+    word="принята" if accepted else "отклонена"
+    tg_send_message(req["buyer_user_id"],
+                    f"{'✅' if accepted else '❌'} Твоя заявка по king {req.get('king_name')} {word} менеджером {manager}.")
+
 def send_buyer_menu(chat_id, text="Меню Buyer:"):
     tg_send_message(chat_id, text, [
         [{"text": BUYER_MENU_KINGS}],
@@ -4112,6 +4203,7 @@ def send_buyer_kings_menu(chat_id, text="Кинги байеров:"):
         [{"text": BUYER_KINGS_GET}],
         [{"text": BUYER_KINGS_FREE}],
         [{"text": BUYER_KINGS_SEARCH}],
+        [{"text": BUYER_KINGS_RETURN}],
         [{"text": BUYER_KINGS_BACK}],
         [{"text": MENU_CANCEL}],
     ])
@@ -20209,6 +20301,7 @@ def handle_message(msg):
         is_menu_click = text in {
             MENU_ACCOUNTS, MENU_FARMERS, MENU_BUYER, BUYER_MENU_KINGS,
             BUYER_KINGS_GET, BUYER_KINGS_FREE, BUYER_KINGS_SEARCH,
+            BUYER_KINGS_RETURN, BUYER_RETURN_BAN, BUYER_RETURN_FREE, BUYER_RETURN_BACK,
             BUYER_BACK_MAIN, BUYER_KINGS_BACK,
             MENU_STATS, MENU_ADMIN,
             SUBMENU_ACCOUNTS_MAIN, SUBMENU_BACK_MAIN, BTN_BACK_TO_MENU,
@@ -21329,6 +21422,20 @@ def handle_message(msg):
         if text == BUYER_KINGS_BACK:
             clear_state(user_id)
             send_buyer_menu(chat_id)
+            return
+
+        if text == BUYER_KINGS_RETURN:
+            clear_state(user_id)
+            send_buyer_return_menu(chat_id)
+            return
+        if text == BUYER_RETURN_BACK:
+            clear_state(user_id); send_buyer_kings_menu(chat_id); return
+        if text in {BUYER_RETURN_BAN,BUYER_RETURN_FREE}:
+            if not is_buyer_user(user_id):
+                tg_send_message(chat_id,"У вас нет доступа."); return
+            set_state(user_id,{"mode":"buyer_return_king_name","buyer_return_action":
+                ("ban" if text==BUYER_RETURN_BAN else "free"),"buyer_mode":True})
+            send_text_input_prompt(chat_id,"Впиши название king, по которому хочешь создать заявку.")
             return
 
         if text == BUYER_KINGS_FREE:
@@ -24337,6 +24444,25 @@ def handle_message(msg):
             show_found_king(chat_id, user_id, found)
             return
 
+        if state.get("mode") == "buyer_return_king_name":
+            name=text.strip()
+            found=find_king_in_base_by_name(name) if name else None
+            if not found:
+                clear_state(user_id); send_buyer_kings_menu(chat_id,"King не найден в База_кингов."); return
+            row=ensure_row_len(found.get("row") or [],13)
+            buyer=get_buyer_code(user_id); issued=str(row[5] or "").strip()
+            if issued.lower()!=buyer.lower():
+                clear_state(user_id); send_buyer_kings_menu(chat_id,f"Этот king выдан не тебе. Сейчас он записан на: {issued or 'не указано'}."); return
+            state["buyer_return_king_name"]=name; state["mode"]="buyer_return_reason"; set_state(user_id,state)
+            send_text_input_prompt(chat_id,"Напиши причину бана." if state.get("buyer_return_action")=="ban" else "Напиши причину возврата king.")
+            return
+        if state.get("mode") == "buyer_return_reason":
+            reason=text.strip()
+            if not reason: send_text_input_prompt(chat_id,"Причина не может быть пустой."); return
+            state["buyer_return_reason"]=reason; state["mode"]="buyer_return_photo"; set_state(user_id,state)
+            tg_send_message(chat_id,"Теперь прикрепи фото к заявке.")
+            return
+
         if state.get("mode") == "awaiting_buyer_search_king_name":
             king_name = text.strip()
             if not king_name:
@@ -26289,6 +26415,22 @@ def handle_callback_query(callback_query):
             return
 
 
+        if data.startswith("bkr_accept:") or data.startswith("bkr_reject:"):
+            if user_id not in BUYER_REQUEST_MANAGER_IDS:
+                tg_answer_callback_query(callback_id,"Нет доступа"); return jsonify({"ok":True})
+            decision="accept" if data.startswith("bkr_accept:") else "reject"
+            req,changed,message=resolve_buyer_request(data.split(":",1)[1],user_id,username,decision)
+            if not changed:
+                tg_answer_callback_query(callback_id,message or "На заявку уже ответили"); return jsonify({"ok":True})
+            tg_answer_callback_query(callback_id,"Заявка принята" if decision=="accept" else "Заявка отклонена")
+            finish_buyer_request(req)
+            if decision=="accept":
+                tg_send_message(chat_id,
+                    "⚠️ Не забудь вручную перевести этот king в бан."
+                    if req.get("action")=="ban"
+                    else "⚠️ Не забудь вручную вернуть этот king в free.")
+            return jsonify({"ok":True})
+
         # ========= СБОРКИ: INLINE =========
         if data.startswith("asm_issue:"):
             row_index = int(data.split(":", 1)[1])
@@ -27837,9 +27979,37 @@ def handle_callback_query(callback_query):
 
         return jsonify({"ok": True})
 
+
+def handle_photo_message(msg):
+    try:
+        chat_id=msg["chat"]["id"]; user_id=msg["from"]["id"]; username=msg["from"].get("username","")
+        register_buyer_from_username(user_id,username)
+        state=get_state(user_id)
+        if state.get("mode")!="buyer_return_photo":
+            tg_send_message(chat_id,"Фото сейчас не ожидается."); return
+        photos=msg.get("photo") or []
+        if not photos:
+            tg_send_message(chat_id,"Прикрепи фото ещё раз."); return
+        file_id=str(photos[-1].get("file_id","")).strip()
+        req=create_buyer_request(user_id,username,get_buyer_code(user_id),
+            state.get("buyer_return_king_name",""),state.get("buyer_return_action",""),
+            state.get("buyer_return_reason",""),file_id)
+        count=send_buyer_request_managers(req); clear_state(user_id)
+        if not count:
+            with buyer_king_requests_lock: buyer_king_requests.pop(req["id"],None)
+            tg_send_message(chat_id,"❌ Не удалось отправить заявку менеджерам.")
+        else:
+            tg_send_message(chat_id,f"✅ Заявка по king {req['king_name']} отправлена менеджерам. Ожидай решения.")
+        send_buyer_kings_menu(chat_id)
+    except Exception as e:
+        logging.exception("handle_photo_message crashed")
+        tg_send_message(msg.get("chat",{}).get("id"),"❌ Не удалось создать заявку: "+str(e))
+
 def process_incoming_message(msg):
     if msg.get("text"):
         handle_message(msg)
+    elif msg.get("photo"):
+        handle_photo_message(msg)
     elif msg.get("document"):
         handle_document_message(msg)
     elif msg.get("sticker"):
