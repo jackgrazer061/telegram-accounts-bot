@@ -146,6 +146,49 @@ FARMERS_USERS = {
     8276201410: "AmandaSeyfried_Farmer",
 }
 
+
+BUYER_USERNAME_TO_CODE = {
+    'sachabaroncohen_crypto': 'MCH79',
+    'heathledger_mb': 'MS77',
+    'donaldjosephqualls': 'VK82',
+    'iamdoctortyler': 'richard',
+    'brendangleeson_mbcrypto': 'AL146',
+    'danawhitegambling': 'AK91',
+    'dwayne_johnson_mb_gambling': 'DK99',
+    'piterpolmbgembla': 'MD94',
+    'benjaminbuttonmbgembla': 'AL102',
+    'colin_farrelidze': 'IK92',
+    'jaredletombgamble': 'AU85',
+    'alanritchsonmbgambling': 'MD9',
+    'silvio_dante_juniormediabuyer': 'SN11',
+    'johnydepptlgambling': 'ES86',
+    'zach_galifianakis_mbgembl': 'VG98',
+    'mikhailshats_uam': 'AG135',
+    'davidpauljuniormbgembla': 'DD93',
+    'johntravoltambgembla': 'AH6',
+    'alpcinombgambling': 'IJ90',
+    'gosling_mbg': 'ISH95',
+    'mattewmcconaugheyjuniormbgembla': 'AM87',
+    'edwardnortonmbgembla': 'VK84',
+    'leonardodicaprio_senioruam': 'AA96',
+    'arnoldschwarzenegger_senioruam': 'DR100',
+    'maratsafin_senioruam': 'VP101',
+    'homersimpson_senioruam': 'SA122',
+    'gambino_d': 'DG83',
+    'sydneysweeney_hombassistant': 'DS78',
+    'madsmikkelsenmbgembla': 'NH25',
+    'niallmatter_creative_producer': 'VD22',
+    'takeshigembl': 'SV89',
+    'stevecarell_ttgembla': 'MG88',
+    'marlonbrandomotiondesigner': 'sasha',
+    'daniel_craig147': 'AP147',
+    'capplillo': 'VO141',
+    'dextermorgan_mb': 'NR152',
+    'miles_teller_googleads': 'VSH151',
+    'tomhardy_crypto': 'RP28',
+}
+BUYERS_USERS = {}
+
 MISC_HIDDEN_USERS = {
     7851493919,  # CateBlanchettAccountManager
     8797795819,  # markzuckerberg_farm
@@ -231,6 +274,13 @@ FPS_REQUEST_COL_NUM = 10
 PIXELS_REQUEST_COL_NUM = 10
 ACCOUNTS_REQUEST_COL_NUM = 15
 MENU_ACCOUNTS = 'Accounts'
+MENU_BUYER = 'Buyer'
+BUYER_MENU_KINGS = '👑 Кинги байеров'
+BUYER_KINGS_GET = '➡️ Взять кинг — Buyer'
+BUYER_KINGS_FREE = '🆓 Свободные кинги — Buyer'
+BUYER_KINGS_SEARCH = '🔎 Поиск кинга — Buyer'
+BUYER_BACK_MAIN = '⬅️ Назад — Buyer'
+BUYER_KINGS_BACK = '⬅️ Назад в Buyer'
 MENU_PIXELS = 'Пиксели'
 MENU_FARMERS = 'Farmers'
 FARM_MENU_KING = 'King'
@@ -343,8 +393,30 @@ def is_accounts_user(user_id):
 def is_farmers_user(user_id):
     return user_id in FARMERS_USERS
 
+def normalize_telegram_username(username):
+    return str(username or "").strip().lstrip("@").lower()
+
+def register_buyer_from_username(user_id, username):
+    buyer_code = BUYER_USERNAME_TO_CODE.get(
+        normalize_telegram_username(username), ""
+    )
+    if buyer_code:
+        BUYERS_USERS[int(user_id)] = buyer_code
+    return buyer_code
+
+def is_buyer_user(user_id):
+    return int(user_id) in BUYERS_USERS
+
+def get_buyer_code(user_id):
+    return str(BUYERS_USERS.get(int(user_id), "") or "").strip()
+
 def has_access(user_id):
-    return is_admin(user_id) or is_accounts_user(user_id) or is_farmers_user(user_id)
+    return (
+        is_admin(user_id)
+        or is_accounts_user(user_id)
+        or is_farmers_user(user_id)
+        or is_buyer_user(user_id)
+    )
 
 def can_see_misc(user_id):
     return has_access(user_id)
@@ -4027,6 +4099,29 @@ def send_broadcast_message(msg_id):
         except Exception:
             logging.exception(f"broadcast send failed {uid}")
 
+
+def send_buyer_menu(chat_id, text="Меню Buyer:"):
+    tg_send_message(chat_id, text, [
+        [{"text": BUYER_MENU_KINGS}],
+        [{"text": BUYER_BACK_MAIN}],
+        [{"text": MENU_CANCEL}],
+    ])
+
+def send_buyer_kings_menu(chat_id, text="Кинги байеров:"):
+    tg_send_message(chat_id, text, [
+        [{"text": BUYER_KINGS_GET}],
+        [{"text": BUYER_KINGS_FREE}],
+        [{"text": BUYER_KINGS_SEARCH}],
+        [{"text": BUYER_KINGS_BACK}],
+        [{"text": MENU_CANCEL}],
+    ])
+
+def send_kings_menu_for_user(chat_id, user_id, text="Меню кингов:"):
+    if is_buyer_user(user_id):
+        send_buyer_kings_menu(chat_id, text)
+    else:
+        send_kings_menu(chat_id, text)
+
 def send_main_menu(chat_id, text="Главное меню:", user_id=None):
     keyboard = []
 
@@ -4056,6 +4151,10 @@ def send_main_menu(chat_id, text="Главное меню:", user_id=None):
         if can_see_misc(user_id):
             keyboard.append([{"text": MENU_MISC}])
 
+        keyboard.append([{"text": MENU_CANCEL}])
+
+    elif user_id is not None and is_buyer_user(user_id):
+        keyboard.append([{"text": MENU_BUYER}])
         keyboard.append([{"text": MENU_CANCEL}])
 
     else:
@@ -15592,6 +15691,38 @@ def process_kings_bulk_proxy_step(chat_id, user_id, username, proxy_text):
                 )
 
                 if octo_ok:
+                    if state.get("buyer_mode"):
+                        buyer_code = str(
+                            state.get("buyer_code")
+                            or state.get("king_for_whom")
+                            or ""
+                        ).strip()
+
+                        profile_uuid = extract_octo_profile_uuid_from_result(
+                            octo_result
+                        )
+                        if not profile_uuid:
+                            found_profile = octo_find_profile_by_search(
+                                king_name,
+                                page_len=100
+                            )
+                            profile_uuid = extract_octo_profile_uuid_from_result(
+                                found_profile
+                            )
+
+                        if not profile_uuid:
+                            octo_ok = False
+                            octo_result = "Не удалось получить UUID для buyer tags"
+                        else:
+                            tags_ok, tags_message = octo_update_profile_tags_by_uuid(
+                                profile_uuid,
+                                [OCTO_TAG_ACCOUNT_MANAGERS, buyer_code]
+                            )
+                            if not tags_ok:
+                                octo_ok = False
+                                octo_result = "Buyer tags error: " + str(tags_message)
+
+                if octo_ok:
                     ok = True
 
                     today = datetime.now(MOSCOW_TZ).strftime("%d/%m/%Y")
@@ -15976,7 +16107,10 @@ def finish_kings_bulk(chat_id, user_id):
         else:
             clear_state(user_id)
             clear_kings_bulk_pending_session(user_id)
-            send_kings_menu(chat_id, "Не удалось выдать ни одного king. Проверь логи — результата выдачи не нашёл ни в состоянии, ни в таблице.")
+            send_kings_menu_for_user(
+                chat_id, user_id,
+                "Не удалось выдать ни одного king. Проверь логи — результата выдачи не нашёл ни в состоянии, ни в таблице."
+            )
             return
 
     message_parts = build_kings_bulk_result_messages(results, for_whom)
@@ -16018,10 +16152,14 @@ def finish_kings_bulk(chat_id, user_id):
         "kings_bulk_results": results,
         "updated_at": time.time(),
         "last_accounts_section": "kings",
+        "buyer_mode": bool(state.get("buyer_mode")),
+        "buyer_code": state.get("buyer_code", ""),
     }
     set_state(user_id, download_state)
 
-    send_kings_menu(chat_id, "Выбери следующее действие:")
+    send_kings_menu_for_user(
+        chat_id, user_id, "Выбери следующее действие:"
+    )
 
 def find_free_bm(exclude_bm_id=None):
     rows = get_sheet_rows_cached(SHEET_BMS)
@@ -20069,7 +20207,10 @@ def handle_message(msg):
 
         text = str(msg.get("text", "")).strip()
         is_menu_click = text in {
-            MENU_ACCOUNTS, MENU_FARMERS, MENU_STATS, MENU_ADMIN,
+            MENU_ACCOUNTS, MENU_FARMERS, MENU_BUYER, BUYER_MENU_KINGS,
+            BUYER_KINGS_GET, BUYER_KINGS_FREE, BUYER_KINGS_SEARCH,
+            BUYER_BACK_MAIN, BUYER_KINGS_BACK,
+            MENU_STATS, MENU_ADMIN,
             SUBMENU_ACCOUNTS_MAIN, SUBMENU_BACK_MAIN, BTN_BACK_TO_MENU,
             MENU_KINGS, MENU_BMS, MENU_FPS, MENU_PIXELS,
             FARM_MENU_KING, FARM_MENU_BM, FARM_MENU_FP, FARM_MENU_ASSEMBLIES,
@@ -20097,6 +20238,8 @@ def handle_message(msg):
 
         username = msg["from"].get("username", "")
         text = str(msg.get("text", "")).strip()
+
+        register_buyer_from_username(user_id, username)
 
         if not has_access(user_id):
             tg_send_message(
@@ -21162,6 +21305,70 @@ def handle_message(msg):
             send_main_menu(chat_id, "Главное меню:", user_id=user_id)
             return
 
+        if text == MENU_BUYER:
+            if not is_buyer_user(user_id):
+                tg_send_message(chat_id, "У вас нет доступа к Buyer.")
+                return
+            clear_state(user_id)
+            send_buyer_menu(chat_id)
+            return
+
+        if text == BUYER_MENU_KINGS:
+            if not is_buyer_user(user_id):
+                tg_send_message(chat_id, "У вас нет доступа.")
+                return
+            clear_state(user_id)
+            send_buyer_kings_menu(chat_id)
+            return
+
+        if text == BUYER_BACK_MAIN:
+            clear_state(user_id)
+            send_main_menu(chat_id, user_id=user_id)
+            return
+
+        if text == BUYER_KINGS_BACK:
+            clear_state(user_id)
+            send_buyer_menu(chat_id)
+            return
+
+        if text == BUYER_KINGS_FREE:
+            if not is_buyer_user(user_id):
+                tg_send_message(chat_id, "У вас нет доступа.")
+                return
+            send_free_kings(chat_id)
+            send_buyer_kings_menu(chat_id)
+            return
+
+        if text == BUYER_KINGS_SEARCH:
+            if not is_buyer_user(user_id):
+                tg_send_message(chat_id, "У вас нет доступа.")
+                return
+            set_state(user_id, {
+                "mode": "awaiting_buyer_search_king_name",
+                "buyer_mode": True,
+            })
+            send_text_input_prompt(chat_id, "Впиши название кинга.")
+            return
+
+        if text == BUYER_KINGS_GET:
+            if not is_buyer_user(user_id):
+                tg_send_message(chat_id, "У вас нет доступа.")
+                return
+            buyer_code = get_buyer_code(user_id)
+            clear_state(user_id)
+            set_state(user_id, {
+                "mode": KING_OCTO_MODE_COUNT,
+                "buyer_mode": True,
+                "buyer_code": buyer_code,
+                "king_for_whom": buyer_code,
+            })
+            tg_send_message(
+                chat_id,
+                f"Buyer: {buyer_code}\\n\\nСколько king нужно?",
+                keyboard=[[{"text": BUYER_KINGS_BACK}, {"text": MENU_CANCEL}]]
+            )
+            return
+
         if text == MENU_ACCOUNTS:
             if not (is_admin(user_id) or is_accounts_user(user_id)):
                 tg_send_message(chat_id, "У вас нет доступа к разделу Accounts.")
@@ -22124,6 +22331,22 @@ def handle_message(msg):
             return
 
         # ========= КИНГИ =========
+        if is_buyer_user(user_id) and text in {
+            SUBMENU_GET_KINGS,
+            SUBMENU_CRYPTO_KINGS,
+            SUBMENU_FREE_KINGS,
+            SUBMENU_RETURN_KING,
+            SUBMENU_SEARCH_KING,
+            MENU_KINGS,
+            FARM_READY_ACCOUNTS_MENU,
+        }:
+            tg_send_message(
+                chat_id,
+                "Для Buyer используй кнопки раздела Buyer."
+            )
+            send_buyer_kings_menu(chat_id)
+            return
+
         if text == SUBMENU_FREE_KINGS:
             if state.get("last_farmers_section") == "kings":
                 send_free_farm_kings(chat_id)
@@ -23388,6 +23611,42 @@ def handle_message(msg):
                 return
 
             state["king_price"] = selected_price
+
+            if state.get("buyer_mode"):
+                count_needed = int(state.get("kings_count", 0) or 0)
+                buyer_code = get_buyer_code(user_id) or str(
+                    state.get("buyer_code", "")
+                ).strip()
+
+                selected = find_free_kings_by_geo_and_price(
+                    count_needed,
+                    geo,
+                    selected_price
+                )
+
+                if len(selected) < count_needed:
+                    clear_state(user_id)
+                    send_buyer_kings_menu(
+                        chat_id,
+                        f"Недостаточно свободных king по GEO {geo} "
+                        f"и цене {selected_price}.\nДоступно: {len(selected)}"
+                    )
+                    return
+
+                state["king_for_whom"] = buyer_code
+                state["buyer_code"] = buyer_code
+                state["king_selected_rows"] = selected
+                state["mode"] = KING_OCTO_MODE_BULK_NAMES
+                set_state(user_id, state)
+
+                tg_send_message(
+                    chat_id,
+                    f"Buyer: {buyer_code}\n"
+                    f"Пришли {count_needed} названий для king.\n"
+                    "Каждое название с новой строки."
+                )
+                return
+
             state["mode"] = KING_OCTO_MODE_DEPARTMENT
             set_state(user_id, state)
 
@@ -24076,6 +24335,30 @@ def handle_message(msg):
                 return
 
             show_found_king(chat_id, user_id, found)
+            return
+
+        if state.get("mode") == "awaiting_buyer_search_king_name":
+            king_name = text.strip()
+            if not king_name:
+                send_text_input_prompt(chat_id, "Впиши название кинга.")
+                return
+
+            result = build_king_search_text(king_name)
+            clear_state(user_id)
+
+            if not result:
+                send_buyer_kings_menu(chat_id, "Кинг не найден.")
+                return
+
+            tg_send_king_search_result_as_txt(
+                chat_id=chat_id,
+                title=result["title"],
+                king_name=result["king_name"],
+                meta_text=result["meta_text"],
+                data_text=result["data_text"],
+                inline_buttons=[]
+            )
+            send_buyer_kings_menu(chat_id)
             return
 
         if state.get("mode") == "awaiting_search_king_name":
@@ -25998,6 +26281,8 @@ def handle_callback_query(callback_query):
         username = str(
             callback_query.get("from", {}).get("username", "") or ""
         ).strip()
+
+        register_buyer_from_username(user_id, username)
 
         if not has_access(user_id):
             tg_answer_callback_query(callback_id, "Нет доступа")
