@@ -8118,8 +8118,15 @@ def get_cached_octo_fp_profile_uuid(profile_title):
 
 
 def find_octo_fp_warehouse_uuid(profile_title):
-    """Находит UUID склада FP. Сначала cache, затем до 80 страниц Octo."""
+    """
+    UUID склада FP:
+    1) локальный cache;
+    2) Octo API ?search=точное название;
+    3) старый безопасный fallback по первым 1000 профилям.
+    Глубокий перебор 8000 профилей больше не используется.
+    """
     profile_title = str(profile_title or "").strip()
+
     if not profile_title:
         return "", "Пустое название склада"
 
@@ -8127,28 +8134,69 @@ def find_octo_fp_warehouse_uuid(profile_title):
     if cached:
         return cached, "cache"
 
-    profile = octo_find_profile_by_title(profile_title, max_pages=10)
-
-    if not profile:
-        profile = octo_find_profile_by_title_deep(
+    # Основной быстрый путь.
+    try:
+        profile = octo_find_profile_by_search(
             profile_title,
-            max_pages=80,
-            sleep_between=0.05,
+            page_len=100
         )
+    except Exception as e:
+        # search пока оставляем с fallback: если конкретный Octo deployment
+        # не принимает этот параметр, выдача FP продолжит работать старым способом.
+        logging.warning(
+            "OCTO_SEARCH_FAILED_FALLBACK "
+            f"title={profile_title}: {e}"
+        )
+        profile = None
+
+    if profile:
+        profile_uuid = str(
+            profile.get("uuid")
+            or profile.get("id")
+            or ""
+        ).strip()
+
+        if profile_uuid:
+            cache_octo_fp_profile_uuid(
+                profile_title,
+                profile_uuid
+            )
+            return profile_uuid, "search"
+
+        logging.warning(
+            "OCTO_SEARCH_MATCH_WITHOUT_UUID "
+            f"title={profile_title}"
+        )
+
+    # Временная страховка — старый поиск максимум по 1000 профилей.
+    profile = octo_find_profile_by_title(
+        profile_title,
+        max_pages=10
+    )
 
     if not profile:
         return "", (
-            f"Octo профиль '{profile_title}' не найден после глубокого поиска "
-            "по первым 8000 профилям"
+            f"Octo профиль '{profile_title}' не найден "
+            "через search и fallback по первым 1000 профилям"
         )
 
-    profile_uuid = str(profile.get("uuid") or profile.get("id") or "").strip()
+    profile_uuid = str(
+        profile.get("uuid")
+        or profile.get("id")
+        or ""
+    ).strip()
+
     if not profile_uuid:
-        return "", f"У Octo профиля '{profile_title}' не найден UUID"
+        return "", (
+            f"У Octo профиля '{profile_title}' не найден UUID"
+        )
 
-    cache_octo_fp_profile_uuid(profile_title, profile_uuid)
-    return profile_uuid, "found"
+    cache_octo_fp_profile_uuid(
+        profile_title,
+        profile_uuid
+    )
 
+    return profile_uuid, "fallback"
 
 def maybe_open_fp_warehouse_in_octo(warehouse_name, farm=False):
     warehouse_name = str(warehouse_name or "").strip()
@@ -18166,6 +18214,76 @@ def octo_extract_profile_items(data):
         items = data
 
     return items
+
+
+
+def octo_find_profile_by_search(profile_title, page_len=100):
+    """Быстрый поиск Octo через ?search=. Возвращает только точное совпадение title/name."""
+    profile_title = str(profile_title or "").strip()
+    if not profile_title:
+        return None
+
+    headers = {
+        "X-Octo-Api-Token": OCTO_API_TOKEN,
+        "Content-Type": "application/json",
+    }
+
+    target = profile_title.lower()
+
+    # requests сам корректно URL-encode'ит пробелы, скобки, [] и т.п.
+    params = {
+        "search": profile_title,
+        "page_len": max(1, min(int(page_len or 100), 100)),
+        "fields": "title",
+    }
+
+    url = f"{OCTO_API_BASE}/profiles"
+    resp = None
+
+    for attempt in range(5):
+        resp = requests.get(
+            url,
+            params=params,
+            headers=headers,
+            timeout=60
+        )
+
+        if resp.status_code == 429:
+            wait = 2 ** attempt
+            logging.warning(
+                "OCTO search 429 "
+                f"(attempt={attempt}), ждём {wait}s"
+            )
+            time.sleep(wait)
+            continue
+
+        resp.raise_for_status()
+        break
+    else:
+        if resp is not None:
+            resp.raise_for_status()
+        return None
+
+    items = octo_extract_profile_items(resp.json())
+
+    for item in items:
+        title_val = str(item.get("title", "")).strip().lower()
+        name_val = str(item.get("name", "")).strip().lower()
+
+        # search может вернуть похожие названия.
+        # Для автоматических действий берём ТОЛЬКО точное совпадение.
+        if title_val == target or name_val == target:
+            logging.info(
+                "OCTO_SEARCH_EXACT_MATCH "
+                f"title={profile_title}"
+            )
+            return item
+
+    logging.info(
+        "OCTO_SEARCH_NO_EXACT_MATCH "
+        f"title={profile_title} returned={len(items)}"
+    )
+    return None
 
 
 def octo_find_profile_by_title(profile_title, max_pages=10):
