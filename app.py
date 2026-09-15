@@ -2241,6 +2241,18 @@ user_state_history = {}
 state_lock = threading.Lock()
 user_action_lock = threading.Lock()
 issue_lock = threading.Lock()
+
+# Параллельная обработка Telegram webhook.
+# Разные пользователи могут выполняться одновременно.
+# Запросы одного пользователя сериализуются одним RLock,
+# чтобы шаги state-machine не перескакивали друг через друга.
+user_request_locks = {}
+user_request_locks_guard = threading.Lock()
+
+# Метрики конкурентности для /health и Railway logs.
+webhook_concurrency_lock = threading.Lock()
+active_webhook_requests = 0
+peak_webhook_requests = 0
 accounts_lock = threading.Lock()
 processed_updates = {}
 processed_updates_lock = threading.Lock()
@@ -13690,6 +13702,74 @@ def build_farmer_stats_text(username, user_id=None):
     )
 
     return "\n".join(text_parts)
+
+
+def get_user_request_lock(user_id):
+    """Возвращает постоянный lock конкретного Telegram user_id."""
+    key = str(user_id or "").strip()
+
+    # Для апдейта без пользователя lock не нужен.
+    if not key:
+        return None
+
+    with user_request_locks_guard:
+        lock = user_request_locks.get(key)
+        if lock is None:
+            lock = threading.RLock()
+            user_request_locks[key] = lock
+        return lock
+
+
+def telegram_update_user_id(update):
+    """Достаёт user_id из callback/message/edited_message."""
+    update = update or {}
+
+    callback_query = update.get("callback_query") or {}
+    callback_from = callback_query.get("from") or {}
+
+    if callback_from.get("id") is not None:
+        return callback_from.get("id")
+
+    msg = (
+        update.get("message")
+        or update.get("edited_message")
+        or {}
+    )
+    msg_from = msg.get("from") or {}
+
+    return msg_from.get("id")
+
+
+def begin_webhook_request():
+    global active_webhook_requests, peak_webhook_requests
+
+    with webhook_concurrency_lock:
+        active_webhook_requests += 1
+
+        if active_webhook_requests > peak_webhook_requests:
+            peak_webhook_requests = active_webhook_requests
+
+        return active_webhook_requests
+
+
+def end_webhook_request():
+    global active_webhook_requests
+
+    with webhook_concurrency_lock:
+        active_webhook_requests = max(
+            0,
+            active_webhook_requests - 1
+        )
+        return active_webhook_requests
+
+
+def get_webhook_concurrency_stats():
+    with webhook_concurrency_lock:
+        return {
+            "active": int(active_webhook_requests),
+            "peak": int(peak_webhook_requests),
+        }
+
 
 def get_state(user_id):
     with state_lock:
@@ -27376,51 +27456,110 @@ def health():
     request_stale = now - last_request_time > WATCHDOG_TIMEOUT
     background_stale = now - last_background_time > WATCHDOG_TIMEOUT
 
+    concurrency = get_webhook_concurrency_stats()
+
     if background_stale:
         return jsonify({
             "ok": False,
-            "error": "background threads stale"
+            "error": "background threads stale",
+            "webhook_active": concurrency["active"],
+            "webhook_peak": concurrency["peak"],
+            "python_threads": threading.active_count(),
         }), 503
 
     return jsonify({
         "ok": True,
         "last_request_age": int(now - last_request_time),
         "last_background_age": int(now - last_background_time),
+        "webhook_active": concurrency["active"],
+        "webhook_peak": concurrency["peak"],
+        "python_threads": threading.active_count(),
+        "user_request_locks": len(user_request_locks),
     }), 200
-
 
 @app.route("/webhook", methods=["POST"])
 def webhook():
+    started_at = time.monotonic()
+    concurrency_started = False
+    update_id = None
+    user_id = None
+
     try:
         update = request.get_json(silent=True) or {}
         update_id = update.get("update_id")
 
         cleanup_processed_updates()
 
+        # processed_updates_lock уже защищает этот участок от race
+        # между несколькими Gunicorn threads.
         if is_duplicate_update(update_id):
-            logging.info(f"SKIP DUPLICATE update_id={update_id}")
+            logging.info(
+                f"SKIP DUPLICATE update_id={update_id}"
+            )
             return jsonify({"ok": True})
 
-        callback_query = update.get("callback_query")
-        if callback_query:
-            handle_callback_query(callback_query)
-            return jsonify({"ok": True})
+        user_id = telegram_update_user_id(update)
+        user_lock = get_user_request_lock(user_id)
 
-        msg = update.get("message") or update.get("edited_message")
+        active_now = begin_webhook_request()
+        concurrency_started = True
 
-        logging.info(
-            f"WEBHOOK update_id={update_id} has_message={bool(msg)} has_callback={bool(callback_query)}"
-        )
+        def process_update():
+            callback_query = update.get("callback_query")
 
-        if msg:
-            process_incoming_message(msg)
+            if callback_query:
+                handle_callback_query(callback_query)
+                return
+
+            msg = (
+                update.get("message")
+                or update.get("edited_message")
+            )
+
+            logging.info(
+                "WEBHOOK "
+                f"update_id={update_id} "
+                f"user_id={user_id} "
+                f"active={active_now} "
+                f"has_message={bool(msg)} "
+                f"has_callback={bool(callback_query)}"
+            )
+
+            if msg:
+                process_incoming_message(msg)
+
+        # Один человек не может одновременно исполнить два шага.
+        # Разные user_id при gthread работают параллельно.
+        if user_lock is not None:
+            with user_lock:
+                process_update()
+        else:
+            process_update()
 
         return jsonify({"ok": True})
 
     except Exception as e:
-        logging.exception(f"webhook error: {e}")
+        logging.exception(
+            f"webhook error update_id={update_id} "
+            f"user_id={user_id}: {e}"
+        )
         notify_admin_about_error("webhook", str(e))
         return jsonify({"ok": True})
+
+    finally:
+        if concurrency_started:
+            remaining = end_webhook_request()
+            elapsed = time.monotonic() - started_at
+
+            # Показываем реальные долгие запросы в Railway.
+            if elapsed >= 2.0:
+                logging.warning(
+                    "SLOW_WEBHOOK "
+                    f"update_id={update_id} "
+                    f"user_id={user_id} "
+                    f"elapsed={elapsed:.2f}s "
+                    f"active_after={remaining}"
+                )
 
 @app.route("/fastadscheck-import", methods=["POST", "OPTIONS"])
 def fastadscheck_import():
@@ -27734,6 +27873,11 @@ def start_background_threads_once():
     with background_threads_lock:
         if background_threads_started:
             return
+
+        logging.info(
+            "Concurrency mode: use 1 Gunicorn worker + gthread. "
+            "Background threads and in-memory states stay in one process."
+        )
 
         backup_thread = threading.Thread(
             target=backup_scheduler_loop,
