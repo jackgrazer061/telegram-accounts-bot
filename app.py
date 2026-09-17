@@ -278,6 +278,13 @@ ACCOUNTS_REQUEST_COL_NUM = 15
 MENU_ACCOUNTS = 'Accounts'
 MENU_BUYER = 'Buyer'
 BUYER_MENU_KINGS = '👑 Кинги байеров'
+BUYER_MENU_FARM_KINGS = '📦 Farm Kings'
+BUYER_FARM_GET = '➡️ Взять готовый Farm King — Buyer'
+BUYER_FARM_FREE = '📊 Свободные готовые Farm Kings — Buyer'
+BUYER_FARM_RETURN = '↩️ Вернуть Farm King — Buyer'
+BUYER_FARM_RETURN_BAN = '🚫 В бан — Buyer Farm King'
+BUYER_FARM_RETURN_FREE = '♻️ В free — Buyer Farm King'
+BUYER_FARM_BACK = '⬅️ Назад — Buyer Farm Kings'
 BUYER_KINGS_GET = '➡️ Взять кинг — Buyer'
 BUYER_KINGS_FREE = '🆓 Свободные кинги — Buyer'
 BUYER_KINGS_SEARCH = '🔎 Поиск кинга — Buyer'
@@ -335,6 +342,9 @@ FARM_READY_FARMER_EDIT = '✏️ Редактировать переданные
 FARM_READY_ACCOUNTS_ISSUE = '➡️ Выдать готовый Farm King'
 FARM_READY_ACCOUNTS_FREE = '📊 Свободные готовые Farm Kings'
 FARM_READY_ACCOUNTS_RETURN = '↩️ Вернуть Farm King'
+FARM_READY_ACCOUNTS_RETURN_BAN = '🚫 В бан — Farm King'
+FARM_READY_ACCOUNTS_RETURN_FREE = '♻️ В free — Farm King'
+FARM_READY_ACCOUNTS_SEARCH = '🔎 Поиск Farm King'
 FARM_READY_BACK_FARMERS = '⬅️ Назад в Farmers'
 FARM_READY_BACK_ACCOUNTS = '⬅️ Назад в Accounts'
 FARM_READY_STAGE_META_BTN = '⚡ 3 дня + Meta AI'
@@ -4132,23 +4142,32 @@ def tg_finish_buyer_request_photo(chat_id,message_id,caption):
         "reply_markup":{"inline_keyboard":[]}},timeout=20)
     return r.status_code==200
 
-def buyer_request_caption(req,final=""):
-    uname=req.get("buyer_username","")
-    who=f"@{uname}" if uname else "без username"
-    action="🚫 В БАН" if req.get("action")=="ban" else "♻️ ВЕРНУТЬ В FREE"
-    s=(f"📨 Заявка от Buyer\n\n👤 Байер: {req.get('buyer_code')} ({who})\n"
-       f"👑 King: {req.get('king_name')}\n🔄 Действие: {action}\n"
-       f"💬 Причина: {req.get('reason')}")
-    return s+("\n\n"+final if final else "")
+def buyer_request_caption(req, final=""):
+    uname = req.get("buyer_username", "")
+    who = f"@{uname}" if uname else "без username"
+    is_farm = req.get("resource_type") == "farm_king"
+    title = "📨 Заявка по Farm King от Buyer" if is_farm else "📨 Заявка от Buyer"
+    item_label = "Farm King" if is_farm else "King"
+    action = "🚫 В БАН" if req.get("action") == "ban" else "♻️ ВЕРНУТЬ В FREE"
+    s = (
+        f"{title}\n\n👤 Байер: {req.get('buyer_code')} ({who})\n"
+        f"👑 {item_label}: {req.get('king_name')}\n🔄 Действие: {action}\n"
+        f"💬 Причина: {req.get('reason')}"
+    )
+    return s + ("\n\n" + final if final else "")
 
-def create_buyer_request(user_id,username,buyer_code,king_name,action,reason,file_id):
-    rid=uuid.uuid4().hex[:12]
-    req={"id":rid,"buyer_user_id":int(user_id),
-         "buyer_username":normalize_telegram_username(username),
-         "buyer_code":buyer_code,"king_name":king_name,"action":action,
-         "reason":reason,"photo_file_id":file_id,"status":"pending",
-         "resolved_by_username":"","manager_messages":[]}
-    with buyer_king_requests_lock: buyer_king_requests[rid]=req
+def create_buyer_request(user_id, username, buyer_code, king_name, action, reason, file_id, resource_type="king"):
+    rid = uuid.uuid4().hex[:12]
+    req = {
+        "id": rid, "buyer_user_id": int(user_id),
+        "buyer_username": normalize_telegram_username(username),
+        "buyer_code": buyer_code, "king_name": king_name, "action": action,
+        "reason": reason, "photo_file_id": file_id, "status": "pending",
+        "resolved_by_username": "", "manager_messages": [],
+        "resource_type": str(resource_type or "king"),
+    }
+    with buyer_king_requests_lock:
+        buyer_king_requests[rid] = req
     return req
 
 def send_buyer_request_managers(req):
@@ -4180,20 +4199,29 @@ def resolve_buyer_request(rid,manager_id,manager_username,decision):
         return dict(req),True,""
 
 def finish_buyer_request(req):
-    uname=req.get("resolved_by_username","")
-    manager=f"@{uname}" if uname else f"ID {req.get('resolved_by_id')}"
-    accepted=req.get("status")=="accepted"
-    final=("✅ ПРИНЯТО" if accepted else "❌ ОТКЛОНЕНО")+f"\nОтветил: {manager}"
-    for item in req.get("manager_messages",[]):
-        try: tg_finish_buyer_request_photo(item["chat_id"],item["message_id"],buyer_request_caption(req,final))
-        except Exception: logging.exception("buyer request edit failed")
-    word="принята" if accepted else "отклонена"
-    tg_send_message(req["buyer_user_id"],
-                    f"{'✅' if accepted else '❌'} Твоя заявка по king {req.get('king_name')} {word} менеджером {manager}.")
+    uname = req.get("resolved_by_username", "")
+    manager = f"@{uname}" if uname else f"ID {req.get('resolved_by_id')}"
+    accepted = req.get("status") == "accepted"
+    final = ("✅ ПРИНЯТО" if accepted else "❌ ОТКЛОНЕНО") + f"\nОтветил: {manager}"
+    for item in req.get("manager_messages", []):
+        try:
+            tg_finish_buyer_request_photo(
+                item["chat_id"], item["message_id"], buyer_request_caption(req, final)
+            )
+        except Exception:
+            logging.exception("buyer request edit failed")
+    word = "принята" if accepted else "отклонена"
+    label = "Farm King" if req.get("resource_type") == "farm_king" else "king"
+    tg_send_message(
+        req["buyer_user_id"],
+        f"{'✅' if accepted else '❌'} Твоя заявка по {label} {req.get('king_name')} "
+        f"{word} менеджером {manager}."
+    )
 
 def send_buyer_menu(chat_id, text="Меню Buyer:"):
     tg_send_message(chat_id, text, [
         [{"text": BUYER_MENU_KINGS}],
+        [{"text": BUYER_MENU_FARM_KINGS}],
         [{"text": BUYER_BACK_MAIN}],
         [{"text": MENU_CANCEL}],
     ])
@@ -4481,10 +4509,237 @@ def process_ready_farm_kings_account_return(
     return success, []
 
 
+def find_farm_ready_by_name_or_octo(query):
+    ensure_farm_ready_columns()
+    target = str(query or "").strip().lower()
+    if not target:
+        return None
+
+    direct = find_farm_ready_source_by_name(query)
+    if direct:
+        return direct
+
+    records = grist_query_records(
+        SHEET_FARM_KINGS,
+        filters={FARM_READY_COL_OCTO_COMMENT: str(query or "").strip()},
+        limit=20,
+        sort="manualSort",
+    )
+    for rec in records:
+        fields = rec.get("fields") or {}
+        octo_name = str(fields.get(FARM_READY_COL_OCTO_COMMENT, "") or "").strip()
+        if octo_name.lower() == target:
+            row = ensure_row_len(
+                grist_record_to_sheet_row(SHEET_FARM_KINGS, rec), 13
+            )
+            return {"record": rec, "row": row, "record_id": int(rec["id"])}
+    return None
+
+
+def build_farm_ready_search_text(query):
+    found = find_farm_ready_by_name_or_octo(query)
+    if not found:
+        return ""
+
+    rec = found["record"]
+    row = found["row"]
+    fields = rec.get("fields") or {}
+    farmer = str(fields.get(FARM_READY_COL_FARMER_USERNAME, "") or "").strip()
+    if farmer and not farmer.startswith("@"):
+        farmer = "@" + farmer
+
+    return (
+        "🔎 Farm King найден\n\n"
+        f"👑 Название в базе: {str(row[0] or '').strip()}\n"
+        f"💬 Актуальное название в Octo: "
+        f"{str(fields.get(FARM_READY_COL_OCTO_COMMENT, '') or '').strip() or 'не указано'}\n"
+        f"🌱 Фарм: {str(fields.get(FARM_READY_COL_STAGE, '') or '').strip() or 'не указан'}\n"
+        f"📌 Статус: {str(fields.get(FARM_READY_COL_STATUS, '') or '').strip() or 'не указан'}\n"
+        f"👨‍🌾 Фармер: {farmer or 'не указан'}\n"
+        f"👨‍💻 Байер: {str(fields.get(FARM_READY_COL_BUYER, '') or '').strip() or 'не выдан'}\n"
+        f"🙋 Выдал байеру: {str(fields.get(FARM_READY_COL_ACCOUNT_ISSUER, '') or '').strip() or 'не выдан'}"
+    )
+
+
+def process_ready_farm_kings_account_free(items):
+    """Возвращает Farm King в ready и откатывает учёт выдачи байеру."""
+    actions = []
+    success = []
+    today = datetime.now(MOSCOW_TZ).strftime("%d/%m/%Y")
+
+    for item in items or []:
+        bot_name = str(item.get("name", "") or "").strip()
+        issue = item.get("issue") or {}
+        found = find_farm_ready_source_by_name(bot_name)
+        if not found or not issue.get("record_id"):
+            continue
+
+        row = found["row"]
+        actions.append(
+            farm_ready_direct_update_action(
+                found["record_id"],
+                {
+                    FARM_READY_COL_STATUS: "ready",
+                    FARM_READY_COL_BUYER: "",
+                    FARM_READY_COL_BUYER_ISSUED_AT: "",
+                    FARM_READY_COL_ACCOUNT_ISSUER: "",
+                },
+            )
+        )
+        actions.append(
+            grist_remove_record_action(SHEET_ISSUES, issue["record_id"])
+        )
+
+        # Восстанавливаем служебную выдачу на farm, потому что обычная
+        # выдача готового Farm King ожидает её и атомарно заменяет на байера.
+        farm_issue = make_issue_row(
+            name=bot_name,
+            issue_type="KING",
+            purchase_date=row[1],
+            price=normalize_numeric_for_sheet(row[2]),
+            transfer_date=today,
+            supplier=row[3],
+            buyer="farm",
+            status="ok",
+            payment_hash=get_payment_hash_from_king_row(row),
+            department="Ф",
+        )
+        actions.append(
+            grist_add_action(
+                SHEET_ISSUES,
+                normalize_issue_row_for_append(farm_issue),
+            )
+        )
+        success.append(bot_name)
+
+    if actions:
+        grist_apply(actions)
+        grist_all_mark_stale(SHEET_FARM_KINGS)
+        grist_all_mark_stale(SHEET_ISSUES)
+        invalidate_stats_cache()
+
+    return success, []
+
+
+def octo_add_profile_tags_by_uuid(profile_uuid, tags_to_add):
+    """Добавляет теги к существующим, не стирая старые."""
+    profile_uuid = str(profile_uuid or "").strip()
+    wanted = [str(x).strip() for x in (tags_to_add or []) if str(x).strip()]
+    if not profile_uuid or not wanted:
+        return False, "Пустой UUID или список тегов"
+
+    try:
+        data = octo_get_profile_by_uuid(profile_uuid)
+        profile = data.get("data", data) if isinstance(data, dict) else {}
+        existing = profile.get("tags", []) if isinstance(profile, dict) else []
+        names = []
+        for value in existing or []:
+            if isinstance(value, dict):
+                value = value.get("name") or value.get("title") or value.get("value") or ""
+            value = str(value or "").strip()
+            if value:
+                names.append(value)
+
+        final = []
+        seen = set()
+        for tag in names + [OCTO_TAG_CORBY] + wanted:
+            tag = str(tag or "").strip()
+            key = tag.lower()
+            if tag and key not in seen:
+                seen.add(key)
+                final.append(tag)
+
+        headers = {
+            "X-Octo-Api-Token": OCTO_API_TOKEN,
+            "Content-Type": "application/json",
+        }
+        resp = requests.patch(
+            f"{OCTO_API_BASE}/profiles/{profile_uuid}",
+            json={"tags": final},
+            headers=headers,
+            timeout=60,
+        )
+        if resp.status_code >= 400:
+            return False, f"Octo tag update error {resp.status_code}: {resp.text}"
+        return True, "tags added"
+    except Exception as e:
+        return False, str(e)
+
+
+def issue_ready_farm_king_to_buyer_role(farm_stage, selected_price, buyer, buyer_username):
+    ok, message, bot_name = issue_ready_farm_king_to_buyer(
+        farm_stage, selected_price, buyer, buyer_username
+    )
+    if not ok:
+        return False, message, None
+
+    found = find_farm_ready_source_by_name(bot_name)
+    if not found:
+        return True, message + "\n⚠️ Farm King выдан, но запись для Octo-тегов не найдена.", bot_name
+
+    fields = found["record"].get("fields") or {}
+    octo_name = str(fields.get(FARM_READY_COL_OCTO_COMMENT, "") or "").strip()
+    if not octo_name:
+        return True, message + "\n⚠️ Актуальное название в Octo не указано — теги не поставлены.", bot_name
+
+    try:
+        profile = octo_find_profile_by_search(octo_name, page_len=100)
+        profile_uuid = extract_octo_profile_uuid_from_result(profile)
+        if not profile_uuid:
+            return True, message + f"\n⚠️ Octo профиль «{octo_name}» не найден — теги не поставлены.", bot_name
+
+        tag_ok, tag_message = octo_add_profile_tags_by_uuid(
+            profile_uuid,
+            [OCTO_TAG_ACCOUNT_MANAGERS, buyer],
+        )
+        if not tag_ok:
+            return True, message + f"\n⚠️ Не удалось поставить теги в Octo: {tag_message}", bot_name
+
+        return True, message + f"\n🏷 Octo: добавлены теги AccountManagers и {buyer}.", bot_name
+    except Exception as e:
+        return True, message + f"\n⚠️ Ошибка тегирования Octo: {e}", bot_name
+
+
+def find_issued_farm_king_for_buyer_by_octo(octo_name, buyer_code):
+    found = find_farm_ready_by_name_or_octo(octo_name)
+    if not found:
+        return None
+    fields = found["record"].get("fields") or {}
+    if str(fields.get(FARM_READY_COL_STATUS, "") or "").strip().lower() != "issued":
+        return None
+    if str(fields.get(FARM_READY_COL_BUYER, "") or "").strip().lower() != str(buyer_code or "").strip().lower():
+        return None
+    bot_name = str(found["row"][0] or "").strip()
+    issue = find_current_issued_farm_king_issue(bot_name)
+    if not issue:
+        return None
+    return {"found": found, "issue": issue, "bot_name": bot_name}
+
+
+def send_buyer_farm_kings_menu(chat_id, text="📦 Farm Kings — Buyer:"):
+    tg_send_message(chat_id, text, [
+        [{"text": BUYER_FARM_GET}],
+        [{"text": BUYER_FARM_FREE}],
+        [{"text": BUYER_FARM_RETURN}],
+        [{"text": BUYER_FARM_BACK}],
+        [{"text": MENU_CANCEL}],
+    ])
+
+
+def send_buyer_farm_return_menu(chat_id, text="Что сделать с Farm King?"):
+    tg_send_message(chat_id, text, [
+        [{"text": BUYER_FARM_RETURN_BAN}],
+        [{"text": BUYER_FARM_RETURN_FREE}],
+        [{"text": BUYER_FARM_BACK}],
+        [{"text": MENU_CANCEL}],
+    ])
+
+
 def send_farm_ready_accounts_menu(chat_id, text="Farm Kings для Accounts:"):
     keyboard = [
         [{"text": FARM_READY_ACCOUNTS_ISSUE}],
         [{"text": FARM_READY_ACCOUNTS_FREE}],
+        [{"text": FARM_READY_ACCOUNTS_SEARCH}],
         [{"text": FARM_READY_ACCOUNTS_RETURN}],
         [{"text": FARM_READY_BACK_ACCOUNTS}],
     ]
@@ -20299,7 +20554,9 @@ def handle_message(msg):
 
         text = str(msg.get("text", "")).strip()
         is_menu_click = text in {
-            MENU_ACCOUNTS, MENU_FARMERS, MENU_BUYER, BUYER_MENU_KINGS,
+            MENU_ACCOUNTS, MENU_FARMERS, MENU_BUYER, BUYER_MENU_KINGS, BUYER_MENU_FARM_KINGS,
+            BUYER_FARM_GET, BUYER_FARM_FREE, BUYER_FARM_RETURN, BUYER_FARM_RETURN_BAN,
+            BUYER_FARM_RETURN_FREE, BUYER_FARM_BACK,
             BUYER_KINGS_GET, BUYER_KINGS_FREE, BUYER_KINGS_SEARCH,
             BUYER_KINGS_RETURN, BUYER_RETURN_BAN, BUYER_RETURN_FREE, BUYER_RETURN_BACK,
             BUYER_BACK_MAIN, BUYER_KINGS_BACK,
@@ -20310,7 +20567,8 @@ def handle_message(msg):
             FARM_READY_FARMER_MENU, FARM_READY_ACCOUNTS_MENU,
             FARM_READY_FARMER_SEND, FARM_READY_FARMER_VIEW, FARM_READY_FARMER_EDIT,
             MENU_EMAILS, EMAILS_GET, EMAILS_BACK, ADMIN_ADD_EMAILS,
-            FARM_READY_ACCOUNTS_ISSUE, FARM_READY_ACCOUNTS_FREE, FARM_READY_ACCOUNTS_RETURN,
+            FARM_READY_ACCOUNTS_ISSUE, FARM_READY_ACCOUNTS_FREE, FARM_READY_ACCOUNTS_SEARCH,
+            FARM_READY_ACCOUNTS_RETURN, FARM_READY_ACCOUNTS_RETURN_BAN, FARM_READY_ACCOUNTS_RETURN_FREE,
             FARM_READY_BACK_FARMERS, FARM_READY_BACK_ACCOUNTS,
             FARM_READY_STAGE_META_BTN, FARM_READY_STAGE_NO_META_BTN,
             FARM_ASSEMBLY_CREATE, FARM_ASSEMBLY_ISSUE, FARM_ASSEMBLY_EDIT, FARM_ASSEMBLY_VIEW, BTN_BACK_FROM_ASSEMBLIES,
@@ -20345,21 +20603,24 @@ def handle_message(msg):
 
         if state.get("mode") == "farm_ready_accounts_return_names":
             ok, error_text, king_names = parse_bulk_king_names(text)
-
             if not ok:
                 send_text_input_prompt(chat_id, error_text)
                 return
 
-            valid_items, missing = validate_ready_farm_kings_account_return(
-                king_names
-            )
-
+            valid_items, missing = validate_ready_farm_kings_account_return(king_names)
             if not valid_items:
                 clear_state(user_id)
-                send_farm_ready_accounts_menu(
-                    chat_id,
-                    "Ни одного выданного Farm King из списка не найдено."
-                )
+                send_farm_ready_accounts_menu(chat_id, "Ни одного выданного Farm King не найдено.")
+                return
+
+            action = str(state.get("farm_ready_return_action", "ban") or "ban")
+            if action == "free":
+                success, failed = process_ready_farm_kings_account_free(valid_items)
+                clear_state(user_id)
+                tg_send_long_message(chat_id, build_bulk_king_ban_result(
+                    "Возврат Farm Kings в free завершён.", success, failed, missing
+                ))
+                send_farm_ready_accounts_menu(chat_id)
                 return
 
             set_state(user_id, {
@@ -20367,61 +20628,31 @@ def handle_message(msg):
                 "farm_ready_return_items": valid_items,
                 "farm_ready_return_missing": missing,
             })
-
-            message = (
-                f"Найдено Farm Kings для возврата: {len(valid_items)}."
-            )
-
-            if missing:
-                message += (
-                    f"\nНе найдено: {len(missing)} — они будут пропущены."
-                )
-
             send_text_input_prompt(
                 chat_id,
-                message
-                + "\n\nНапиши одну причину возврата для всей пачки."
+                f"Найдено Farm Kings: {len(valid_items)}.\n\nНапиши одну причину бана для всей пачки."
             )
             return
 
         if state.get("mode") == "farm_ready_accounts_return_reason":
             reason_text = str(text or "").strip()
-
             if not reason_text:
-                send_text_input_prompt(
-                    chat_id,
-                    "Напиши причину возврата."
-                )
+                send_text_input_prompt(chat_id, "Напиши причину бана.")
                 return
-
-            items = list(
-                state.get("farm_ready_return_items") or []
-            )
-            missing = list(
-                state.get("farm_ready_return_missing") or []
-            )
-
-            success, failed = process_ready_farm_kings_account_return(
-                items,
-                reason_text
-            )
-
+            items = list(state.get("farm_ready_return_items") or [])
+            missing = list(state.get("farm_ready_return_missing") or [])
+            success, failed = process_ready_farm_kings_account_return(items, reason_text)
             clear_state(user_id)
+            tg_send_long_message(chat_id, build_bulk_king_ban_result(
+                "Перевод Farm Kings в бан завершён.", success, failed, missing
+            ))
+            send_farm_ready_accounts_menu(chat_id)
+            return
 
-            tg_send_long_message(
-                chat_id,
-                build_bulk_king_ban_result(
-                    "Возврат Farm Kings завершён.",
-                    success,
-                    failed,
-                    missing
-                )
-            )
-
-            send_farm_ready_accounts_menu(
-                chat_id,
-                "Farm Kings для Accounts:"
-            )
+        if state.get("mode") == "farm_ready_accounts_search":
+            result = build_farm_ready_search_text(text)
+            clear_state(user_id)
+            send_farm_ready_accounts_menu(chat_id, result or "Farm King не найден.")
             return
 
         # ========= ПРИОРИТЕТНАЯ ОБРАБОТКА ПРИЧИНЫ БАНА KING =========
@@ -21438,6 +21669,64 @@ def handle_message(msg):
             send_text_input_prompt(chat_id,"Впиши название king, по которому хочешь создать заявку.")
             return
 
+        if text == BUYER_MENU_FARM_KINGS:
+            if not is_buyer_user(user_id):
+                tg_send_message(chat_id, "У вас нет доступа.")
+                return
+            clear_state(user_id)
+            send_buyer_farm_kings_menu(chat_id)
+            return
+
+        if text == BUYER_FARM_BACK:
+            clear_state(user_id)
+            send_buyer_menu(chat_id)
+            return
+
+        if text == BUYER_FARM_FREE:
+            if not is_buyer_user(user_id):
+                tg_send_message(chat_id, "У вас нет доступа.")
+                return
+            send_ready_farm_king_counts(chat_id)
+            send_buyer_farm_kings_menu(chat_id)
+            return
+
+        if text == BUYER_FARM_GET:
+            if not is_buyer_user(user_id):
+                tg_send_message(chat_id, "У вас нет доступа.")
+                return
+            clear_state(user_id)
+            set_state(user_id, {
+                "mode": "buyer_farm_stage",
+                "buyer_code": get_buyer_code(user_id),
+            })
+            send_farm_ready_stage_menu(chat_id, "Какой Farm King нужен?")
+            return
+
+        if text == BUYER_FARM_RETURN:
+            if not is_buyer_user(user_id):
+                tg_send_message(chat_id, "У вас нет доступа.")
+                return
+            clear_state(user_id)
+            send_buyer_farm_return_menu(chat_id)
+            return
+
+        if text in {BUYER_FARM_RETURN_BAN, BUYER_FARM_RETURN_FREE}:
+            if not is_buyer_user(user_id):
+                tg_send_message(chat_id, "У вас нет доступа.")
+                return
+            set_state(user_id, {
+                "mode": "buyer_farm_return_name",
+                "buyer_farm_action": (
+                    "ban" if text == BUYER_FARM_RETURN_BAN else "free"
+                ),
+            })
+            send_text_input_prompt(
+                chat_id,
+                "Впиши актуальное название Farm King из «Комментарий фармера / "
+                "актуальное название в Octo»."
+            )
+            return
+
         if text == BUYER_KINGS_FREE:
             if not is_buyer_user(user_id):
                 tg_send_message(chat_id, "У вас нет доступа.")
@@ -21684,15 +21973,40 @@ def handle_message(msg):
             return
 
         if text == FARM_READY_ACCOUNTS_RETURN:
+            if not (is_admin(user_id) or is_accounts_user(user_id)):
+                tg_send_message(chat_id, "У вас нет доступа.")
+                return
+            clear_state(user_id)
+            tg_send_message(chat_id, "Что сделать с Farm King?", [
+                [{"text": FARM_READY_ACCOUNTS_RETURN_BAN}],
+                [{"text": FARM_READY_ACCOUNTS_RETURN_FREE}],
+                [{"text": FARM_READY_BACK_ACCOUNTS}],
+            ])
+            return
+
+        if text in {FARM_READY_ACCOUNTS_RETURN_BAN, FARM_READY_ACCOUNTS_RETURN_FREE}:
             set_state(user_id, {
-                "mode": "farm_ready_accounts_return_names"
+                "mode": "farm_ready_accounts_return_names",
+                "farm_ready_return_action": (
+                    "ban" if text == FARM_READY_ACCOUNTS_RETURN_BAN else "free"
+                ),
             })
             send_text_input_prompt(
                 chat_id,
-                "Отправь название Farm King или список Farm Kings, "
-                "которые нужно вернуть.\n"
-                "Каждое название — с новой строки.\n\n"
-                "Максимум 100 king за одну пачку."
+                "Отправь название Farm King или список Farm Kings, каждое с новой строки.\n\n"
+                "Максимум 100 king."
+            )
+            return
+
+        if text == FARM_READY_ACCOUNTS_SEARCH:
+            if not (is_admin(user_id) or is_accounts_user(user_id)):
+                tg_send_message(chat_id, "У вас нет доступа.")
+                return
+            set_state(user_id, {"mode": "farm_ready_accounts_search"})
+            send_text_input_prompt(
+                chat_id,
+                "Впиши название Farm King из базы или актуальное название из "
+                "«Комментарий фармера / актуальное название в Octo»."
             )
             return
 
@@ -24444,6 +24758,73 @@ def handle_message(msg):
             show_found_king(chat_id, user_id, found)
             return
 
+        if state.get("mode") == "buyer_farm_stage":
+            farm_stage = farm_ready_stage_from_button(text)
+            if not farm_stage:
+                send_farm_ready_stage_menu(chat_id, "Выбери нужный тип Farm King кнопкой:")
+                return
+            state["farm_ready_stage"] = farm_stage
+            state["mode"] = "buyer_farm_price"
+            set_state(user_id, state)
+            if not send_farm_ready_price_menu(chat_id, farm_stage):
+                clear_state(user_id)
+                send_buyer_farm_kings_menu(chat_id)
+            return
+
+        if state.get("mode") == "buyer_farm_price":
+            farm_stage = str(state.get("farm_ready_stage", "") or "").strip()
+            selected_price = farm_ready_price_from_button(text, farm_stage)
+            if selected_price is None:
+                if not send_farm_ready_price_menu(chat_id, farm_stage):
+                    clear_state(user_id)
+                    send_buyer_farm_kings_menu(chat_id)
+                return
+
+            buyer_code = get_buyer_code(user_id)
+            ok, message, _ = issue_ready_farm_king_to_buyer_role(
+                farm_stage, selected_price, buyer_code, username
+            )
+            clear_state(user_id)
+            tg_send_message(chat_id, message if ok else f"❌ {message}")
+            send_buyer_farm_kings_menu(chat_id)
+            return
+
+        if state.get("mode") == "buyer_farm_return_name":
+            octo_name = str(text or "").strip()
+            found = find_issued_farm_king_for_buyer_by_octo(
+                octo_name, get_buyer_code(user_id)
+            )
+            if not found:
+                clear_state(user_id)
+                send_buyer_farm_kings_menu(
+                    chat_id,
+                    "Farm King не найден среди выданных тебе. Используй актуальное название из Octo."
+                )
+                return
+
+            state["buyer_farm_octo_name"] = octo_name
+            state["buyer_farm_bot_name"] = found["bot_name"]
+            state["mode"] = "buyer_farm_return_reason"
+            set_state(user_id, state)
+            send_text_input_prompt(
+                chat_id,
+                "Напиши причину бана."
+                if state.get("buyer_farm_action") == "ban"
+                else "Напиши причину возврата Farm King в free."
+            )
+            return
+
+        if state.get("mode") == "buyer_farm_return_reason":
+            reason = str(text or "").strip()
+            if not reason:
+                send_text_input_prompt(chat_id, "Причина не может быть пустой.")
+                return
+            state["buyer_farm_return_reason"] = reason
+            state["mode"] = "buyer_farm_return_photo"
+            set_state(user_id, state)
+            tg_send_message(chat_id, "Теперь прикрепи фото к заявке.")
+            return
+
         if state.get("mode") == "buyer_return_king_name":
             name=text.strip()
             found=find_king_in_base_by_name(name) if name else None
@@ -26425,10 +26806,13 @@ def handle_callback_query(callback_query):
             tg_answer_callback_query(callback_id,"Заявка принята" if decision=="accept" else "Заявка отклонена")
             finish_buyer_request(req)
             if decision=="accept":
-                tg_send_message(chat_id,
-                    "⚠️ Не забудь вручную перевести этот king в бан."
-                    if req.get("action")=="ban"
-                    else "⚠️ Не забудь вручную вернуть этот king в free.")
+                item_label = "Farm King" if req.get("resource_type") == "farm_king" else "king"
+                tg_send_message(
+                    chat_id,
+                    f"⚠️ Не забудь вручную перевести этот {item_label} в бан."
+                    if req.get("action") == "ban"
+                    else f"⚠️ Не забудь вручную вернуть этот {item_label} в free."
+                )
             return jsonify({"ok":True})
 
         # ========= СБОРКИ: INLINE =========
@@ -27982,28 +28366,62 @@ def handle_callback_query(callback_query):
 
 def handle_photo_message(msg):
     try:
-        chat_id=msg["chat"]["id"]; user_id=msg["from"]["id"]; username=msg["from"].get("username","")
-        register_buyer_from_username(user_id,username)
-        state=get_state(user_id)
-        if state.get("mode")!="buyer_return_photo":
-            tg_send_message(chat_id,"Фото сейчас не ожидается."); return
-        photos=msg.get("photo") or []
+        chat_id = msg["chat"]["id"]
+        user_id = msg["from"]["id"]
+        username = msg["from"].get("username", "")
+        register_buyer_from_username(user_id, username)
+        state = get_state(user_id)
+
+        mode = state.get("mode")
+        if mode not in {"buyer_return_photo", "buyer_farm_return_photo"}:
+            tg_send_message(chat_id, "Фото сейчас не ожидается.")
+            return
+
+        photos = msg.get("photo") or []
         if not photos:
-            tg_send_message(chat_id,"Прикрепи фото ещё раз."); return
-        file_id=str(photos[-1].get("file_id","")).strip()
-        req=create_buyer_request(user_id,username,get_buyer_code(user_id),
-            state.get("buyer_return_king_name",""),state.get("buyer_return_action",""),
-            state.get("buyer_return_reason",""),file_id)
-        count=send_buyer_request_managers(req); clear_state(user_id)
-        if not count:
-            with buyer_king_requests_lock: buyer_king_requests.pop(req["id"],None)
-            tg_send_message(chat_id,"❌ Не удалось отправить заявку менеджерам.")
+            tg_send_message(chat_id, "Прикрепи фото ещё раз.")
+            return
+        file_id = str(photos[-1].get("file_id", "") or "").strip()
+
+        if mode == "buyer_farm_return_photo":
+            req = create_buyer_request(
+                user_id, username, get_buyer_code(user_id),
+                state.get("buyer_farm_octo_name", ""),
+                state.get("buyer_farm_action", ""),
+                state.get("buyer_farm_return_reason", ""),
+                file_id, resource_type="farm_king"
+            )
+            menu_sender = send_buyer_farm_kings_menu
+            item_label = "Farm King"
         else:
-            tg_send_message(chat_id,f"✅ Заявка по king {req['king_name']} отправлена менеджерам. Ожидай решения.")
-        send_buyer_kings_menu(chat_id)
+            req = create_buyer_request(
+                user_id, username, get_buyer_code(user_id),
+                state.get("buyer_return_king_name", ""),
+                state.get("buyer_return_action", ""),
+                state.get("buyer_return_reason", ""),
+                file_id, resource_type="king"
+            )
+            menu_sender = send_buyer_kings_menu
+            item_label = "king"
+
+        count = send_buyer_request_managers(req)
+        clear_state(user_id)
+        if not count:
+            with buyer_king_requests_lock:
+                buyer_king_requests.pop(req["id"], None)
+            tg_send_message(chat_id, "❌ Не удалось отправить заявку менеджерам.")
+        else:
+            tg_send_message(
+                chat_id,
+                f"✅ Заявка по {item_label} {req['king_name']} отправлена менеджерам. Ожидай решения."
+            )
+        menu_sender(chat_id)
     except Exception as e:
         logging.exception("handle_photo_message crashed")
-        tg_send_message(msg.get("chat",{}).get("id"),"❌ Не удалось создать заявку: "+str(e))
+        tg_send_message(
+            msg.get("chat", {}).get("id"),
+            "❌ Не удалось создать заявку: " + str(e)
+        )
 
 def process_incoming_message(msg):
     if msg.get("text"):
