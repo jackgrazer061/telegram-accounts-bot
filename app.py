@@ -185,7 +185,7 @@ BUYER_USERNAME_TO_CODE = {
     'capplillo': 'VO141',
     'dextermorgan_mb': 'NR152',
     'miles_teller_googleads': 'VSH151',
-    'tomhardy_crypto': 'RP28',
+    'tomhardy_crypto': 'AA96',
 }
 BUYERS_USERS = {}
 buyer_king_requests = {}
@@ -279,6 +279,7 @@ MENU_ACCOUNTS = 'Accounts'
 MENU_BUYER = 'Buyer'
 BUYER_MENU_KINGS = '👑 Кинги байеров'
 BUYER_MENU_FARM_KINGS = '📦 Farm Kings'
+BUYER_MENU_MY_RESOURCES = '📋 Мои расходники'
 BUYER_FARM_GET = '➡️ Взять готовый Farm King — Buyer'
 BUYER_FARM_FREE = '📊 Свободные готовые Farm Kings — Buyer'
 BUYER_FARM_RETURN = '↩️ Вернуть Farm King — Buyer'
@@ -4218,10 +4219,71 @@ def finish_buyer_request(req):
         f"{word} менеджером {manager}."
     )
 
+
+def buyer_current_month_period():
+    now=datetime.now(MOSCOW_TZ)
+    start=now.replace(day=1,hour=0,minute=0,second=0,microsecond=0)
+    end=(start.replace(year=start.year+1,month=1)
+         if start.month==12 else start.replace(month=start.month+1))
+    return start,end
+
+def buyer_parse_transfer_date(value):
+    raw=str(value or "").strip()
+    if not raw: return None
+    try:
+        dt=datetime.fromisoformat(raw.replace("Z","+00:00"))
+        if dt.tzinfo is None:
+            dt=MOSCOW_TZ.localize(dt) if hasattr(MOSCOW_TZ,"localize") else dt.replace(tzinfo=MOSCOW_TZ)
+        return dt.astimezone(MOSCOW_TZ)
+    except Exception: pass
+    for fmt in ("%d/%m/%Y","%d.%m.%Y","%Y-%m-%d","%d/%m/%Y %H:%M","%d.%m.%Y %H:%M"):
+        try:
+            dt=datetime.strptime(raw,fmt)
+            return MOSCOW_TZ.localize(dt) if hasattr(MOSCOW_TZ,"localize") else dt.replace(tzinfo=MOSCOW_TZ)
+        except Exception: pass
+    return None
+
+def get_buyer_current_month_resources(buyer_code):
+    buyer_code=str(buyer_code or "").strip()
+    if not buyer_code: return []
+    start,end=buyer_current_month_period()
+    records=grist_query_records(
+        SHEET_ISSUES,filters={"Кому передали":buyer_code},limit=0,sort="manualSort")
+    out=[]
+    for rec in records:
+        row=ensure_row_len(grist_record_to_sheet_row(SHEET_ISSUES,rec),13)
+        if str(row[ISSUE_COL_BUYER] or "").strip().lower()!=buyer_code.lower(): continue
+        if str(row[ISSUE_COL_STATUS] or "").strip().lower() in {"ban","бан"}: continue
+        dt=buyer_parse_transfer_date(row[ISSUE_COL_TRANSFER_DATE])
+        if dt and start<=dt<end:
+            out.append({"name":str(row[ISSUE_COL_NAME] or "").strip(),
+                        "type":str(row[ISSUE_COL_TYPE] or "").strip() or "Без типа",
+                        "date":dt})
+    out.sort(key=lambda x:x["date"])
+    return out
+
+def send_buyer_my_resources(chat_id,user_id):
+    buyer=get_buyer_code(user_id)
+    start,end=buyer_current_month_period()
+    items=get_buyer_current_month_resources(buyer)
+    lines=[f"📋 Твои расходники — {buyer}",
+           f"Период: {start.strftime('%d.%m.%Y')} — {end.strftime('%d.%m.%Y')}",""]
+    if not items:
+        lines.append("За этот месяц расходников пока нет.")
+    else:
+        lines.append(f"Всего: {len(items)} шт.")
+        grouped={}
+        for x in items: grouped.setdefault(x["type"],[]).append(x)
+        for typ,vals in grouped.items():
+            lines+=["",f"• {typ}: {len(vals)}"]
+            lines += [f"  {x['date'].strftime('%d.%m')} — {x['name']}" for x in vals]
+    tg_send_long_message(chat_id,"\n".join(lines))
+
 def send_buyer_menu(chat_id, text="Меню Buyer:"):
     tg_send_message(chat_id, text, [
         [{"text": BUYER_MENU_KINGS}],
         [{"text": BUYER_MENU_FARM_KINGS}],
+        [{"text": BUYER_MENU_MY_RESOURCES}],
         [{"text": BUYER_BACK_MAIN}],
         [{"text": MENU_CANCEL}],
     ])
@@ -20585,6 +20647,7 @@ def handle_message(msg):
         text = str(msg.get("text", "")).strip()
         is_menu_click = text in {
             MENU_ACCOUNTS, MENU_FARMERS, MENU_BUYER, BUYER_MENU_KINGS, BUYER_MENU_FARM_KINGS,
+            BUYER_MENU_MY_RESOURCES,
             BUYER_FARM_GET, BUYER_FARM_FREE, BUYER_FARM_RETURN, BUYER_FARM_RETURN_BAN,
             BUYER_FARM_RETURN_FREE, BUYER_FARM_BACK,
             BUYER_KINGS_GET, BUYER_KINGS_FREE, BUYER_KINGS_SEARCH,
@@ -21657,6 +21720,15 @@ def handle_message(msg):
         if text == BTN_CRYPTO_KING_BACK_TO_MENU:
             clear_state(user_id)
             send_main_menu(chat_id, "Главное меню:", user_id=user_id)
+            return
+
+        if text == BUYER_MENU_MY_RESOURCES:
+            if not is_buyer_user(user_id):
+                tg_send_message(chat_id,"У вас нет доступа.")
+                return
+            clear_state(user_id)
+            send_buyer_my_resources(chat_id,user_id)
+            send_buyer_menu(chat_id)
             return
 
         if text == MENU_BUYER:
