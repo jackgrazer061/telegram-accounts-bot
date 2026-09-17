@@ -4443,19 +4443,42 @@ def find_current_issued_farm_king_issue(king_name):
 
 
 def validate_ready_farm_kings_account_return(king_names):
+    """
+    Принимает как внутреннее название Farm King из База фарм кинги,
+    так и «Комментарий фармера / актуальное название в Octo».
+
+    В Простые лички 26 выдача хранится под внутренним названием,
+    поэтому сначала всегда резолвим введённое имя в запись Farm King,
+    а уже затем ищем выдачу по каноническому имени из базы.
+    """
     valid = []
     missing = []
 
-    for king_name in king_names:
-        issue = find_current_issued_farm_king_issue(king_name)
+    for entered_name in king_names:
+        entered_name = str(entered_name or "").strip()
 
+        found = find_farm_ready_by_name_or_octo(entered_name)
+        if not found:
+            missing.append(entered_name)
+            continue
+
+        bot_name = str(found["row"][0] or "").strip()
+        if not bot_name:
+            missing.append(entered_name)
+            continue
+
+        issue = find_current_issued_farm_king_issue(bot_name)
         if not issue:
-            missing.append(king_name)
+            missing.append(entered_name)
             continue
 
         valid.append({
-            "name": king_name,
+            # Дальнейшие ban/free операции должны работать именно
+            # с внутренним именем, под которым king записан в учёте.
+            "name": bot_name,
+            "entered_name": entered_name,
             "issue": issue,
+            "farm_record_id": int(found["record_id"]),
         })
 
     return valid, missing
@@ -4570,9 +4593,16 @@ def process_ready_farm_kings_account_free(items):
     for item in items or []:
         bot_name = str(item.get("name", "") or "").strip()
         issue = item.get("issue") or {}
+        farm_record_id = item.get("farm_record_id")
         found = find_farm_ready_source_by_name(bot_name)
+
         if not found or not issue.get("record_id"):
             continue
+
+        # record_id уже был получен при резолве Octo/внутреннего названия.
+        # Оставляем повторный объект found только для row/данных расхода.
+        if farm_record_id:
+            found["record_id"] = int(farm_record_id)
 
         row = found["row"]
         actions.append(
