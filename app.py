@@ -185,7 +185,7 @@ BUYER_USERNAME_TO_CODE = {
     'capplillo': 'VO141',
     'dextermorgan_mb': 'NR152',
     'miles_teller_googleads': 'VSH151',
-    'tomhardy_crypto': 'RP28',
+    'tomhardy_crypto': 'AA96',
 }
 BUYERS_USERS = {}
 buyer_king_requests = {}
