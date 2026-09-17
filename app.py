@@ -185,7 +185,7 @@ BUYER_USERNAME_TO_CODE = {
     'capplillo': 'VO141',
     'dextermorgan_mb': 'NR152',
     'miles_teller_googleads': 'VSH151',
-    'tomhardy_crypto': 'AA96',
+    'tomhardy_crypto': 'RP28',
 }
 BUYERS_USERS = {}
 buyer_king_requests = {}
@@ -4244,40 +4244,146 @@ def buyer_parse_transfer_date(value):
     return None
 
 def get_buyer_current_month_resources(buyer_code):
-    buyer_code=str(buyer_code or "").strip()
-    if not buyer_code: return []
-    start,end=buyer_current_month_period()
-    records=grist_query_records(
-        SHEET_ISSUES,filters={"Кому передали":buyer_code},limit=0,sort="manualSort")
-    out=[]
+    buyer_code = str(buyer_code or "").strip()
+    if not buyer_code:
+        return []
+
+    start, end = buyer_current_month_period()
+
+    records = grist_query_records(
+        SHEET_ISSUES,
+        filters={"Кому передали": buyer_code},
+        limit=0,
+        sort="manualSort"
+    )
+
+    out = []
+
     for rec in records:
-        row=ensure_row_len(grist_record_to_sheet_row(SHEET_ISSUES,rec),13)
-        if str(row[ISSUE_COL_BUYER] or "").strip().lower()!=buyer_code.lower(): continue
-        if str(row[ISSUE_COL_STATUS] or "").strip().lower() in {"ban","бан"}: continue
-        dt=buyer_parse_transfer_date(row[ISSUE_COL_TRANSFER_DATE])
-        if dt and start<=dt<end:
-            out.append({"name":str(row[ISSUE_COL_NAME] or "").strip(),
-                        "type":str(row[ISSUE_COL_TYPE] or "").strip() or "Без типа",
-                        "date":dt})
-    out.sort(key=lambda x:x["date"])
+        row = ensure_row_len(
+            grist_record_to_sheet_row(SHEET_ISSUES, rec),
+            13
+        )
+
+        if str(row[ISSUE_COL_BUYER] or "").strip().lower() != buyer_code.lower():
+            continue
+
+        if str(row[ISSUE_COL_STATUS] or "").strip().lower() in {"ban", "бан"}:
+            continue
+
+        dt = buyer_parse_transfer_date(
+            row[ISSUE_COL_TRANSFER_DATE]
+        )
+
+        if not dt or not (start <= dt < end):
+            continue
+
+        raw_price = row[ISSUE_COL_PRICE]
+
+        try:
+            price = float(
+                str(raw_price or "0")
+                .replace(" ", "")
+                .replace(",", ".")
+                .replace("$", "")
+            )
+        except Exception:
+            price = 0.0
+
+        name = str(row[ISSUE_COL_NAME] or "").strip()
+        issue_type = str(row[ISSUE_COL_TYPE] or "").strip() or "Без типа"
+        department = str(row[ISSUE_COL_DEPARTMENT] or "").strip().upper()
+
+        # Farm King в Простые лички имеет тип KING, как обычный king.
+        # Отличаем его по отделу Ф + наличию записи в База фарм кинги.
+        display_type = issue_type
+
+        if issue_type.lower() in {"king", "кинг"} and department == "Ф":
+            farm_found = find_farm_ready_source_by_name(name)
+            if farm_found:
+                display_type = "Farm Kings"
+
+        if display_type == issue_type and issue_type.lower() in {"king", "кинг"}:
+            display_type = "Kings"
+
+        out.append({
+            "name": name,
+            "type": display_type,
+            "date": dt,
+            "price": price,
+        })
+
+    out.sort(key=lambda x: x["date"])
     return out
 
-def send_buyer_my_resources(chat_id,user_id):
-    buyer=get_buyer_code(user_id)
-    start,end=buyer_current_month_period()
-    items=get_buyer_current_month_resources(buyer)
-    lines=[f"📋 Твои расходники — {buyer}",
-           f"Период: {start.strftime('%d.%m.%Y')} — {end.strftime('%d.%m.%Y')}",""]
+def send_buyer_my_resources(chat_id, user_id):
+    buyer = get_buyer_code(user_id)
+    start, end = buyer_current_month_period()
+    items = get_buyer_current_month_resources(buyer)
+
+    header = [
+        f"📋 Твои расходники — {buyer}",
+        f"Период: {start.strftime('%d.%m.%Y')} — {end.strftime('%d.%m.%Y')}",
+        "",
+    ]
+
     if not items:
-        lines.append("За этот месяц расходников пока нет.")
-    else:
-        lines.append(f"Всего: {len(items)} шт.")
-        grouped={}
-        for x in items: grouped.setdefault(x["type"],[]).append(x)
-        for typ,vals in grouped.items():
-            lines+=["",f"• {typ}: {len(vals)}"]
-            lines += [f"  {x['date'].strftime('%d.%m')} — {x['name']}" for x in vals]
-    tg_send_long_message(chat_id,"\n".join(lines))
+        tg_send_message(
+            chat_id,
+            "\n".join(header)
+            + "За этот месяц расходников пока нет."
+        )
+        return
+
+    grouped = {}
+
+    for item in items:
+        grouped.setdefault(
+            item["type"],
+            []
+        ).append(item)
+
+    total_cost = sum(
+        float(item.get("price", 0) or 0)
+        for item in items
+    )
+
+    lines = header + [
+        f"Всего: {len(items)} шт."
+    ]
+
+    for resource_type, values in grouped.items():
+        group_cost = sum(
+            float(x.get("price", 0) or 0)
+            for x in values
+        )
+
+        lines.extend([
+            "",
+            f"• {resource_type}: {len(values)} шт. · "
+            f"💲{format_issue_price(group_cost)}",
+        ])
+
+        for item in values:
+            lines.append(
+                f"  {item['date'].strftime('%d.%m')} — "
+                f"{item['name']} — "
+                f"💲{format_issue_price(item['price'])}"
+            )
+
+    lines.extend([
+        "",
+        "━━━━━━━━━━━━",
+        f"💰 Общая стоимость: "
+        f"💲{format_issue_price(total_cost)}",
+    ])
+
+    # tg_send_long_message уже разбивает длинный текст на несколько
+    # Telegram-сообщений, поэтому большие списки не обрезаются.
+    tg_send_long_message(
+        chat_id,
+        "\n".join(lines)
+    )
 
 def send_buyer_menu(chat_id, text="Меню Buyer:"):
     tg_send_message(chat_id, text, [
