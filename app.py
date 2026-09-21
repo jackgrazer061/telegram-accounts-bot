@@ -14758,15 +14758,28 @@ def set_issue_comment(issue_row_index, comment_text):
     )
 
 def is_banned_account(base_row, issue_row=None):
-    base_target = ""
-    if base_row and len(base_row) >= 10:
-        base_target = str(base_row[9]).strip().lower()
+    base_status = ""
+    legacy_target = ""
+
+    if base_row:
+        if len(base_row) > 8:
+            base_status = str(base_row[8] or "").strip().lower()
+        if len(base_row) > 9:
+            legacy_target = str(base_row[9] or "").strip().lower()
 
     issue_status = ""
-    if issue_row and len(issue_row) >= 9:
-        issue_status = str(issue_row[ISSUE_COL_STATUS]).strip().lower()
+    if issue_row and len(issue_row) > ISSUE_COL_STATUS:
+        issue_status = str(
+            issue_row[ISSUE_COL_STATUS] or ""
+        ).strip().lower()
 
-    return base_target == "ban" or issue_status in {"ban", "бан"}
+    # legacy_target == "ban" ловит лички, которые старый баг
+    # ошибочно пометил в колонке J вместо настоящего статуса I.
+    return (
+        base_status in {"ban", "бан"}
+        or legacy_target in {"ban", "бан"}
+        or issue_status in {"ban", "бан"}
+    )
 
 def return_account_to_ban(account_number, comment_text="", ban_timing=""):
     base_info = find_account_in_base(account_number)
@@ -14775,24 +14788,44 @@ def return_account_to_ban(account_number, comment_text="", ban_timing=""):
     if not base_info:
         return False, "Личка не найдена в базе."
 
-    row = base_info["row"]
+    row = ensure_row_len(base_info["row"], 14)
 
-    if len(row) < 12:
-        row = row + [''] * (12 - len(row))
+    status = str(row[8] or "").strip().lower()
+    legacy_target = str(row[9] or "").strip().lower()
 
-    status = str(row[8]).strip().lower()
-
-    if status == "ban":
+    if status in {"ban", "бан"}:
         return False, "Эта личка уже в ban."
 
-    sheet_update_and_refresh(
-        SHEET_ACCOUNTS,
-        f"J{base_info['row_index']}",
-        [["ban"]]
-    )
+    # В База_личек:
+    # I = статус
+    # J = кому выдано
+    # K = дата выдачи
+    # L = кто взял в боте
+    #
+    # Раньше здесь ошибочно обновлялась J, поэтому статус оставался
+    # free/taken и личка могла снова попасть в выдачу.
+    #
+    # Если запись уже пострадала от старого бага (J='ban'),
+    # одновременно очищаем J: старое ошибочное значение больше не нужно.
+    if legacy_target in {"ban", "бан"}:
+        sheet_update_and_refresh(
+            SHEET_ACCOUNTS,
+            f"I{base_info['row_index']}:J{base_info['row_index']}",
+            [["ban", ""]]
+        )
+    else:
+        sheet_update_and_refresh(
+            SHEET_ACCOUNTS,
+            f"I{base_info['row_index']}",
+            [["ban"]]
+        )
 
     if issue_info:
-        mark_issue_row_as_ban(issue_info["row_index"], comment_text, ban_timing)
+        mark_issue_row_as_ban(
+            issue_info["row_index"],
+            comment_text,
+            ban_timing
+        )
 
     invalidate_stats_cache()
     return True, "Личка переведена в ban."
@@ -15149,8 +15182,9 @@ def find_oldest_free_account(exclude_account=None):
             row = row + [''] * (12 - len(row))
 
         status = str(row[8]).strip().lower()
+        legacy_target = str(row[9] or "").strip().lower()
 
-        if status != "free":
+        if status != "free" or legacy_target in {"ban", "бан"}:
             continue
 
         if exclude_account and str(row[0]).strip() == exclude_account:
@@ -15196,9 +15230,10 @@ def find_matching_free_account(limit_val, threshold_val, gmt_val, currency, excl
             continue
 
         status = str(row[8]).strip().lower()
+        legacy_target = str(row[9] or "").strip().lower()
         row_currency = str(row[ACCOUNT_CURRENCY_COL]).strip()
 
-        if status != "free":
+        if status != "free" or legacy_target in {"ban", "бан"}:
             continue
         if parse_limit_number(row[4]) != wanted_limit:
             continue
@@ -15309,7 +15344,11 @@ def issue_accounts_bulk(account_numbers, for_whom, username):
                 rec=records[0]
                 row=ensure_row_len(grist_record_to_sheet_row(SHEET_ACCOUNTS,rec),14)
                 status=str(row[8]).strip().lower()
-                if status!="free":
+                legacy_target=str(row[9] or "").strip().lower()
+
+                # Защита и от нормального ban, и от старого бага,
+                # который писал "ban" в J вместо I.
+                if status!="free" or legacy_target in {"ban","бан"}:
                     not_available.append(account_number)
                     continue
 
@@ -15365,7 +15404,10 @@ def issue_next_quick_account_for_person(for_whom, username):
                 row = row + [''] * (14 - len(row))
                 rows[idx - 1] = row
 
-            if str(row[8]).strip().lower() != "free":
+            if (
+                str(row[8]).strip().lower() != "free"
+                or str(row[9] or "").strip().lower() in {"ban", "бан"}
+            ):
                 continue
 
             purchase_date_obj = parse_date(row[1]) or datetime.max
