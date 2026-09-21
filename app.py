@@ -15172,8 +15172,49 @@ def add_accounts_from_text(text):
             message += f"\n... и ещё {len(errors) - 10}"
     return message
 
+
+def get_banned_account_numbers():
+    """
+    Защитный источник истины для личек:
+    если в Простые лички 26 у номера есть запись со статусом ban/бан,
+    он не должен снова выдаваться даже если База_личек ошибочно показывает free.
+    """
+    banned = set()
+
+    rows = get_sheet_rows_cached(SHEET_ISSUES)
+
+    for row in rows[1:]:
+        if len(row) <= ISSUE_COL_STATUS:
+            continue
+
+        issue_type = str(
+            row[ISSUE_COL_TYPE] if len(row) > ISSUE_COL_TYPE else ""
+        ).strip().lower()
+
+        # Только обычные лички / РК.
+        if issue_type not in {"рк", "rk"}:
+            continue
+
+        status = str(
+            row[ISSUE_COL_STATUS] or ""
+        ).strip().lower()
+
+        if status not in {"ban", "бан"}:
+            continue
+
+        account_number = str(
+            row[ISSUE_COL_NAME] or ""
+        ).strip()
+
+        if account_number:
+            banned.add(account_number)
+
+    return banned
+
+
 def find_oldest_free_account(exclude_account=None):
     rows = get_sheet_rows_cached(SHEET_ACCOUNTS)
+    banned_accounts = get_banned_account_numbers()
 
     candidates = []
 
@@ -15185,6 +15226,9 @@ def find_oldest_free_account(exclude_account=None):
         legacy_target = str(row[9] or "").strip().lower()
 
         if status != "free" or legacy_target in {"ban", "бан"}:
+            continue
+
+        if str(row[0]).strip() in banned_accounts:
             continue
 
         if exclude_account and str(row[0]).strip() == exclude_account:
@@ -15218,6 +15262,7 @@ def find_oldest_free_account(exclude_account=None):
 # =========================
 def find_matching_free_account(limit_val, threshold_val, gmt_val, currency, exclude_account=None):
     rows = get_sheet_rows_cached(SHEET_ACCOUNTS)
+    banned_accounts = get_banned_account_numbers()
 
     wanted_limit = parse_limit_number(limit_val)
     wanted_threshold = str(threshold_val).strip()
@@ -15234,6 +15279,9 @@ def find_matching_free_account(limit_val, threshold_val, gmt_val, currency, excl
         row_currency = str(row[ACCOUNT_CURRENCY_COL]).strip()
 
         if status != "free" or legacy_target in {"ban", "бан"}:
+            continue
+
+        if str(row[0]).strip() in banned_accounts:
             continue
         if parse_limit_number(row[4]) != wanted_limit:
             continue
@@ -15285,7 +15333,7 @@ def show_found_account(chat_id, user_id, found):
         f"Дата покупки: {found['purchase_date']}\n"
         f"Цена: {found['price']}\n\n"
         f"Валюта: {found.get('currency', '')}\n\n"
-        f"Кому передали: {state.get('for_whom', 'не указано')}"
+        f"Будет выдана: {state.get('for_whom', 'не указано')}"
     )
 
     keyboard = [
@@ -15324,6 +15372,7 @@ def issue_accounts_bulk(account_numbers, for_whom, username):
     not_found=[]
     not_available=[]
     atomic_entries=[]
+    banned_accounts = get_banned_account_numbers()
 
     with issue_lock, accounts_lock:
         if storage_is_grist():
@@ -15348,7 +15397,11 @@ def issue_accounts_bulk(account_numbers, for_whom, username):
 
                 # Защита и от нормального ban, и от старого бага,
                 # который писал "ban" в J вместо I.
-                if status!="free" or legacy_target in {"ban","бан"}:
+                if (
+                    status!="free"
+                    or legacy_target in {"ban","бан"}
+                    or account_number in banned_accounts
+                ):
                     not_available.append(account_number)
                     continue
 
@@ -15397,6 +15450,7 @@ def issue_next_quick_account_for_person(for_whom, username):
 
     with issue_lock, accounts_lock:
         rows = get_sheet_rows_cached(SHEET_ACCOUNTS)
+        banned_accounts = get_banned_account_numbers()
 
         candidates = []
         for idx, row in enumerate(rows[1:], start=2):
@@ -15407,6 +15461,7 @@ def issue_next_quick_account_for_person(for_whom, username):
             if (
                 str(row[8]).strip().lower() != "free"
                 or str(row[9] or "").strip().lower() in {"ban", "бан"}
+                or str(row[0]).strip() in banned_accounts
             ):
                 continue
 
