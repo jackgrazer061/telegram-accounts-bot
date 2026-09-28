@@ -5069,8 +5069,23 @@ def send_misc_menu(chat_id, text="Меню Прочее:"):
 def _get_rows_cached_safe(sheet_name):
     try:
         return get_sheet_rows_cached(sheet_name, force=True)
-    except Exception as e:
-        logging.warning(f"Не удалось прочитать лист {sheet_name}: {e}")
+    except Exception as first_error:
+        logging.warning(
+            f"Не удалось прочитать {sheet_name}, сбрасываю Grist mapping и повторяю: {first_error}"
+        )
+
+        if storage_is_grist():
+            try:
+                with grist_all_meta_lock:
+                    grist_all_meta.pop(f"table:{sheet_name}", None)
+                    grist_all_meta.pop(f"cols:{sheet_name}", None)
+                grist_all_rows_at.pop(sheet_name, None)
+                return get_sheet_rows_cached(sheet_name, force=True)
+            except Exception as second_error:
+                logging.exception(
+                    f"Повторное чтение {sheet_name} не удалось: {second_error}"
+                )
+
         return []
 
 
@@ -5392,13 +5407,20 @@ def parse_free_resources_history_row(row):
 
 
 def get_free_resources_history_records():
-    sheet = get_or_create_free_resources_history_sheet()
-    rows = sheet.get_all_values()
+    if storage_is_grist():
+        # force=True + safe table resolver: история больше не зависит
+        # от позиции Table1/Table2/... в документе.
+        rows = grist_all_fetch_rows(SHEET_FREE_RESOURCES_HISTORY, force=True)
+    else:
+        sheet = get_or_create_free_resources_history_sheet()
+        rows = sheet.get_all_values()
+
     records = []
     for row in rows[1:]:
         record = parse_free_resources_history_row(row)
         if record:
             records.append(record)
+
     records.sort(key=lambda x: x["date"])
     return records
 
@@ -12928,6 +12950,48 @@ def issue_emails_bulk(count_needed, department, username=None):
 
     return issued
 
+def free_resources_history_table_id(force=False):
+    """Надёжно находит История_остатков по схеме, а не по позиции таблицы."""
+    key = f"table:{SHEET_FREE_RESOURCES_HISTORY}"
+    now = time.time()
+    with grist_all_meta_lock:
+        cached = grist_all_meta.get(key)
+        if cached and not force and now - cached["at"] < GRIST_ALL_META_TTL:
+            return cached["value"]
+
+    required = {
+        _grist_normalize_name("Дата"),
+        _grist_normalize_name("Дата_снимка"),
+        _grist_normalize_name("Лички_шт"),
+        _grist_normalize_name("Кинги_шт"),
+        _grist_normalize_name("Итого_шт"),
+        _grist_normalize_name("Итого_сумма"),
+    }
+
+    matches = []
+    for table_id in grist_all_table_ids(force=force):
+        cols = _grist_table_columns_preview(table_id)
+        labels = {_grist_normalize_name(c.get("label", "")) for c in cols}
+        if required.issubset(labels):
+            matches.append((table_id, len(cols)))
+
+    if not matches:
+        raise RuntimeError(
+            "Не удалось найти Grist-таблицу История_остатков по её колонкам. "
+            "Нужны: Дата, Дата_снимка, Лички_шт, Кинги_шт, Итого_шт, Итого_сумма."
+        )
+
+    # Предпочитаем полную текущую схему из 22 колонок.
+    matches.sort(key=lambda x: (abs(x[1] - len(FREE_RESOURCES_HISTORY_HEADERS)), -x[1]))
+    table_id = matches[0][0]
+
+    with grist_all_meta_lock:
+        grist_all_meta[key] = {"value": table_id, "at": now}
+
+    logging.info("GRIST MAP SAFE: %s -> %s", SHEET_FREE_RESOURCES_HISTORY, table_id)
+    return table_id
+
+
 def grist_table_id_for_sheet(sheet_name, force=False):
     key = f"table:{sheet_name}"
     now = time.time()
@@ -12940,6 +13004,8 @@ def grist_table_id_for_sheet(sheet_name, force=False):
         table_id = emails_table_id(force=force)
     elif sheet_name == SHEET_CRYPTO_KINGS:
         table_id = grist_crypto_table_id(force=force)
+    elif sheet_name == SHEET_FREE_RESOURCES_HISTORY:
+        table_id = free_resources_history_table_id(force=force)
     else:
         ids = grist_all_table_ids(force=force)
         target = _grist_normalize_name(sheet_name)
@@ -21756,6 +21822,10 @@ def handle_message(msg):
                 return
 
             clear_state(user_id)
+            try:
+                maybe_save_daily_free_resources_snapshot()
+            except Exception as e:
+                logging.exception(f"Не удалось актуализировать остатки по дням: {e}")
             send_free_resources_history_menu(chat_id)
             return
 
@@ -29105,7 +29175,7 @@ def run_auto_healthcheck_once():
             (SHEET_FARM_FPS, 9),
             (SHEET_ASSEMBLIES, 14),
             (SHEET_KING_DOWNLOADS, 1),
-            (SHEET_FREE_RESOURCES_HISTORY, 1),
+            (SHEET_FREE_RESOURCES_HISTORY, len(FREE_RESOURCES_HISTORY_HEADERS)),
             (SHEET_BAN_MONITOR, 1),
         ]
 
