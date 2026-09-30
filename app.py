@@ -3430,12 +3430,101 @@ def payment_poll_once():
             payment_ping_requests[req["key"]]=req
             payment_save_state(req["key"],"open",req["requester"],req["row"])
 
+
+def payment_ping_diagnostics():
+    logging.info("========== PAYMENT PING DIAGNOSTICS ==========")
+    try:
+        raw=os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON","")
+        if not raw:
+            logging.error("PAYMENT DIAG FAIL: GOOGLE_SERVICE_ACCOUNT_JSON пустой")
+            return False
+        logging.info(f"PAYMENT DIAG: GOOGLE_SERVICE_ACCOUNT_JSON найден, length={len(raw)}")
+
+        try:
+            info=json.loads(raw)
+        except Exception as e:
+            logging.error(f"PAYMENT DIAG FAIL: JSON invalid: {type(e).__name__}: {e}")
+            return False
+
+        email=str(info.get("client_email","") or "").strip()
+        project=str(info.get("project_id","") or "").strip()
+        has_key=bool(str(info.get("private_key","") or "").strip())
+        logging.info(f"PAYMENT DIAG: service account={email or 'MISSING'}")
+        logging.info(f"PAYMENT DIAG: project={project or 'MISSING'}")
+        logging.info(f"PAYMENT DIAG: private_key={'present' if has_key else 'MISSING'}")
+        logging.info(f"PAYMENT DIAG: spreadsheet={PAYMENTS_SPREADSHEET_ID}")
+        logging.info(f"PAYMENT DIAG: sheet={PAYMENTS_SHEET_NAME}")
+
+        if not email or not has_key:
+            logging.error("PAYMENT DIAG FAIL: client_email/private_key отсутствует")
+            return False
+
+        try:
+            client=get_gspread_client()
+            logging.info("PAYMENT DIAG OK: Google authorization")
+        except Exception as e:
+            logging.exception(f"PAYMENT DIAG FAIL: Google authorization: {type(e).__name__}: {e}")
+            return False
+
+        try:
+            book=client.open_by_key(PAYMENTS_SPREADSHEET_ID)
+            logging.info(f"PAYMENT DIAG OK: spreadsheet opened: {getattr(book,'title','unknown')}")
+        except Exception as e:
+            logging.exception(f"PAYMENT DIAG FAIL: spreadsheet open: {type(e).__name__}: {e}")
+            return False
+
+        try:
+            ws=book.worksheet(PAYMENTS_SHEET_NAME)
+            logging.info(f"PAYMENT DIAG OK: sheet {PAYMENTS_SHEET_NAME} found")
+        except Exception as e:
+            logging.exception(f"PAYMENT DIAG FAIL: worksheet: {type(e).__name__}: {e}")
+            try:
+                logging.info("PAYMENT DIAG: available sheets="+", ".join(x.title for x in book.worksheets()))
+            except Exception:
+                pass
+            return False
+
+        try:
+            values=ws.get_all_values()
+            logging.info(f"PAYMENT DIAG OK: rows read={max(0,len(values)-1)}")
+            if values:
+                logging.info("PAYMENT DIAG headers: "+" | ".join(str(x or "").strip() for x in values[0]))
+        except Exception as e:
+            logging.exception(f"PAYMENT DIAG FAIL: read rows: {type(e).__name__}: {e}")
+            return False
+
+        try:
+            parsed=payment_read_rows()
+            logging.info(f"PAYMENT DIAG OK: parser, rows={len(parsed)}")
+        except Exception as e:
+            logging.exception(f"PAYMENT DIAG FAIL: parser: {type(e).__name__}: {e}")
+            return False
+
+        try:
+            state_ws=payment_state_ws()
+            logging.info(f"PAYMENT DIAG OK: state sheet={state_ws.title}")
+        except Exception as e:
+            logging.exception(f"PAYMENT DIAG FAIL: state sheet: {type(e).__name__}: {e}")
+            return False
+
+        logging.info("========== PAYMENT PING READY ==========")
+        return True
+    except Exception as e:
+        logging.exception(f"PAYMENT DIAG CRASH: {type(e).__name__}: {e}")
+        return False
+
 def payment_ping_scheduler_loop():
+    logging.info("PAYMENT PING THREAD STARTED")
+    if not payment_ping_diagnostics():
+        logging.error("PAYMENT PING STARTUP CHECK FAILED; polling continues")
+
     while True:
         try:
             touch_background_heartbeat()
-            with payment_ping_lock: payment_poll_once()
-        except Exception: logging.exception("payment_ping_scheduler_loop error")
+            with payment_ping_lock:
+                payment_poll_once()
+        except Exception:
+            logging.exception("payment_ping_scheduler_loop error")
         time.sleep(PAYMENTS_POLL_SECONDS)
 
 def get_gspread_client():
