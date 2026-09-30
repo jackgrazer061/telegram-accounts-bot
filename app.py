@@ -31,7 +31,7 @@ BACKUP_SPREADSHEET_ID = os.environ.get("BACKUP_SPREADSHEET_ID", "")
 PAYMENTS_SPREADSHEET_ID = "17zBJFI2B4PbidNC8_TmVl8M4K1gr23DK9iG8tS8nbaw"
 PAYMENTS_SHEET_NAME = "NewPayments"
 PAYMENTS_STATE_SHEET = "BotPaymentPings"
-PAYMENTS_POLL_SECONDS = 60
+PAYMENTS_POLL_SECONDS = 120
 
 # =========================
 # GRIST — пока только Crypto King
@@ -3301,17 +3301,84 @@ def payment_state_ws():
         return ws
 
 def payment_state_map():
-    rows=payment_state_ws().get_all_values()
-    return {str(r[0]).strip():str(r[1] if len(r)>1 else "").strip()
-            for r in rows[1:] if r and str(r[0]).strip()}
+    rows = payment_state_ws().get_all_values()
+    result = {}
 
-def payment_save_state(key,status,requester="",row_number=0):
-    ws=payment_state_ws(); rows=ws.get_all_values()
-    values=[[key,status,requester,row_number,datetime.now(MOSCOW_TZ).isoformat()]]
-    for i,r in enumerate(rows[1:],start=2):
-        if r and str(r[0]).strip()==key:
-            ws.update(f"A{i}:E{i}",values); return
-    ws.append_row(values[0])
+    for row_number, row in enumerate(rows[1:], start=2):
+        if not row or not str(row[0]).strip():
+            continue
+
+        key = str(row[0]).strip()
+        result[key] = {
+            "status": str(row[1] if len(row) > 1 else "").strip(),
+            "row_number": row_number,
+        }
+
+    return result
+
+
+def payment_save_states_batch(items, known_states=None):
+    """
+    Saves many payment states with at most:
+      - 0 extra reads when known_states is supplied;
+      - one append_rows request for new states;
+      - grouped updates only for existing rows.
+    """
+    if not items:
+        return
+
+    ws = payment_state_ws()
+    states = known_states if known_states is not None else payment_state_map()
+    now = datetime.now(MOSCOW_TZ).isoformat()
+
+    new_rows = []
+    update_ranges = []
+
+    for item in items:
+        key = str(item.get("key", "") or "").strip()
+        if not key:
+            continue
+
+        values = [
+            key,
+            str(item.get("status", "") or ""),
+            str(item.get("requester", "") or ""),
+            int(item.get("row_number", 0) or 0),
+            now,
+        ]
+
+        existing = states.get(key)
+
+        if existing and existing.get("row_number"):
+            update_ranges.append({
+                "range": f"A{existing['row_number']}:E{existing['row_number']}",
+                "values": [values],
+            })
+        else:
+            new_rows.append(values)
+
+    if update_ranges:
+        ws.batch_update(update_ranges)
+
+    if new_rows:
+        ws.append_rows(
+            new_rows,
+            value_input_option="RAW",
+            insert_data_option="INSERT_ROWS",
+        )
+
+def payment_save_state(key, status, requester="", row_number=0):
+    states = payment_state_map()
+
+    payment_save_states_batch(
+        [{
+            "key": key,
+            "status": status,
+            "requester": requester,
+            "row_number": row_number,
+        }],
+        known_states=states,
+    )
 
 def payment_read_rows():
     values=payment_source_ws().get_all_values()
@@ -3393,6 +3460,17 @@ def payment_transfer_buttons(key):
     b=[[{"text":"@"+name,"callback_data":f"pay_to:{key}:{name}"}] for name in PAYMENT_TRANSFER_USERS]
     b.append([{"text":"⬅️ Назад","callback_data":f"pay_back:{key}"}]); return b
 
+
+def payment_state_status(key, states=None):
+    states = states if states is not None else payment_state_map()
+    item = states.get(key)
+
+    if isinstance(item, dict):
+        return str(item.get("status", "") or "").strip()
+
+    return str(item or "").strip()
+
+
 def payment_close(key,status="closed"):
     req=payment_get_request(key)
     if not req: return False
@@ -3414,23 +3492,83 @@ def payment_forward(to_chat,from_chat,message_id):
 
 def payment_poll_once():
     global payment_ping_bootstrapped
-    states=payment_state_map(); eligible=[]
-    for rn,d in payment_read_rows():
-        if payment_eligible(d): eligible.append(payment_req(rn,d))
-    if not states and not payment_ping_bootstrapped:
-        for req in eligible: payment_save_state(req["key"],"baseline",req["requester"],req["row"])
-        payment_ping_bootstrapped=True
-        logging.info(f"Payment ping baseline: {len(eligible)}"); return
-    payment_ping_bootstrapped=True
-    for req in eligible:
-        if req["key"] in states: continue
-        uid=payment_requester_id(req["requester"])
-        if not uid:
-            logging.warning(f"Payment ping unknown requester @{req['requester']}"); continue
-        if tg_send_inline_message(uid,payment_text(req),payment_main_buttons(req["key"])):
-            payment_ping_requests[req["key"]]=req
-            payment_save_state(req["key"],"open",req["requester"],req["row"])
 
+    states = payment_state_map()
+    eligible = []
+
+    for rn, data in payment_read_rows():
+        if payment_eligible(data):
+            eligible.append(payment_req(rn, data))
+
+    # First successful run: baseline all historical rows in ONE batch.
+    # No Telegram spam for old payments.
+    if not states and not payment_ping_bootstrapped:
+        baseline_items = [
+            {
+                "key": req["key"],
+                "status": "baseline",
+                "requester": req["requester"],
+                "row_number": req["row"],
+            }
+            for req in eligible
+        ]
+
+        payment_save_states_batch(
+            baseline_items,
+            known_states=states,
+        )
+
+        payment_ping_bootstrapped = True
+
+        logging.info(
+            f"Payment ping baseline initialized in batch: "
+            f"{len(baseline_items)} rows"
+        )
+        return
+
+    payment_ping_bootstrapped = True
+
+    newly_sent = []
+
+    for req in eligible:
+        if req["key"] in states:
+            continue
+
+        uid = payment_requester_id(
+            req["requester"]
+        )
+
+        if not uid:
+            logging.warning(
+                f"Payment ping unknown requester "
+                f"@{req['requester']}"
+            )
+            continue
+
+        if tg_send_inline_message(
+            uid,
+            payment_text(req),
+            payment_main_buttons(req["key"])
+        ):
+            payment_ping_requests[req["key"]] = req
+
+            newly_sent.append({
+                "key": req["key"],
+                "status": "open",
+                "requester": req["requester"],
+                "row_number": req["row"],
+            })
+
+    if newly_sent:
+        payment_save_states_batch(
+            newly_sent,
+            known_states=states,
+        )
+
+        logging.info(
+            f"Payment ping: sent and saved "
+            f"{len(newly_sent)} new request(s)"
+        )
 
 def payment_ping_diagnostics():
     logging.info("========== PAYMENT PING DIAGNOSTICS ==========")
@@ -21256,7 +21394,7 @@ def handle_message(msg):
                 clear_state(user_id)
                 tg_send_message(chat_id,"❌ Заявка не найдена.")
                 return
-            status=payment_state_map().get(key,"")
+            status=payment_state_status(key)
             if status not in {"open","transferred"}:
                 clear_state(user_id)
                 tg_send_message(chat_id,"Заявка уже закрыта.")
@@ -27495,7 +27633,7 @@ def handle_callback_query(callback_query):
                 tg_answer_callback_query(callback_id,"Заявка не найдена")
                 return jsonify({"ok":True})
 
-            status=payment_state_map().get(key,"")
+            status=payment_state_status(key)
             if status not in {"open","transferred"}:
                 tg_answer_callback_query(callback_id,"Заявка уже закрыта")
                 return jsonify({"ok":True})
