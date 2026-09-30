@@ -394,7 +394,7 @@ GAMBLA_NAMES = [
     '№30 MG88', '№39 AA96', '№47 DK99',
     '№51 VG98', '№21 VK84', '№22 AU85', '№53 DR100', '№54 VP101',
     '№000 richard', '№55 AL102', '№59 AH6', '№43 MD9', '№61 SN11',
-    '№64 SA122', '№69 sasha', '№72 AP147', '№111 DG83'
+    '№64 SA122', '№69 AB23', '№72 AP147', '№111 DG83'
 ]
 OTHER_NAMES = [
     'ACC DEP', 'TEST ACC DEP'
