@@ -27,6 +27,10 @@ BOT_TOKEN = os.environ.get("BOT_TOKEN", "")
 SPREADSHEET_ID = os.environ.get("SPREADSHEET_ID", "")
 SERVICE_ACCOUNT_JSON = os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON", "")
 BACKUP_SPREADSHEET_ID = os.environ.get("BACKUP_SPREADSHEET_ID", "")
+PAYMENTS_SPREADSHEET_ID = "17zBJFI2B4PbidNC8_TmVl8M4K1gr23DK9iG8tS8nbaw"
+PAYMENTS_SHEET_NAME = "NewPayments"
+PAYMENTS_STATE_SHEET = "BotPaymentPings"
+PAYMENTS_POLL_SECONDS = 60
 
 # =========================
 # GRIST — пока только Crypto King
@@ -119,6 +123,9 @@ FARM_FP_WAREHOUSE_NOTIFY_ADMIN_IDS = [
 BOT_ERROR_NOTIFY_ADMIN_ID = 7573650707
 BOT_ERROR_NOTIFY_ADMIN_NAME = "JackGrazer_Deputy_Head_Account"
 
+payment_ping_lock = threading.RLock()
+payment_ping_requests = {}
+payment_ping_bootstrapped = False
 background_threads_started = False
 background_threads_lock = threading.Lock()
 bot_diagnostics_lock = threading.Lock()
@@ -3247,6 +3254,190 @@ def google_write_with_retry(action, retries=5):
 # =========================
 # GOOGLE SHEETS
 # =========================
+
+def _pay_norm(v):
+    return re.sub(r"\\s+", " ", str(v or "").strip()).lower()
+
+def _pay_amount(v):
+    raw=str(v or "").replace("\\xa0","").replace(" ","").replace("$","").replace(",",".")
+    raw=re.sub(r"[^0-9.\\-]","",raw)
+    try: return float(raw)
+    except Exception: return None
+
+def _pay_amount_text(v):
+    try:
+        x=float(v)
+        return str(int(x)) if x.is_integer() else f"{x:.2f}".rstrip("0").rstrip(".")
+    except Exception: return str(v or "")
+
+def payment_requester_id(username):
+    target=normalize_telegram_username(username)
+    users={}
+    for uid,name in {**ADMINS,**ADMIN_FARM_USERS,**ACCOUNTS_USERS,**FARMERS_USERS}.items():
+        users[normalize_telegram_username(name)]=int(uid)
+    users["jackgrazer_tech_acc_farm"]=7573650707
+    return users.get(target)
+
+PAYMENT_TRANSFER_USERS={
+    "andrewgarfield_farmlead":7389698288,
+    "JackGrazer_Tech_acc_farm":7573650707,
+    "markzuckerberg_farm":8797795819,
+    "WillemDafoe_Accmanager":7953116439,
+}
+
+def payment_book():
+    return get_gspread_client().open_by_key(PAYMENTS_SPREADSHEET_ID)
+
+def payment_source_ws():
+    return payment_book().worksheet(PAYMENTS_SHEET_NAME)
+
+def payment_state_ws():
+    book=payment_book()
+    try: return book.worksheet(PAYMENTS_STATE_SHEET)
+    except Exception:
+        ws=book.add_worksheet(title=PAYMENTS_STATE_SHEET,rows=2000,cols=5)
+        ws.update("A1:E1",[["Key","Status","Requester","Row","UpdatedAt"]])
+        return ws
+
+def payment_state_map():
+    rows=payment_state_ws().get_all_values()
+    return {str(r[0]).strip():str(r[1] if len(r)>1 else "").strip()
+            for r in rows[1:] if r and str(r[0]).strip()}
+
+def payment_save_state(key,status,requester="",row_number=0):
+    ws=payment_state_ws(); rows=ws.get_all_values()
+    values=[[key,status,requester,row_number,datetime.now(MOSCOW_TZ).isoformat()]]
+    for i,r in enumerate(rows[1:],start=2):
+        if r and str(r[0]).strip()==key:
+            ws.update(f"A{i}:E{i}",values); return
+    ws.append_row(values[0])
+
+def payment_read_rows():
+    values=payment_source_ws().get_all_values()
+    if not values: return []
+    hm={_pay_norm(x):i for i,x in enumerate(values[0])}
+    wanted=["Дата создания заявки","Заказчик","Категория расходов","Тип расходника",
+            "Сумма оплаты",'Сообщение из "заявка отклонена"']
+    missing=[x for x in wanted if _pay_norm(x) not in hm]
+    if missing: raise RuntimeError("NewPayments: нет колонок: "+", ".join(missing))
+    out=[]
+    for rn,row in enumerate(values[1:],start=2):
+        d={}
+        for name in wanted:
+            i=hm[_pay_norm(name)]; d[name]=row[i] if i<len(row) else ""
+        out.append((rn,d))
+    return out
+
+def payment_key(rn,d):
+    raw="|".join([str(rn),str(d.get("Дата создания заявки","")),str(d.get("Заказчик","")),
+                  str(d.get("Категория расходов","")),str(d.get("Тип расходника","")),
+                  str(d.get("Сумма оплаты",""))])
+    return hashlib.sha256(raw.encode()).hexdigest()[:24]
+
+def payment_eligible(d):
+    if str(d.get('Сообщение из "заявка отклонена"',"") or "").strip(): return False
+    amount=_pay_amount(d.get("Сумма оплаты"))
+    return bool(str(d.get("Заказчик","")).strip() and
+                str(d.get("Категория расходов","")).strip() and
+                str(d.get("Тип расходника","")).strip() and amount and amount>0)
+
+def payment_req(rn,d):
+    return {"key":payment_key(rn,d),"row":rn,"requester":str(d["Заказчик"]).strip(),
+            "category":str(d["Категория расходов"]).strip(),
+            "expense_type":str(d["Тип расходника"]).strip(),
+            "amount":_pay_amount(d["Сумма оплаты"]),
+            "created":str(d["Дата создания заявки"]).strip()}
+
+def payment_get_request(key):
+    if key in payment_ping_requests: return payment_ping_requests[key]
+    for rn,d in payment_read_rows():
+        if payment_eligible(d) and payment_key(rn,d)==key:
+            req=payment_req(rn,d); payment_ping_requests[key]=req; return req
+    return None
+
+def payment_text(req):
+    return ("💳 Оплаченная заявка\\n\\n"
+            f"Заказчик: {req['requester']}\\nКатегория: {req['category']}\\n"
+            f"Тип: {req['expense_type']}\\nСумма: {_pay_amount_text(req['amount'])}$\\n\\n"
+            "Занесите расход в бота")
+
+def payment_main_buttons(key):
+    return [[{"text":"➕ Занести","callback_data":f"pay_add:{key}"},
+             {"text":"✍️ Занести вручную","callback_data":f"pay_manual:{key}"}],
+            [{"text":"↗️ Передать заявку","callback_data":f"pay_transfer:{key}"},
+             {"text":"✅ Закрыть заявку","callback_data":f"pay_close:{key}"}]]
+
+def payment_department_buttons(key):
+    return [[{"text":DEPT_CRYPTO,"callback_data":f"pay_dept:{key}:crypto"},
+             {"text":DEPT_GAMBLA,"callback_data":f"pay_dept:{key}:gambla"}],
+            [{"text":DEPT_OTHER,"callback_data":f"pay_dept:{key}:other"}],
+            [{"text":"🌾 farm","callback_data":f"pay_person:{key}:farm"}],
+            [{"text":"⬅️ Назад","callback_data":f"pay_back:{key}"}]]
+
+def payment_people(key,dept):
+    names=CRYPTO_NAMES if dept=="crypto" else GAMBLA_NAMES if dept=="gambla" else list(OTHER_NAMES)+["farm"]
+    b=[[{"text":name,"callback_data":f"pay_person:{key}:{dept}:{i}"}] for i,name in enumerate(names)]
+    b.append([{"text":"⬅️ Назад","callback_data":f"pay_add:{key}"}]); return b
+
+def payment_person_code(dept,idx):
+    if dept=="farm": return "farm"
+    names=CRYPTO_NAMES if dept=="crypto" else GAMBLA_NAMES if dept=="gambla" else list(OTHER_NAMES)+["farm"]
+    try: label=str(names[int(idx)]).strip()
+    except Exception: return ""
+    if label.lower()=="farm": return "farm"
+    parts=label.split()
+    return parts[-1] if parts and parts[0].startswith("№") and len(parts)>1 else label
+
+def payment_transfer_buttons(key):
+    b=[[{"text":"@"+name,"callback_data":f"pay_to:{key}:{name}"}] for name in PAYMENT_TRANSFER_USERS]
+    b.append([{"text":"⬅️ Назад","callback_data":f"pay_back:{key}"}]); return b
+
+def payment_close(key,status="closed"):
+    req=payment_get_request(key)
+    if not req: return False
+    payment_save_state(key,status,req["requester"],req["row"]); return True
+
+def payment_write_expense(req,recipient,supplier):
+    today=datetime.now(MOSCOW_TZ).strftime("%d/%m/%Y")
+    row=make_issue_row(name=req["expense_type"],issue_type="оплата",
+        purchase_date=today,price=req["amount"],transfer_date=today,
+        supplier=supplier,buyer=recipient,status="ok",
+        comment=f"Оплаченная заявка: {req['category']}",
+        department=("Ф" if str(recipient).lower()=="farm" else "А"))
+    sheet_append_row_and_refresh(SHEET_ISSUES,row); invalidate_stats_cache()
+
+def payment_forward(to_chat,from_chat,message_id):
+    r=requests.post(f"{BASE_URL}/forwardMessage",
+        json={"chat_id":int(to_chat),"from_chat_id":int(from_chat),"message_id":int(message_id)},timeout=20)
+    return r.status_code==200
+
+def payment_poll_once():
+    global payment_ping_bootstrapped
+    states=payment_state_map(); eligible=[]
+    for rn,d in payment_read_rows():
+        if payment_eligible(d): eligible.append(payment_req(rn,d))
+    if not states and not payment_ping_bootstrapped:
+        for req in eligible: payment_save_state(req["key"],"baseline",req["requester"],req["row"])
+        payment_ping_bootstrapped=True
+        logging.info(f"Payment ping baseline: {len(eligible)}"); return
+    payment_ping_bootstrapped=True
+    for req in eligible:
+        if req["key"] in states: continue
+        uid=payment_requester_id(req["requester"])
+        if not uid:
+            logging.warning(f"Payment ping unknown requester @{req['requester']}"); continue
+        if tg_send_inline_message(uid,payment_text(req),payment_main_buttons(req["key"])):
+            payment_ping_requests[req["key"]]=req
+            payment_save_state(req["key"],"open",req["requester"],req["row"])
+
+def payment_ping_scheduler_loop():
+    while True:
+        try:
+            touch_background_heartbeat()
+            with payment_ping_lock: payment_poll_once()
+        except Exception: logging.exception("payment_ping_scheduler_loop error")
+        time.sleep(PAYMENTS_POLL_SECONDS)
+
 def get_gspread_client():
     global gspread_client
 
@@ -20963,6 +21154,40 @@ def handle_message(msg):
 
         state = get_state(user_id)
 
+        if state.get("mode") == "payment_supplier":
+            supplier=str(text or "").strip()
+            if not supplier:
+                tg_send_message(chat_id,"Напиши поставщика.")
+                return
+            key=str(state.get("payment_key",""))
+            recipient=str(state.get("payment_recipient",""))
+            req=payment_get_request(key)
+            if not req:
+                clear_state(user_id)
+                tg_send_message(chat_id,"❌ Заявка не найдена.")
+                return
+            status=payment_state_map().get(key,"")
+            if status not in {"open","transferred"}:
+                clear_state(user_id)
+                tg_send_message(chat_id,"Заявка уже закрыта.")
+                return
+            try:
+                payment_write_expense(req,recipient,supplier)
+                payment_close(key,"entered")
+                clear_state(user_id)
+                tg_send_message(
+                    chat_id,
+                    "✅ Расход занесён.\\n\\n"
+                    f"На кого: {recipient}\\n"
+                    f"Тип: {req['expense_type']}\\n"
+                    f"Сумма: {_pay_amount_text(req['amount'])}$\\n"
+                    f"Поставщик: {supplier}"
+                )
+            except Exception as e:
+                logging.exception("payment_write_expense failed")
+                tg_send_message(chat_id,"❌ Не удалось занести расход: "+str(e))
+            return
+
         if state.get("mode") == "farm_ready_accounts_return_names":
             ok, error_text, king_names = parse_bulk_king_names(text)
             if not ok:
@@ -27171,6 +27396,78 @@ def handle_callback_query(callback_query):
             return
 
 
+        if data.startswith("pay_"):
+            parts=data.split(":")
+            action=parts[0]
+            key=parts[1] if len(parts)>1 else ""
+            req=payment_get_request(key)
+            if not req:
+                tg_answer_callback_query(callback_id,"Заявка не найдена")
+                return jsonify({"ok":True})
+
+            status=payment_state_map().get(key,"")
+            if status not in {"open","transferred"}:
+                tg_answer_callback_query(callback_id,"Заявка уже закрыта")
+                return jsonify({"ok":True})
+
+            if action=="pay_add":
+                tg_answer_callback_query(callback_id,"Выбери отдел")
+                tg_edit_message_text(chat_id,message_id,payment_text(req)+"\\n\\nНа кого занести расход?",payment_department_buttons(key))
+                return jsonify({"ok":True})
+
+            if action=="pay_dept":
+                dept=parts[2]
+                tg_answer_callback_query(callback_id,"Выбери получателя")
+                tg_edit_message_text(chat_id,message_id,payment_text(req)+"\\n\\nВыбери получателя:",payment_people(key,dept))
+                return jsonify({"ok":True})
+
+            if action=="pay_person":
+                recipient="farm" if len(parts)==3 and parts[2]=="farm" else payment_person_code(parts[2],parts[3])
+                if not recipient:
+                    tg_answer_callback_query(callback_id,"Не удалось определить получателя")
+                    return jsonify({"ok":True})
+                set_state(user_id,{"mode":"payment_supplier","payment_key":key,"payment_recipient":recipient})
+                tg_answer_callback_query(callback_id,"Укажи поставщика")
+                tg_send_message(chat_id,f"На кого: {recipient}\\n\\nНапиши поставщика:")
+                return jsonify({"ok":True})
+
+            if action=="pay_manual":
+                payment_close(key,"manual")
+                tg_answer_callback_query(callback_id,"Закрыто")
+                tg_edit_message_text(chat_id,message_id,
+                    payment_text(req)+"\\n\\n✍️ Вручную заносит @JackGrazer_Tech_acc_farm — свяжитесь с ним.",[])
+                if user_id!=7573650707:
+                    tg_send_message(7573650707,"✍️ Нужно вручную занести заявку:\\n\\n"+payment_text(req))
+                return jsonify({"ok":True})
+
+            if action=="pay_transfer":
+                tg_answer_callback_query(callback_id,"Кому передать?")
+                tg_edit_message_text(chat_id,message_id,payment_text(req)+"\\n\\nКому передать заявку?",payment_transfer_buttons(key))
+                return jsonify({"ok":True})
+
+            if action=="pay_to":
+                username=parts[2]; target=PAYMENT_TRANSFER_USERS.get(username)
+                if not target:
+                    tg_answer_callback_query(callback_id,"Получатель не найден")
+                    return jsonify({"ok":True})
+                payment_forward(target,chat_id,message_id)
+                tg_send_inline_message(target,"Действия по переданной заявке:",payment_main_buttons(key))
+                payment_save_state(key,"transferred",req["requester"],req["row"])
+                tg_answer_callback_query(callback_id,"Передано")
+                tg_edit_message_text(chat_id,message_id,payment_text(req)+f"\\n\\n↗️ Заявка передана @{username}.",[])
+                return jsonify({"ok":True})
+
+            if action=="pay_close":
+                payment_close(key,"closed")
+                tg_answer_callback_query(callback_id,"Заявка закрыта")
+                tg_edit_message_text(chat_id,message_id,payment_text(req)+"\\n\\n✅ Заявка закрыта.",[])
+                return jsonify({"ok":True})
+
+            if action=="pay_back":
+                tg_answer_callback_query(callback_id,"Назад")
+                tg_edit_message_text(chat_id,message_id,payment_text(req),payment_main_buttons(key))
+                return jsonify({"ok":True})
+
         if data.startswith("bkr_accept:") or data.startswith("bkr_reject:"):
             if user_id not in BUYER_REQUEST_MANAGER_IDS:
                 tg_answer_callback_query(callback_id,"Нет доступа"); return jsonify({"ok":True})
@@ -29280,6 +29577,9 @@ def start_background_threads_once():
             daemon=True
         )
         free_resources_history_thread.start()
+
+        payment_ping_thread = threading.Thread(target=payment_ping_scheduler_loop, daemon=True)
+        payment_ping_thread.start()
 
         background_threads_started = True
 
