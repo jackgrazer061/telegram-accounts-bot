@@ -1,4 +1,5 @@
 from flask_cors import CORS
+import hashlib
 import os
 import json
 import logging
