@@ -3424,10 +3424,9 @@ def payment_key(row_number, data):
     ).strip()
 
     if request_number:
-        return "payment:" + request_number
+        return request_number
 
-    # Fallback only if the source has no request number.
-    return f"payment-row:{int(row_number)}"
+    return f"row-{int(row_number)}"
 
 def payment_eligible(d):
     if str(d.get('Сообщение из "заявка отклонена"',"") or "").strip(): return False
@@ -3444,10 +3443,32 @@ def payment_req(rn,d):
             "created":str(d["Дата создания заявки"]).strip()}
 
 def payment_get_request(key):
-    if key in payment_ping_requests: return payment_ping_requests[key]
-    for rn,d in payment_read_rows():
-        if payment_eligible(d) and payment_key(rn,d)==key:
-            req=payment_req(rn,d); payment_ping_requests[key]=req; return req
+    key = str(key or "").strip()
+
+    if key in payment_ping_requests:
+        return payment_ping_requests[key]
+
+    # Compatibility with messages sent by the previous build:
+    # "payment:12345" -> "12345"
+    lookup_key = key
+    if lookup_key.startswith("payment:"):
+        lookup_key = lookup_key.split(":", 1)[1]
+
+    for rn, data in payment_read_rows():
+        if not payment_eligible(data):
+            continue
+
+        current_key = payment_key(rn, data)
+
+        if current_key == lookup_key:
+            req = payment_req(rn, data)
+
+            # Cache under both representations so old Telegram buttons
+            # and new buttons can work during migration.
+            payment_ping_requests[lookup_key] = req
+            payment_ping_requests[key] = req
+            return req
+
     return None
 
 def payment_text(req):
@@ -3461,10 +3482,12 @@ def payment_text(req):
     )
 
 def payment_main_buttons(key):
-    return [[{"text":"➕ Занести","callback_data":f"pay_add:{key}"},
-             {"text":"✍️ Занести вручную","callback_data":f"pay_manual:{key}"}],
-            [{"text":"↗️ Передать заявку","callback_data":f"pay_transfer:{key}"},
-             {"text":"✅ Закрыть заявку","callback_data":f"pay_close:{key}"}]]
+    return [
+        [{"text": "➕ Занести", "callback_data": f"pay_add:{key}"}],
+        [{"text": "✍️ Занести вручную", "callback_data": f"pay_manual:{key}"}],
+        [{"text": "↗️ Передать заявку", "callback_data": f"pay_transfer:{key}"}],
+        [{"text": "✅ Закрыть заявку", "callback_data": f"pay_close:{key}"}],
+    ]
 
 def payment_department_buttons(key):
     return [[{"text":DEPT_CRYPTO,"callback_data":f"pay_dept:{key}:crypto"},
@@ -27704,7 +27727,16 @@ def handle_callback_query(callback_query):
         if data.startswith("pay_"):
             parts=data.split(":")
             action=parts[0]
-            key=parts[1] if len(parts)>1 else ""
+
+            # Current keys never contain ":", but old already-sent messages
+            # used "payment:<number>". Recover those too.
+            if len(parts) >= 3 and parts[1] == "payment":
+                key = "payment:" + parts[2]
+                tail = parts[3:]
+            else:
+                key = parts[1] if len(parts) > 1 else ""
+                tail = parts[2:]
+
             req=payment_get_request(key)
             if not req:
                 tg_answer_callback_query(callback_id,"Заявка не найдена")
@@ -27721,13 +27753,13 @@ def handle_callback_query(callback_query):
                 return jsonify({"ok":True})
 
             if action=="pay_dept":
-                dept=parts[2]
+                dept=tail[0]
                 tg_answer_callback_query(callback_id,"Выбери получателя")
                 tg_edit_message_text(chat_id,message_id,payment_text(req)+"\\n\\nВыбери получателя:",payment_people(key,dept))
                 return jsonify({"ok":True})
 
             if action=="pay_person":
-                recipient="farm" if len(parts)==3 and parts[2]=="farm" else payment_person_code(parts[2],parts[3])
+                recipient="farm" if len(tail)==1 and tail[0]=="farm" else payment_person_code(tail[0],tail[1])
                 if not recipient:
                     tg_answer_callback_query(callback_id,"Не удалось определить получателя")
                     return jsonify({"ok":True})
@@ -27751,7 +27783,7 @@ def handle_callback_query(callback_query):
                 return jsonify({"ok":True})
 
             if action=="pay_to":
-                username=parts[2]; target=PAYMENT_TRANSFER_USERS.get(username)
+                username=tail[0]; target=PAYMENT_TRANSFER_USERS.get(username)
                 if not target:
                     tg_answer_callback_query(callback_id,"Получатель не найден")
                     return jsonify({"ok":True})
