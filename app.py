@@ -3424,10 +3424,14 @@ def payment_get_request(key):
     return None
 
 def payment_text(req):
-    return ("💳 Оплаченная заявка\\n\\n"
-            f"Заказчик: {req['requester']}\\nКатегория: {req['category']}\\n"
-            f"Тип: {req['expense_type']}\\nСумма: {_pay_amount_text(req['amount'])}$\\n\\n"
-            "Занесите расход в бота")
+    return (
+        "💳 Оплаченная заявка\n\n"
+        f"Заказчик: {req['requester']}\n"
+        f"Категория: {req['category']}\n"
+        f"Тип: {req['expense_type']}\n"
+        f"Сумма: {_pay_amount_text(req['amount'])}$\n\n"
+        "Занесите расход в бота"
+    )
 
 def payment_main_buttons(key):
     return [[{"text":"➕ Занести","callback_data":f"pay_add:{key}"},
@@ -3490,47 +3494,82 @@ def payment_forward(to_chat,from_chat,message_id):
         json={"chat_id":int(to_chat),"from_chat_id":int(from_chat),"message_id":int(message_id)},timeout=20)
     return r.status_code==200
 
+
+PAYMENT_CURSOR_KEY = "__PAYMENT_CURSOR__"
+
+def payment_get_cursor(states=None):
+    states = states if states is not None else payment_state_map()
+    item = states.get(PAYMENT_CURSOR_KEY)
+    if not item:
+        return None
+    try:
+        # We store last seen NewPayments row number in the state sheet's Row column.
+        ws = payment_state_ws()
+        rows = ws.get_all_values()
+        for row in rows[1:]:
+            if row and str(row[0]).strip() == PAYMENT_CURSOR_KEY:
+                return int(float(row[3])) if len(row) > 3 and str(row[3]).strip() else None
+    except Exception:
+        logging.exception("payment_get_cursor failed")
+    return None
+
+def payment_set_cursor(row_number, known_states=None):
+    payment_save_states_batch(
+        [{
+            "key": PAYMENT_CURSOR_KEY,
+            "status": "cursor",
+            "requester": "",
+            "row_number": int(row_number or 1),
+        }],
+        known_states=known_states,
+    )
+
 def payment_poll_once():
     global payment_ping_bootstrapped
 
     states = payment_state_map()
-    eligible = []
+    source_rows = payment_read_rows()
 
-    for rn, data in payment_read_rows():
-        if payment_eligible(data):
-            eligible.append(payment_req(rn, data))
+    current_last_row = max(
+        [rn for rn, _ in source_rows],
+        default=1
+    )
 
-    # First successful run: baseline all historical rows in ONE batch.
-    # No Telegram spam for old payments.
-    if not states and not payment_ping_bootstrapped:
-        baseline_items = [
-            {
-                "key": req["key"],
-                "status": "baseline",
-                "requester": req["requester"],
-                "row_number": req["row"],
-            }
-            for req in eligible
-        ]
+    cursor = payment_get_cursor(states)
 
-        payment_save_states_batch(
-            baseline_items,
+    # First run after this version is deployed:
+    # mark everything currently present as OLD. Send nothing.
+    if cursor is None:
+        payment_set_cursor(
+            current_last_row,
             known_states=states,
         )
-
         payment_ping_bootstrapped = True
-
         logging.info(
-            f"Payment ping baseline initialized in batch: "
-            f"{len(baseline_items)} rows"
+            f"Payment ping cursor initialized at NewPayments row "
+            f"{current_last_row}. Existing rows will NOT be sent."
         )
         return
 
     payment_ping_bootstrapped = True
 
     newly_sent = []
+    max_seen_row = cursor
 
-    for req in eligible:
+    for rn, data in source_rows:
+        if rn <= cursor:
+            continue
+
+        # Advance cursor even for rejected/incomplete rows so they can never
+        # become old spam later merely because someone edits them.
+        max_seen_row = max(max_seen_row, rn)
+
+        if not payment_eligible(data):
+            continue
+
+        req = payment_req(rn, data)
+
+        # Extra idempotency guard.
         if req["key"] in states:
             continue
 
@@ -3541,7 +3580,7 @@ def payment_poll_once():
         if not uid:
             logging.warning(
                 f"Payment ping unknown requester "
-                f"@{req['requester']}"
+                f"@{req['requester']} row={rn}"
             )
             continue
 
@@ -3551,7 +3590,6 @@ def payment_poll_once():
             payment_main_buttons(req["key"])
         ):
             payment_ping_requests[req["key"]] = req
-
             newly_sent.append({
                 "key": req["key"],
                 "status": "open",
@@ -3559,15 +3597,27 @@ def payment_poll_once():
                 "row_number": req["row"],
             })
 
+    # Save new request states first.
     if newly_sent:
         payment_save_states_batch(
             newly_sent,
             known_states=states,
         )
-
         logging.info(
-            f"Payment ping: sent and saved "
-            f"{len(newly_sent)} new request(s)"
+            f"Payment ping: sent {len(newly_sent)} new request(s)"
+        )
+
+    # Then move the persistent cursor to the newest row observed.
+    if max_seen_row > cursor:
+        # Refresh state once only when necessary, so an existing cursor row
+        # is updated rather than appended again.
+        refreshed_states = payment_state_map()
+        payment_set_cursor(
+            max_seen_row,
+            known_states=refreshed_states,
+        )
+        logging.info(
+            f"Payment ping cursor advanced: {cursor} -> {max_seen_row}"
         )
 
 def payment_ping_diagnostics():
