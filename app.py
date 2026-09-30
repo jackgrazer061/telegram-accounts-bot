@@ -29672,3 +29672,9 @@ def start_background_threads_once():
 
         background_threads_started = True
 
+
+
+# Start background services once per Gunicorn worker.
+# Production uses 1 worker + gthread, so this creates exactly one set of
+# scheduler/watchdog/payment threads for the running bot process.
+start_background_threads_once()
