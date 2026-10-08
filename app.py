@@ -13262,6 +13262,7 @@ BAN_STORM_ALERT_THRESHOLDS = [30, 40, 50, 60, 70]
 BAN_STORM_ADMIN_IDS = [7573650707, 7681133609, 7953116439]
 BAN_STORM_MIN_BASE_TOTAL = 30
 SHEET_BAN_MONITOR = "Мониторинг банов"
+BAN_STORM_STATE_TABLE_ID = "BanStormState"
 
 # ============================================================
 # UNIVERSAL GRIST STORAGE
@@ -13872,52 +13873,65 @@ def ensure_ban_monitor_sheet_exists():
 
 
 
+def _ban_state_table():
+    """Separate stable Grist table, never infer an unrelated Table ID."""
+    if not storage_is_grist():
+        return None
+    ids = grist_all_table_ids()
+    if BAN_STORM_STATE_TABLE_ID not in ids:
+        payload = {"tables": [{"id": BAN_STORM_STATE_TABLE_ID, "columns": [
+            {"id": "StateKey", "type": "Text"},
+            {"id": "StateValue", "type": "Text"},
+            {"id": "UpdatedAt", "type": "Text"},
+        ]}]}
+        try:
+            _grist_request("POST", f"/api/docs/{GRIST_DOC_ID}/tables", json=payload)
+        except Exception:
+            if BAN_STORM_STATE_TABLE_ID not in grist_all_table_ids(force=True):
+                raise
+    return BAN_STORM_STATE_TABLE_ID
+
+
+def _ban_state_records():
+    table = _ban_state_table()
+    result = _grist_request("GET", f"/api/docs/{GRIST_DOC_ID}/tables/{table}/records")
+    return result.get("records", [])
+
+
 def load_ban_monitor_state():
     try:
+        if storage_is_grist():
+            return {str(r.get("fields", {}).get("StateKey", "")): str(r.get("fields", {}).get("StateValue", ""))
+                    for r in _ban_state_records() if r.get("fields", {}).get("StateKey")}
         rows = get_sheet_rows_cached(SHEET_BAN_MONITOR, force=True)
-        state = {}
-        for raw in rows[1:]:
-            row = list(raw or [])
-            if len(row) < 2:
-                continue
-            key = str(row[0]).strip()
-            value = str(row[1]).strip()
-            if key:
-                state[key] = value
-        return state
+        return {str(row[0]).strip(): str(row[1]).strip() for row in rows[1:] if len(row) >= 2 and str(row[0]).strip()}
     except Exception:
         logging.exception("load_ban_monitor_state crashed")
-        return {}
-
+        raise  # fail closed: never spam when state is unavailable
 
 
 def save_ban_monitor_state_value(key, value):
-    key = str(key or "").strip()
+    key, value = str(key or "").strip(), str(value or "").strip()
     if not key:
         return
-    value = str(value or "").strip()
-    updated_at = datetime.now(MOSCOW_TZ).strftime("%d/%m/%Y %H:%M:%S")
-    try:
-        rows = get_sheet_rows_cached(SHEET_BAN_MONITOR, force=True)
-        target = None
-        for idx, raw in enumerate(rows[1:], start=2):
-            if raw and str(raw[0]).strip() == key:
-                target = idx
-                break
-        if target:
-            sheet_update_and_refresh(
-                SHEET_BAN_MONITOR,
-                f"B{target}:C{target}",
-                [[value, updated_at]]
-            )
+    now = datetime.now(MOSCOW_TZ).isoformat()
+    if storage_is_grist():
+        table = _ban_state_table()
+        existing = next((r for r in _ban_state_records() if str(r.get("fields", {}).get("StateKey", "")) == key), None)
+        fields = {"StateKey": key, "StateValue": value, "UpdatedAt": now}
+        if existing:
+            _grist_request("PATCH", f"/api/docs/{GRIST_DOC_ID}/tables/{table}/records",
+                           json={"records": [{"id": existing["id"], "fields": fields}]})
         else:
-            sheet_append_row_and_refresh(
-                SHEET_BAN_MONITOR,
-                [key, value, updated_at]
-            )
-    except Exception:
-        logging.exception("save_ban_monitor_state_value crashed")
-
+            _grist_request("POST", f"/api/docs/{GRIST_DOC_ID}/tables/{table}/records",
+                           json={"records": [{"fields": fields}]})
+        return
+    rows = get_sheet_rows_cached(SHEET_BAN_MONITOR, force=True)
+    target = next((i for i, row in enumerate(rows[1:], 2) if row and str(row[0]).strip() == key), None)
+    if target:
+        sheet_update_and_refresh(SHEET_BAN_MONITOR, f"B{target}:C{target}", [[value, now]])
+    else:
+        sheet_append_row_and_refresh(SHEET_BAN_MONITOR, [key, value, now])
 
 
 def format_ban_storm_short_date(value):
@@ -14167,38 +14181,28 @@ def maybe_send_ban_storm_threshold_alerts():
     report = compute_ban_storm_stats(period_type="week", force=True, now=now)
     stats = report["types"]
     state = load_ban_monitor_state()
-
-    for issue_type in BAN_STORM_TYPES_ORDER:
-        risk_percent = int(stats.get(issue_type, {}).get("risk_percent", 0) or 0)
-        state_key = f"last_threshold:{issue_type}"
-
+    today = now.strftime("%Y-%m-%d")
+    last_day = state.get("storm_alert:last_day", "")
+    last_signature = state.get("storm_alert:last_signature", "")
+    risks = {kind: int(stats.get(kind, {}).get("risk_percent", 0) or 0)
+             for kind in BAN_STORM_TYPES_ORDER}
+    elevated = {kind: value for kind, value in risks.items()
+                if value >= BAN_STORM_ALERT_THRESHOLDS[0]}
+    if not elevated:
+        return
+    signature = "|".join(f"{kind}={risks[kind]}" for kind in BAN_STORM_TYPES_ORDER)
+    if last_day == today or signature == last_signature:
+        return
+    lines = ["⚠️ВНИМАНИЕ ШАНС ШТОРМА⚠️"]
+    lines.extend(f"{kind} ⚠️шанс шторма - {risk}%" for kind, risk in elevated.items())
+    # Persist BEFORE sending: a restart or Telegram failure must not cause a flood.
+    save_ban_monitor_state_value("storm_alert:last_signature", signature)
+    save_ban_monitor_state_value("storm_alert:last_day", today)
+    for admin_id in BAN_STORM_ADMIN_IDS:
         try:
-            last_threshold = int(state.get(state_key, "0") or 0)
+            tg_send_message(admin_id, "\n".join(lines))
         except Exception:
-            last_threshold = 0
-
-        if risk_percent < BAN_STORM_ALERT_THRESHOLDS[0]:
-            if last_threshold != 0:
-                save_ban_monitor_state_value(state_key, "0")
-            continue
-
-        next_threshold = 0
-        for threshold in BAN_STORM_ALERT_THRESHOLDS:
-            if threshold > last_threshold and risk_percent >= threshold:
-                next_threshold = threshold
-
-        if not next_threshold:
-            continue
-
-        text = (
-            "⚠️ВНИМАНИЕ ШАНС ШТОРМА⚠️\n"
-            f"{issue_type} ⚠️шанс шторма - {next_threshold}%"
-        )
-
-        for admin_id in BAN_STORM_ADMIN_IDS:
-            tg_send_message(admin_id, text)
-
-        save_ban_monitor_state_value(state_key, str(next_threshold))
+            logging.exception("Storm alert Telegram delivery failed")
 
 
 def ban_storm_monitor_loop():
@@ -29810,7 +29814,6 @@ def run_auto_healthcheck_once():
             (SHEET_ASSEMBLIES, 14),
             (SHEET_KING_DOWNLOADS, 1),
             (SHEET_FREE_RESOURCES_HISTORY, len(FREE_RESOURCES_HISTORY_HEADERS)),
-            (SHEET_BAN_MONITOR, 1),
         ]
 
         for sheet_name, min_cols in health_sheets:
