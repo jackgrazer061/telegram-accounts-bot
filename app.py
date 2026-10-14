@@ -152,6 +152,7 @@ FARMERS_USERS = {
     8503147017: "zendaya_farmer",
     8797795819: "markzuckerberg_farm",
     8276201410: "AmandaSeyfried_Farmer",
+    8942450620: "RachelNichols_farm",
 }
 
 
