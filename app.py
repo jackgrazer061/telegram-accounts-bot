@@ -63,6 +63,7 @@ OCTO_CRYPTO_EXTENSIONS = [
     "lopekoolgoijpmaidblgfgelbkfkgmod@0.6.0",     # Pass key
     "ifmhoabcaeehkljcfclfiieohkohdgbb@31.1.0",    # FIXER
     "akoipecnmccknajeplmlegokpehheimg@2.2.4",    # fbspider
+    "bjlllkokejdahnmeibomiegoemdigpal@1.10.2",  # New Octo extension
 ]
 
 OCTO_FARM_EXTENSIONS = [
@@ -76,6 +77,7 @@ OCTO_FARM_EXTENSIONS = [
     "lopekoolgoijpmaidblgfgelbkfkgmod@0.6.0",     # Pass key
     "ifmhoabcaeehkljcfclfiieohkohdgbb@31.1.0",    # FIXER
     "akoipecnmccknajeplmlegokpehheimg@2.2.4",    # fbspider
+    "bjlllkokejdahnmeibomiegoemdigpal@1.10.2",  # New Octo extension
 ]
 
 if not BOT_TOKEN:
@@ -20001,7 +20003,8 @@ def build_crypto_king_octo_payload(profile_name, parsed, proxy_data=None):
         "bookmarks": [
             {"url": "https://www.facebook.com"},
             {"url": "https://adsmanager.facebook.com"},
-            {"url": "https://2fa.fb.tools/"}
+            {"url": "https://2fa.fb.tools/"},
+            {"url": "https://firstmail.ltd/webmail/login/"}
         ]
     }
 
@@ -20031,7 +20034,8 @@ def build_farm_king_octo_payload(profile_name, parsed, proxy_data=None):
         "bookmarks": [
             {"url": "https://www.facebook.com"},
             {"url": "https://adsmanager.facebook.com"},
-            {"url": "https://2fa.fb.tools/"}
+            {"url": "https://2fa.fb.tools/"},
+            {"url": "https://firstmail.ltd/webmail/login/"}
         ]
     }
 
