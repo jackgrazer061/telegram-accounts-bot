@@ -311,6 +311,9 @@ MENU_PIXELS = 'Пиксели'
 MENU_FARMERS = 'Farmers'
 FARM_RK_ADD = '➕ Добавить РК на замену'
 ACCOUNT_RK_TAKE = '🔄 Замена фарм РК'
+ACCOUNT_RK_GET = '➡️ Взять РК на замену'
+ACCOUNT_RK_FREE = '♻️ Вернуть РК в free'
+ACCOUNT_RK_BAN = '🚫 Вернуть РК в бан'
 FARM_MENU_KING = 'King'
 FARM_MENU_BM = 'BM'
 FARM_MENU_FP = 'FP'
@@ -21558,6 +21561,69 @@ def farm_rk_issue(count,buyer,issuer):
         grist_all_mark_stale(SHEET_ISSUES); invalidate_stats_cache()
     return selected
 
+def farm_rk_accounts_menu(chat_id):
+    tg_send_message(chat_id, "🔄 Замена фарм РК — выбери действие:", [
+        [{"text": ACCOUNT_RK_GET}],
+        [{"text": ACCOUNT_RK_FREE}],
+        [{"text": ACCOUNT_RK_BAN}],
+        [{"text": MENU_CANCEL}],
+    ])
+
+
+def farm_rk_return(raw, action, reason=""):
+    """Update warehouse and accounting in one Grist apply transaction."""
+    names = [x.strip() for x in raw.splitlines() if x.strip()]
+    if not 1 <= len(names) <= 100:
+        raise ValueError("Укажи от 1 до 100 ID личек, каждый с новой строки.")
+    if len(names) != len(set(names)):
+        raise ValueError("В списке повторяются ID личек.")
+    with farm_rk_lock:
+        warehouse = {str(r.get("fields", {}).get("AccountID", "")).strip(): r
+                     for r in farm_rk_rows("taken")}
+        selected = []
+        for name in names:
+            rec = warehouse.get(name)
+            if not rec:
+                raise ValueError(f"РК {name} не найдена среди выданных (taken).")
+            selected.append((name, rec))
+        # Lookup only current accounting records, matching buyer + farm department.
+        actions = []
+        for name, rec in selected:
+            fields = rec["fields"]
+            buyer = str(fields.get("Buyer", "") or "").strip()
+            records = grist_query_records(SHEET_ISSUES, filters={"Имя": name},
+                                          limit=0, sort="manualSort")
+            matches = []
+            for issue in records:
+                row = ensure_row_len(grist_record_to_sheet_row(SHEET_ISSUES, issue), 13)
+                if (str(row[ISSUE_COL_TYPE]).strip().lower() in {"рк", "rk"}
+                    and str(row[ISSUE_COL_DEPARTMENT]).strip().upper() == "Ф"
+                    and str(row[ISSUE_COL_BUYER]).strip().lower() == buyer.lower()
+                    and str(row[ISSUE_COL_STATUS]).strip().lower() not in {"ban", "бан"}
+                    and "Замена фарм РК" in str(row[ISSUE_COL_COMMENT])):
+                    matches.append(issue)
+            if len(matches) != 1:
+                raise ValueError(f"РК {name}: найдено {len(matches)} активных выдач в учёте вместо одной. Изменений нет.")
+            issue_id = int(matches[0]["id"])
+            if action == "free":
+                actions.append(["UpdateRecord", FARM_RK_TABLE, int(rec["id"]),
+                                {"Status": "free", "Buyer": "", "IssuedAt": ""}])
+                actions.append(grist_remove_record_action(SHEET_ISSUES, issue_id))
+            else:
+                actions.append(["UpdateRecord", FARM_RK_TABLE, int(rec["id"]),
+                                {"Status": "ban"}])
+                cols = grist_columns_for_sheet(SHEET_ISSUES)
+                actions.append(["UpdateRecord", grist_table_id_for_sheet(SHEET_ISSUES), issue_id, {
+                    cols[ISSUE_COL_STATUS]["id"]: "бан",
+                    cols[ISSUE_COL_BAN_MOMENT]["id"]: "после передачи",
+                    cols[ISSUE_COL_COMMENT]["id"]: "Замена фарм РК; причина бана: " + reason,
+                }])
+        grist_apply(actions)
+        grist_all_mark_stale(SHEET_ISSUES)
+        invalidate_stats_cache()
+    return names
+
+
 def farm_rk_people_menu(chat_id, department):
     names=get_department_people(department)
     if not names: raise ValueError("В отделе нет байеров")
@@ -21576,7 +21642,7 @@ def handle_message(msg):
 
         text = str(msg.get("text", "")).strip()
         is_menu_click = text in {
-            FARM_RK_ADD, ACCOUNT_RK_TAKE, MENU_ACCOUNTS, MENU_FARMERS, MENU_BUYER, BUYER_MENU_KINGS, BUYER_MENU_FARM_KINGS,
+            FARM_RK_ADD, ACCOUNT_RK_TAKE, ACCOUNT_RK_GET, ACCOUNT_RK_FREE, ACCOUNT_RK_BAN, MENU_ACCOUNTS, MENU_FARMERS, MENU_BUYER, BUYER_MENU_KINGS, BUYER_MENU_FARM_KINGS,
             BUYER_MENU_MY_RESOURCES,
             BUYER_FARM_GET, BUYER_FARM_FREE, BUYER_FARM_RETURN, BUYER_FARM_RETURN_BAN,
             BUYER_FARM_RETURN_FREE, BUYER_FARM_BACK,
@@ -21623,6 +21689,38 @@ def handle_message(msg):
             return
 
         state = get_state(user_id)
+
+        if state.get("mode") == "farm_rk_return_ids":
+            ids = [x.strip() for x in text.splitlines() if x.strip()]
+            if not 1 <= len(ids) <= 100 or len(ids) != len(set(ids)) or not all(x.isdigit() for x in ids):
+                tg_send_message(chat_id, "❌ Укажи 1–100 уникальных ID личек, каждый с новой строки.")
+                return
+            action = state.get("rk_return_action")
+            if action == "ban":
+                set_state(user_id, {"mode": "farm_rk_return_reason", "rk_ids": "\n".join(ids)})
+                tg_send_message(chat_id, "Напиши причину бана для этих РК:")
+                return
+            try:
+                done = farm_rk_return("\n".join(ids), "free")
+                clear_state(user_id)
+                tg_send_message(chat_id, f"✅ Возвращено в free: {len(done)}\n" + "\n".join(done))
+                farm_rk_accounts_menu(chat_id)
+            except Exception as e:
+                tg_send_message(chat_id, "❌ " + humanize_storage_error(e))
+            return
+
+        if state.get("mode") == "farm_rk_return_reason":
+            if not text.strip():
+                tg_send_message(chat_id, "Напиши причину бана.")
+                return
+            try:
+                done = farm_rk_return(state["rk_ids"], "ban", text.strip())
+                clear_state(user_id)
+                tg_send_message(chat_id, f"✅ Переведено в бан: {len(done)}\n" + "\n".join(done))
+                farm_rk_accounts_menu(chat_id)
+            except Exception as e:
+                tg_send_message(chat_id, "❌ " + humanize_storage_error(e))
+            return
 
         if state.get("mode") == "farm_rk_add":
             try:
@@ -22886,6 +22984,22 @@ def handle_message(msg):
             return
 
         if text == ACCOUNT_RK_TAKE:
+            if not (is_admin(user_id) or is_accounts_user(user_id)):
+                tg_send_message(chat_id,"Нет доступа."); return
+            clear_state(user_id)
+            farm_rk_accounts_menu(chat_id)
+            return
+
+        if text in {ACCOUNT_RK_FREE, ACCOUNT_RK_BAN}:
+            if not (is_admin(user_id) or is_accounts_user(user_id)):
+                tg_send_message(chat_id,"Нет доступа."); return
+            clear_state(user_id)
+            set_state(user_id, {"mode":"farm_rk_return_ids",
+                                "rk_return_action":"free" if text == ACCOUNT_RK_FREE else "ban"})
+            tg_send_message(chat_id, "Отправь ID лички (или до 100 ID), каждый с новой строки:")
+            return
+
+        if text == ACCOUNT_RK_GET:
             if not (is_admin(user_id) or is_accounts_user(user_id)):
                 tg_send_message(chat_id,"Нет доступа."); return
             clear_state(user_id); set_state(user_id,{"mode":"farm_rk_count"})
