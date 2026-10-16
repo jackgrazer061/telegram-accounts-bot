@@ -309,6 +309,8 @@ BUYER_BACK_MAIN = '⬅️ Назад — Buyer'
 BUYER_KINGS_BACK = '⬅️ Назад в Buyer'
 MENU_PIXELS = 'Пиксели'
 MENU_FARMERS = 'Farmers'
+FARM_RK_ADD = '➕ Добавить РК на замену'
+ACCOUNT_RK_TAKE = '🔄 Замена фарм РК'
 FARM_MENU_KING = 'King'
 FARM_MENU_BM = 'BM'
 FARM_MENU_FP = 'FP'
@@ -5041,6 +5043,7 @@ def send_accounts_main_menu(chat_id, text="Меню Accounts:"):
         [{"text": MENU_BMS}, {"text": MENU_FPS}],
         [{"text": MENU_PIXELS}, {"text": MENU_EMAILS}],
         [{"text": FARM_READY_ACCOUNTS_MENU}],
+        [{"text": ACCOUNT_RK_TAKE}],
         [{"text": MENU_MANAGER_STATS}],
         [{"text": MENU_ISSUED_TO_BUYER}],
         [{"text": SUBMENU_BACK_MAIN}]
@@ -5070,6 +5073,7 @@ def send_farmers_menu(chat_id, text="Меню Farmers:"):
         [{"text": FARM_MENU_KING}, {"text": FARM_MENU_BM}],
         [{"text": FARM_MENU_FP}, {"text": FARM_MENU_ASSEMBLIES}],
         [{"text": FARM_READY_FARMER_MENU}, {"text": MENU_EMAILS}],
+        [{"text": FARM_RK_ADD}],
         [{"text": MENU_FARMER_STATS}],
         [{"text": BTN_BACK_TO_MENU}]
     ]
@@ -21492,6 +21496,75 @@ def build_assembly_account_pick_buttons(row_index, field):
 # =========================
 # MESSAGE HANDLER
 # =========================            
+FARM_RK_TABLE = "FarmReplacementRK"
+FARM_RK_PRICE = 15
+farm_rk_lock = threading.RLock()
+
+def farm_rk_table():
+    """Creates the dedicated Grist table (visible name: рк на замену) once."""
+    ids = grist_all_table_ids(force=True)
+    if FARM_RK_TABLE not in ids:
+        _grist_request("POST", f"/api/docs/{GRIST_DOC_ID}/tables", payload={"tables":[{
+            "id":FARM_RK_TABLE,
+            "columns":[{"id":x,"type":typ} for x,typ in [
+                ("KingName","Text"),("AccountID","Text"),("CardNumber","Text"),
+                ("Price","Numeric"),("Status","Text"),("Farmer","Text"),
+                ("Buyer","Text"),("IssuedAt","Text")]]}]})
+    return FARM_RK_TABLE
+
+def farm_rk_rows(status=None):
+    table=farm_rk_table()
+    params={"limit":0}
+    if status: params["filter"]=json.dumps({"Status":[status]})
+    data=_grist_request("GET",f"/api/docs/{GRIST_DOC_ID}/tables/{table}/records",params=params)
+    return data.get("records",[])
+
+def farm_rk_add_lines(raw, username):
+    lines=[x.strip() for x in raw.splitlines() if x.strip()]
+    if not lines or len(lines)>100: raise ValueError("Укажи от 1 до 100 строк.")
+    parsed=[]; seen=set()
+    for i,line in enumerate(lines,1):
+        cells=[x.strip() for x in line.split(",")]
+        if len(cells)!=3 or not all(cells): raise ValueError(f"Строка {i}: формат название кинга,id лички,номер карты")
+        king,acc,card=cells
+        if not acc.isdigit() or not card.isdigit(): raise ValueError(f"Строка {i}: ID и номер карты должны состоять из цифр")
+        if acc in seen: raise ValueError(f"Повтор ID лички: {acc}")
+        seen.add(acc); parsed.append((king,acc,card))
+    with farm_rk_lock:
+        existing={str(r.get("fields",{}).get("AccountID", "")) for r in farm_rk_rows()}
+        repeated=seen & existing
+        if repeated: raise ValueError("Эти ID уже есть в базе: "+", ".join(sorted(repeated)))
+        actions=[["AddRecord",FARM_RK_TABLE,None,{"KingName":k,"AccountID":a,"CardNumber":c,
+                 "Price":FARM_RK_PRICE,"Status":"free","Farmer":username}] for k,a,c in parsed]
+        grist_apply(actions)
+    return len(parsed)
+
+def farm_rk_issue(count,buyer,issuer):
+    with farm_rk_lock:
+        available=farm_rk_rows("free")
+        if len(available)<count: raise ValueError(f"Свободно только {len(available)} РК.")
+        selected=available[:count]
+        today=datetime.now(MOSCOW_TZ).strftime("%d/%m/%Y")
+        actions=[]
+        for r in selected:
+            f=r["fields"]
+            actions.append(["UpdateRecord",FARM_RK_TABLE,int(r["id"]),
+                            {"Status":"taken","Buyer":buyer,"IssuedAt":today}])
+            issue=make_issue_row(name=str(f["AccountID"]),issue_type="РК",purchase_date=today,
+                 price=FARM_RK_PRICE,transfer_date=today,supplier=str(f.get("Farmer") or "farm"),
+                 buyer=buyer,status="ok",comment="Замена фарм РК; King: "+str(f["KingName"]),department="Ф")
+            actions.append(grist_add_action(SHEET_ISSUES,normalize_issue_row_for_append(issue)))
+        grist_apply(actions)
+        grist_all_mark_stale(SHEET_ISSUES); invalidate_stats_cache()
+    return selected
+
+def farm_rk_people_menu(chat_id, department):
+    names=get_department_people(department)
+    if not names: raise ValueError("В отделе нет байеров")
+    keyboard=[[{"text":name}] for name in names]
+    keyboard.append([{"text":MENU_CANCEL}])
+    tg_send_message(chat_id,"Выбери байера для расхода:",keyboard)
+
 def handle_message(msg):
     try:
         logging.info(f"HANDLE_MESSAGE START text={msg.get('text')} user_id={msg['from']['id']}")
@@ -21503,7 +21576,7 @@ def handle_message(msg):
 
         text = str(msg.get("text", "")).strip()
         is_menu_click = text in {
-            MENU_ACCOUNTS, MENU_FARMERS, MENU_BUYER, BUYER_MENU_KINGS, BUYER_MENU_FARM_KINGS,
+            FARM_RK_ADD, ACCOUNT_RK_TAKE, MENU_ACCOUNTS, MENU_FARMERS, MENU_BUYER, BUYER_MENU_KINGS, BUYER_MENU_FARM_KINGS,
             BUYER_MENU_MY_RESOURCES,
             BUYER_FARM_GET, BUYER_FARM_FREE, BUYER_FARM_RETURN, BUYER_FARM_RETURN_BAN,
             BUYER_FARM_RETURN_FREE, BUYER_FARM_BACK,
@@ -21550,6 +21623,49 @@ def handle_message(msg):
             return
 
         state = get_state(user_id)
+
+        if state.get("mode") == "farm_rk_add":
+            try:
+                amount=farm_rk_add_lines(text,username)
+                clear_state(user_id)
+                tg_send_message(chat_id,f"✅ Добавлено РК на замену: {amount}. Цена каждой: $15")
+                send_farmers_menu(chat_id)
+            except Exception as e:
+                tg_send_message(chat_id,"❌ "+humanize_storage_error(e))
+            return
+
+        if state.get("mode") == "farm_rk_count":
+            try:
+                amount=int(text)
+                if not 1<=amount<=100: raise ValueError("Количество должно быть от 1 до 100")
+                set_state(user_id,{"mode":"farm_rk_dept","rk_count":amount})
+                send_department_menu(chat_id,"На какой отдел выдать РК?")
+            except ValueError as e: tg_send_message(chat_id,"❌ "+str(e))
+            return
+
+        if state.get("mode") == "farm_rk_dept":
+            if text not in get_supported_departments():
+                tg_send_message(chat_id,"Выбери отдел кнопкой."); return
+            set_state(user_id,{"mode":"farm_rk_person","rk_count":state["rk_count"],"rk_dept":text})
+            farm_rk_people_menu(chat_id,text)
+            return
+
+        if state.get("mode") == "farm_rk_person":
+            if text not in get_department_people(state.get("rk_dept")):
+                tg_send_message(chat_id,"Выбери байера кнопкой."); return
+            buyer=text.split()[-1] if text.split() and text.split()[0].startswith("№") else text
+            try:
+                selected=farm_rk_issue(int(state["rk_count"]),buyer,username)
+                clear_state(user_id)
+                result=[f"✅ Выдано РК на замену: {len(selected)}\nБайер: {buyer}\n"]
+                for i,r in enumerate(selected,1):
+                    f=r["fields"]
+                    result.append(f"{i}. Кинг: {f['KingName']}\nID лички: {f['AccountID']}\nНомер карты: {f['CardNumber']}\nЦена: $15\n")
+                tg_send_long_message(chat_id,"\n".join(result))
+                send_accounts_main_menu(chat_id)
+            except Exception as e:
+                tg_send_message(chat_id,"❌ "+humanize_storage_error(e))
+            return
 
         if state.get("mode") == "payment_supplier":
             supplier=str(text or "").strip()
@@ -22760,6 +22876,23 @@ def handle_message(msg):
                 f"Buyer: {buyer_code}\\n\\nСколько king нужно?",
                 keyboard=[[{"text": BUYER_KINGS_BACK}, {"text": MENU_CANCEL}]]
             )
+            return
+
+        if text == FARM_RK_ADD:
+            if not (is_admin(user_id) or is_farmers_user(user_id)):
+                tg_send_message(chat_id,"Нет доступа."); return
+            clear_state(user_id); set_state(user_id,{"mode":"farm_rk_add"})
+            tg_send_message(chat_id,"Отправь данные по одному РК в строке:\nназвание кинга,id лички,номер карты\n\nМожно несколько строк (до 100). Цена фиксированная: $15")
+            return
+
+        if text == ACCOUNT_RK_TAKE:
+            if not (is_admin(user_id) or is_accounts_user(user_id)):
+                tg_send_message(chat_id,"Нет доступа."); return
+            clear_state(user_id); set_state(user_id,{"mode":"farm_rk_count"})
+            try:
+                count=len(farm_rk_rows("free"))
+                tg_send_message(chat_id,f"Свободно РК на замену: {count}\nСколько выдать?")
+            except Exception as e: tg_send_message(chat_id,"❌ "+humanize_storage_error(e))
             return
 
         if text == MENU_ACCOUNTS:
