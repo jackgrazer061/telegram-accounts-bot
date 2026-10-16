@@ -12710,6 +12710,66 @@ def parse_crypto_king_raw_data(raw_text):
                 result["email_password"] = ""
             return result
 
+    # ---------- FORMAT NEW PIPE OCTO: id|fb_pass|email|email_pass|[second_email|second_email_pass|]first|last|fb_url|day|month|year|token|someid|[{cookies}]|UA|2FA|... ----------
+    # Детектор: p[0]=числовой id, p[1]=пароль FB (не email), p[2]=email (основная почта),
+    # p[3]=пароль от основной почты, далее опционально вторая почта+пароль,
+    # затем имя/фамилия/url/дата рождения/токен/id/[cookies JSON]/UA/2FA/...
+    if "|" in text_original and text_original.count("|") >= 10:
+        _npp = [x.strip() for x in text_original.split("|")]
+        _npp_p2_email = bool(len(_npp) > 2 and _validate_email(_npp[2]))
+        _npp_has_fb_cookies = ".facebook.com" in text_original and "[" in text_original
+        if (len(_npp) >= 12
+                and re.fullmatch(r"[0-9]{8,20}", _npp[0])
+                and _npp[1] and not _validate_email(_npp[1])
+                and _npp_p2_email
+                and _npp_has_fb_cookies):
+
+            result["fb_login"] = _npp[0]
+            result["fb_password"] = _npp[1]
+            result["email"] = _validate_email(_npp[2])
+            result["email_password"] = _npp[3].strip() if len(_npp) > 3 else ""
+
+            # Вторая почта (опционально): если p[4] является валидным email
+            if len(_npp) > 4 and _validate_email(_npp[4]):
+                result["service"] = _npp[4]
+                _npp_second_pass = _npp[5].strip() if len(_npp) > 5 and _npp[5] else ""
+                if _npp_second_pass:
+                    result["extra_pairs"].append(f"{_npp[4]}:{_npp_second_pass}")
+
+            # Куки JSON — ищем JSON-массив в тексте
+            result["cookies_json"] = _extract_cookie_json_block(text_original)
+            if not result["cookies_json"]:
+                result["cookies_json"] = extract_cookie_json_from_raw_king_text(text_original)
+
+            # User Agent — Mozilla/5.0 ...
+            result["user_agent"] = _extract_user_agent(text_original)
+
+            # 2FA — перебираем все pipe-части, ищем валидную base32-строку (с пробелами).
+            # Ссылки (http/https) здесь пропускаем — это не 2FA, а fb-профиль/аватар/токен.
+            for _npp_part in _npp:
+                _npp_part = _npp_part.strip()
+                if not _npp_part or _npp_part.lower().startswith(("http://", "https://")):
+                    continue
+                _npp_compact = re.sub(r"\s+", "", _npp_part).upper()
+                if re.fullmatch(r"[A-Z2-7]{16,}", _npp_compact):
+                    result["twofa"] = re.sub(r"\s+", " ", _npp_part).strip()
+                    break
+
+            result["geo"] = _extract_geo_value(text_original)
+            result["docs_links"] = _extract_docs_links(text_original)
+            result["bm_links"] = _extract_bm_links(text_original)
+            result["cookies_links"] = _extract_cookie_links(text_original)
+
+            result["fb_login"] = _sanitize_login(result["fb_login"])
+            result["email"] = _validate_email(result["email"])
+            result["twofa"] = _validate_2fa(result["twofa"])
+            if _validate_email(result["fb_password"]):
+                result["fb_password"] = ""
+            if _validate_email(result["email_password"]):
+                result["email_password"] = ""
+
+            return result
+
     # ---------- FORMAT PIPE (|) ----------
     # Форматы 5, 8, 14: id|pass|2fa|email|email_pass|service|...
     # Также: id|@#!pass|2fa|email|pass||cookies
